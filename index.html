@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>植物大战僵尸 Web 版 · PvZ Web Edition</title>
+<meta name="description" content="基于 HTML5 Canvas 的植物大战僵尸复刻版：全程序化矢量绘制 + Web Audio 合成音乐，零外部资源，单文件可玩。">
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #101418;
+    overflow: hidden;
+    font-family: 'Comic Sans MS', 'Chalkboard SE', 'Microsoft YaHei UI', sans-serif;
+    touch-action: none;
+  }
+  #game {
+    position: absolute;
+    display: block;
+    image-rendering: auto;
+    cursor: pointer;
+    box-shadow: 0 0 60px rgba(0,0,0,0.8);
+  }
+  #audio-hint {
+    position: fixed;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255,255,255,0.75);
+    font-size: 13px;
+    background: rgba(0,0,0,0.45);
+    padding: 8px 18px;
+    border-radius: 20px;
+    pointer-events: none;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="960" height="600"></canvas>
+<div id="audio-hint">🔇 点击任意位置开启声音</div>
+
+<!-- 源码版按顺序加载模块（发布版由 tools/build.py 内联合并为单文件） -->
+<script src="js/util.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/data.js"></script>
+<script src="js/sprites.js"></script>
+<script src="js/sprites_z.js"></script>
+<script src="js/entities.js"></script>
+<script src="js/board.js"></script>
+<script src="js/scenes.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
