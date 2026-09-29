@@ -260,7 +260,7 @@ class Board {
   beginWaves() {
     if (this.wavesStarted) return;
     this.wavesStarted = true;
-    this.waveTimer = WAVE.FIRST_WAVE_DELAY;
+    this.waveTimer = WAVE.FIRST_WAVE_DELAY; this._waveTimerStart = this.waveTimer;
     this.hugeWaveWarned = false;
   }
 
@@ -274,8 +274,8 @@ class Board {
     this.hugeWaveWarned = false;
     // 下一波倒计时 (原版: 常规25s+rand, 旗帜波后45s)
     const next = this.waves[this.wave];
-    if (next && next.flag) this.waveTimer = WAVE.BEFORE_FLAG;
-    else this.waveTimer = WAVE.WAVE_DELAY + Math.random() * WAVE.WAVE_DELAY_RANGE;
+    if (next && next.flag) { this.waveTimer = WAVE.BEFORE_FLAG; this._waveTimerStart = this.waveTimer; }
+    else { this.waveTimer = WAVE.WAVE_DELAY + Math.random() * WAVE.WAVE_DELAY_RANGE; this._waveTimerStart = this.waveTimer; }
 
     const list = [];
     for (const [type, n] of w.types) {
@@ -511,6 +511,7 @@ class Effect {
       case 'boom': if (this.t > 1.2) this.dead = true; break;
       case 'flash': if (this.t > 0.3) this.dead = true; break;
       case 'dust': if (this.t > 0.8) this.dead = true; break;
+      case 'sod_dirt': if (this.t > (this.opts.dur || 0.6)) this.dead = true; break;
       case 'chomper_bite': if (this.t > 0.3) this.dead = true; break;
       case 'zag': if (this.t > 0.4) this.dead = true; break;
       case 'text': if (this.t > (this.opts.hold || 2)) this.dead = true; break;

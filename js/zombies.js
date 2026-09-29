@@ -62,6 +62,13 @@ class Zombie {
   // ---------- 绘制 ----------
   draw(ctx, board) {
     if (this.dead) return;
+    // 街边僵尸 (开场过场): 直接用 streetY 定位, 不属于草坪行
+    if (this.streetIdle) {
+      this.anim.x = this.x + Z_OFF_X;
+      this.anim.y = this.streetY + Z_OFF_Y - 8;
+      this.anim.draw(ctx);
+      return;
+    }
     const rowTop = board.gridY(this.row);
     let dy = 0;
     if (this.phase === 'dying') dy = Math.min(60, this.dyingT * 90);
@@ -510,11 +517,8 @@ class Zombie {
 
   // ---------- 行走与啃食 ----------
   walkUpdate(dt, board, v) {
-    // 开场过场街边僵尸: 原地踏步不前进
-    if (this.streetIdle) {
-      if (this.x < 800) this.x = 800;
-      return;
-    }
+    // 开场过场街边僵尸: 原地站立不前进
+    if (this.streetIdle) return;
     // 梯子僵尸: 高坚果前放梯子
     if (this.type === 'LADDER' && this.phase === 'carrying') {
       const plant = this.plantAhead(board, 60);

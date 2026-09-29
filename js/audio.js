@@ -50,6 +50,7 @@ const Audio2 = (function () {
     frozen: 'SFX/plant/frozen.ogg', thaw: 'SFX/plant/frozen.ogg',
     gravebusterchomp: 'SFX/plant/gravebusterchomp.ogg',
     dirt_rise: 'SFX/zombie/dirt_rise.ogg', gravedigger: 'SFX/zombie/gravestone_rumble.ogg',
+    digger: 'SFX/zombie/digger_zombie.ogg', gravebutton: 'SFX/button/gravebutton.ogg', gravebuttonchime: 'SFX/zombie/gravestone_rumble.ogg',
     zombie_falls_1: 'sounds/zombie_falling_1.ogg', zombie_falls_2: 'sounds/zombie_falling_2.ogg',
     zombie_groan: 'SFX/zombie/groan/groan.ogg', zombie_groan2: 'SFX/zombie/groan/groan2.ogg',
     zombie_burnt: 'SFX/zombie/zombie_burnt.ogg',

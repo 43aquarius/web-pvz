@@ -1,57 +1,58 @@
 // ============================================================
 // render.js — 战场渲染 (800x600)
+// 原版对齐 (PvZ-Portable Board.cpp / GameConstants.h):
+//   BOARD_OFFSET=220 → 背景绘制于 x=-220 (屏幕0 ↔ 背图像素220)
+//   草皮: SOD1ROW(19,265) / SOD3ROW(15,149), 1-4关用 srcRect 揭示
 // ============================================================
 'use strict';
 
 const { CONST } = require('./data');
 const { SCENE_BG } = require('./board');
 
-const BG_OFFSET_X = -210; // 背景草坪与网格对齐偏移
+const BG_OFFSET_X = -220; // 原版 BOARD_OFFSET=220
 
 const Renderer = {
   drawBoard(ctx, board) {
-    const game = board.game;
     const cam = board.cameraX || 0;
     ctx.save();
     if (cam > 0) { ctx.beginPath(); ctx.rect(0, 0, 800, 600); ctx.clip(); ctx.translate(-cam, 0); }
-    // ---- 背景 ----
-    const bg = Assets.image(SCENE_BG[board.scene]);
-    const isEarlyDay = board.scene === 'day' && board.level && board.level.id <= 3;
-    if (isEarlyDay) {
-      // 早期关卡: 未铺草皮背景 + 草皮覆盖层 (1-1单行 / 1-2·1-3三行)
+    // ---- 背景 (原版: g->DrawImage(bg, -BOARD_OFFSET, 0)) ----
+    const lvl = board.level;
+    const earlyDay = board.scene === 'day' && lvl && lvl.sodRoll;
+    if (earlyDay) {
+      // 早期关卡: 未铺草皮背景 + 草皮层 (原版 Board::DrawBackground1 1/2/4 关逻辑)
       const un = Assets.image('background1unsodded.jpg');
-      if (un) ctx.drawImage(un, BG_OFFSET_X + 210, 0, 1400, 600, -210, 0, 1400, 600);
-      const sodImg = board.level.id === 1 ? 'sod1row.jpg' : 'sod3row.jpg';
-      const sod = Assets.image(sodImg);
-      if (sod) {
-        if (board.sodDone) {
-          // 已铺完
-          const sy = board.level.id === 1 ? 252 : 143;
-          ctx.drawImage(sod, 10, sy, 771, sod.height);
-        } else if (board.cutsceneSod !== undefined) {
-          // 铺设中: 从左向右展开 + 草皮卷滚筒
-          const p = Math.max(0.02, board.cutsceneSod);
-          const w = 771 * p;
-          const sy = board.level.id === 1 ? 252 : 143;
-          ctx.drawImage(sod, 0, 0, Math.max(1, w), sod.height, 10, sy, w, sod.height);
-          const roll = Assets.image('sodroll.png');
-          if (roll) {
-            const rx = 10 + w - 40;
-            ctx.save();
-            ctx.translate(rx, sy + sod.height / 2);
-            ctx.rotate(-board.time * 9);
-            ctx.drawImage(roll, -34, -34, 68, 68);
-            ctx.restore();
-          }
+      if (un) ctx.drawImage(un, BG_OFFSET_X, 0);
+      const sod1 = Assets.image('sod1row.jpg');
+      const sod3 = Assets.image('sod3row.jpg');
+      const bg1 = Assets.image('background1.jpg');
+      const p = board.sodDone ? 1 : (board.cutsceneSod !== undefined ? Math.max(0, board.cutsceneSod) : 1);
+      const w1 = sod1 ? sod1.width : 771;
+      const w3 = sod3 ? sod3.width : 771;
+      if (lvl.id === 1) {
+        // 1-1: 单行草皮从左向右展开
+        if (sod1) ctx.drawImage(sod1, 0, 0, Math.max(1, w1 * p), sod1.height, 19, 265, w1 * p, sod1.height);
+      } else if (lvl.id === 2 || lvl.id === 3) {
+        // 1-2/1-3: 中间一行已有, 上下三行展开
+        if (sod1) ctx.drawImage(sod1, 19, 265);
+        if (sod3) ctx.drawImage(sod3, 0, 0, Math.max(1, w3 * p), sod3.height, 15, 149, w3 * p, sod3.height);
+      } else if (lvl.id === 4) {
+        // 1-4: 上三行已有, 整张背景从 x=232 向右揭示
+        if (sod3) ctx.drawImage(sod3, 15, 149);
+        if (bg1) {
+          const w = 773 * p;
+          ctx.drawImage(bg1, 232, 0, Math.max(1, w), bg1.height, 232 + BG_OFFSET_X, 0, w, bg1.height);
         }
       }
-    } else if (bg) {
-      if (board.scene === 'pool' || board.scene === 'fog') {
-        // 泳池背景用 base (白天/夜晚)
-        const base = Assets.image(board.scene === 'fog' ? 'background4.jpg' : 'background3.jpg');
-        if (base) ctx.drawImage(base, BG_OFFSET_X + 210, 0, 1400, 600, -210, 0, 1400, 600);
-      } else {
-        ctx.drawImage(bg, BG_OFFSET_X + 210, 0, 1400, 600, -210, 0, 1400, 600);
+    } else {
+      const bg = Assets.image(SCENE_BG[board.scene]);
+      if (bg) {
+        if (board.scene === 'pool' || board.scene === 'fog') {
+          const base = Assets.image(board.scene === 'fog' ? 'background4.jpg' : 'background3.jpg');
+          if (base) ctx.drawImage(base, BG_OFFSET_X, 0);
+        } else {
+          ctx.drawImage(bg, BG_OFFSET_X, 0);
+        }
       }
     }
     // ---- 其余场景元素渲染 ----
@@ -59,15 +60,19 @@ const Renderer = {
     ctx.restore();
   },
 
+  // ---- 草皮卷滚筒 (原版 REANIM_SODROLL, 2秒 48帧) ----
+  drawSodRoll(ctx, board) {
+    if (!board.sodRolls) return;
+    for (const r of board.sodRolls) {
+      if (!r || !r.def) continue;
+      r.update(1 / 60);
+      r.draw(ctx);
+    }
+  },
+
   drawScene(ctx, board) {
-    // ---- 屋顶坡度提示(无需额外绘制, 背景自带) ----
     // ---- 泳池水面波光 ----
     if (board.waterRows.length) {
-      ctx.save();
-      ctx.globalAlpha = 0.25 + Math.sin(board.time * 1.5) * 0.05;
-      const caustic = Assets.image('pool_caustic_effect') || Assets.image('pool_base');
-      ctx.restore();
-      // 水面高光条
       for (const r of board.waterRows) {
         const y = board.gridY(r);
         ctx.save();
@@ -123,7 +128,7 @@ const Renderer = {
     }
     // ---- 割草机 ----
     for (const m of board.mowers) {
-      if (m.state === 'gone') continue;
+      if (m.state === 'gone' || m.hidden) continue;
       const name = m.type === 'pool' ? 'PoolCleaner' : m.type === 'roof' ? 'RoofCleaner' : 'LawnMower';
       if (!m.reanim) {
         m.reanim = Assets.reanim(name);
@@ -139,6 +144,10 @@ const Renderer = {
       if (m.state !== 'idle' || true) m.reanim.update(1 / 60);
       m.reanim.draw(ctx);
     }
+    // ---- 街边僵尸 (开场过场, 不属于草坪行) ----
+    for (const z of board.zombies) {
+      if (z.streetIdle && !z.dead) z.draw(ctx, board);
+    }
     // ---- 实体按行渲染 (植物→僵尸) ----
     for (let r = 0; r < board.rows; r++) {
       // 植物
@@ -153,7 +162,7 @@ const Renderer = {
         const pk = board.gridPumpkin[r][c];
         if (pk && !pk.dead) pk.draw(ctx, board);
       }
-      // 僵尸 (行内按x排序: 靠左后画? 原版: x小的先画(靠后), x大的后画(在前))
+      // 僵尸 (行内按x排序)
       const rowZ = board.zombies.filter(z => z.row === r && !z.dead && !z.boss);
       rowZ.sort((a, b) => a.x - b.x);
       for (const z of rowZ) z.draw(ctx, board);
@@ -164,6 +173,8 @@ const Renderer = {
     }
     // ---- 子弹 ----
     for (const pr of board.projectiles) pr.draw(ctx, board);
+    // ---- 草皮卷滚筒 (原版 RENDER_LAYER_TOP: 最上层) ----
+    this.drawSodRoll(ctx, board);
     // ---- 特效 ----
     this.drawEffects(ctx, board);
     // ---- 阳光/金币 ----
@@ -177,18 +188,13 @@ const Renderer = {
         ctx.globalAlpha = 0.95;
         const w = 460;
         const fx = 340 + Math.sin(board.time * 0.7) * 8;
-        // 雾双层滚动
         ctx.drawImage(fog, 0, 0, fog.width, fog.height, fx, 70, w, 470);
         ctx.restore();
       }
     }
-    // ---- 大波横幅 ----
-    this.drawBanners(ctx, board);
   },
 
   drawSun(ctx, s, board) {
-    const reanim = Assets.reanim ? null : null;
-    // 用Sun.reanim
     if (!s.anim) {
       s.anim = Assets.reanim('Sun');
       s.anim.play('anim_idle', 0, 8);
@@ -319,10 +325,6 @@ const Renderer = {
           }
           break;
         }
-        case 'umbrella_bounce': {
-          if (!e.anim) { e.anim = Assets.reanim('Umbrellaleaf'); }
-          break;
-        }
         case 'balloon_pop': {
           const img = Assets.image('puff');
           if (img) {
@@ -352,33 +354,21 @@ const Renderer = {
           }
           break;
         }
+        case 'sod_dirt': {
+          // 草皮卷泥土粒子 (原版 PARTICLE_SOD_ROLL)
+          const p = e.t / e.dur;
+          ctx.save();
+          ctx.globalAlpha = 1 - p;
+          ctx.fillStyle = e.opts.c;
+          const px = e.x + e.opts.vx * e.t;
+          const py = e.y + e.opts.vy * e.t + 220 * e.t * e.t; // 重力
+          ctx.beginPath();
+          ctx.arc(px, py, e.opts.r * (1 - p * 0.5), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+          break;
+        }
       }
-    }
-  },
-
-  drawBanners(ctx, board) {
-    const drawCenterText = (txt, y, scale, alpha) => {
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.font = `bold ${Math.round(38 * scale)}px "Noto Sans SC", sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.lineWidth = 6; ctx.strokeStyle = '#3a2a10';
-      ctx.strokeText(txt, 400, y);
-      const g = ctx.createLinearGradient(0, y - 30, 0, y + 10);
-      g.addColorStop(0, '#ffe9a8'); g.addColorStop(1, '#e8a020');
-      ctx.fillStyle = g;
-      ctx.fillText(txt, 400, y);
-      ctx.restore();
-    };
-    if (board.hugeWaveBanner > 0) {
-      const p = board.hugeWaveBanner;
-      const s = p > 2.8 ? (3.2 - p) * 5 : Math.min(1, p * 1.2);
-      drawCenterText('一大波僵尸正在接近！', 260, Math.max(0.01, s), Math.min(1, p));
-    }
-    if (board.finalWaveBanner > 0) {
-      const p = board.finalWaveBanner;
-      const s = p > 2.8 ? (3.2 - p) * 5 : Math.min(1, p * 1.2);
-      drawCenterText('最后一波！', 260, Math.max(0.01, s), Math.min(1, p));
     }
   },
 
@@ -386,17 +376,14 @@ const Renderer = {
   drawZombie(ctx, z, board) {
     if (z.dead) return;
     const rowTop = board.gridY(z.row);
-    // 死亡沉没
     let dy = 0;
     if (z.phase === 'dying') dy = Math.min(40, z.dyingT * 60);
     const oy = Z_OFF_Y + (1 - z.scale) * 120 + z.altitude * 0 - z.altitude + dy;
     z.anim.x = z.x + Z_OFF_X;
     z.anim.y = rowTop + oy;
-    // 冻结变蓝
     if (z.frozen > 0) z.anim.color = [0.65, 0.85, 1, 1];
     else if (z.chilled > 0) z.anim.color = [0.75, 0.92, 1, 1];
     else z.anim.color = null;
-    // 受击闪白
     if (z.flash > 0) {
       ctx.save();
       ctx.filter = 'brightness(2.4)';
@@ -405,7 +392,6 @@ const Renderer = {
     } else {
       z.anim.draw(ctx);
     }
-    // 黄油定身特效
     if (z.butter > 0) {
       const img = Assets.image('icetrap');
       if (img) {

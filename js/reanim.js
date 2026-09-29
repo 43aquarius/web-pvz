@@ -17,6 +17,18 @@ const RE = (function () {
 
   function setImages(map) { images = map; }
 
+  // 图片解析: .jpg 是透明度拍平到黑色的版本 → 若存在 .png 双胞胎(含alpha)优先用png
+  // (原版资源同时提取了两种格式)
+  function resolveImage(key) {
+    if (!key) return null;
+    const k = key.toLowerCase();
+    if (k.endsWith('.jpg')) {
+      const png = images.get(k.slice(0, -4) + '.png');
+      if (png) return png;
+    }
+    return images.get(k) || null;
+  }
+
   function buildDef(name, json) {
     if (!json || !Array.isArray(json.tracks)) return null; // 非法数据跳过
     const n = json.n, nt = json.tracks.length;
@@ -248,7 +260,7 @@ const RE = (function () {
           const idx = d.tracks[ti].IM[ft[0]];
           if (idx >= 0) key = d.images[idx];
         }
-        const img = key ? (images.get(key.toLowerCase()) || null) : null;
+        const img = key ? resolveImage(key) : null;
         // 挂载的子动画在轨道位置绘制
         const att = this.attach[ti];
         if (!img && !att) continue;
@@ -284,7 +296,7 @@ const RE = (function () {
     }
   }
 
-  return { buildDef, getDef, hasDef, setImages, Reanim, LOOP, PLAY_ONCE, PLAY_ONCE_HOLD, LOOP_FULL_LAST, PLAY_ONCE_FULL_LAST_HOLD };
+  return { buildDef, getDef, hasDef, setImages, resolveImage, Reanim, LOOP, PLAY_ONCE, PLAY_ONCE_HOLD, LOOP_FULL_LAST, PLAY_ONCE_FULL_LAST_HOLD };
 })();
 
 if (typeof module !== 'undefined') module.exports = RE;

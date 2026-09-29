@@ -1,7 +1,7 @@
 // ============================================================
 // main.js — 游戏主控制器: 状态机 / 输入 / 主循环
-// 状态: loading → title → menu → (options/help/almanac) → seedselect → playing(intro→play) → award/note → menu
-// 冒险模式线性推进 (原版): 无自由选关
+// 状态: loading → title → menu → (options/help/almanac) → playing(intro+选卡→play) → award/note → menu
+// 冒险模式线性推进 (原版): 选卡融入开场过场 (CutScene 暂停机制)
 // ============================================================
 'use strict';
 
@@ -109,42 +109,50 @@ const Game = {
       case 'award': Screens.award.click(p, this); break;
       case 'note': Screens.note.click(p, this); break;
       case 'lose': Screens.lose.click(p, this); break;
-      case 'seedselect': this.seedSelectClick(p); break;
       case 'playing': this.gameClick(p); break;
       case 'almanac': this.almanacClick(p); break;
     }
   },
 
-  seedSelectClick(p) {
+  // ---------- 选卡 (开场过场内, 原版 SeedChooserScreen) ----------
+  seedChooseClick(p) {
     const board = this.board;
-    // 开始按钮
-    if (p.x > 660 && p.x < 770 && p.y > 470 && p.y < 520) {
+    const CutsceneM = require('./cutscene');
+    const yOff = CutsceneM.Cutscene.active ? CutsceneM.Cutscene.chooserY : 0;
+    const q = { x: p.x, y: p.y - yOff };   // 选卡界面坐标系
+    // 开始按钮 (原版 (154,545,156,42))
+    if (q.x >= 154 && q.x <= 310 && q.y >= 545 && q.y <= 587) {
       if (board.chosenSeeds.length > 0) {
         this.audio.play('buttonclick');
-        this.beginPlay();
+        CutsceneM.Cutscene.finishSeedChoosing();
       } else this.audio.play('buzzer');
       return;
     }
-    // 随机
-    if (p.x > 660 && p.x < 770 && p.y > 530 && p.y < 566) {
+    // 随机 (原版 (332,546,100,30))
+    if (q.x >= 332 && q.x <= 432 && q.y >= 546 && q.y <= 576) {
       const pool = availablePlants(this.levelId);
       const n = Math.min(board.seedSlots, pool.length);
       board.chosenSeeds = shuffle(pool.slice()).slice(0, n);
+      board.seedCards = board.chosenSeeds.map(t => ({ type: t, cd: 0 }));
       this.audio.play('seedlift');
       return;
     }
-    // 卡片切换
+    // 卡片切换 (原版网格: col*53+22, row*73+128)
     const pool = availablePlants(this.levelId);
-    const cols = 10;
+    let changed = false;
     pool.forEach((type, i) => {
-      const gx = 60 + (i % cols) * 70, gy = 110 + Math.floor(i / cols) * 100;
-      if (p.x >= gx && p.x <= gx + 58 && p.y >= gy && p.y <= gy + 84) {
+      const gx = (i % 8) * 53 + 22;
+      const gy = Math.floor(i / 8) * 73 + 128;
+      if (q.x >= gx && q.x <= gx + 50 && q.y >= gy && q.y <= gy + 70) {
         const idx = board.chosenSeeds.indexOf(type);
         if (idx >= 0) board.chosenSeeds.splice(idx, 1);
         else if (board.chosenSeeds.length < board.seedSlots) board.chosenSeeds.push(type);
-        this.audio.play('tap');
+        changed = true;
+        this.audio.play('seedlift');
       }
     });
+    // 实时同步种子银行 (原版: 选中的卡飞入卡槽)
+    if (changed) board.seedCards = board.chosenSeeds.map(t => ({ type: t, cd: 0 }));
   },
 
   almanacClick(p) {
@@ -172,23 +180,20 @@ const Game = {
   gameClick(p) {
     const board = this.board;
     if (board.paused) { board.paused = false; return; }
-    // 开场过场: 点击跳过
+    // 选卡期间: 选卡界面交互
+    if (Cutscene.active && Cutscene.seedChoosing) { this.seedChooseClick(p); return; }
+    // 开场过场: 点击跳过 (不跳选卡关)
     if (Cutscene.active) {
-      if (this.t_sinceIntro === undefined) this.t_sinceIntro = 0;
-      Cutscene.t = Math.max(Cutscene.t, 5.9); // 跳到尾声
+      if (!Cutscene.board.level.chooseSeeds) Cutscene.t = Math.max(Cutscene.t, 5.9);
       return;
     }
-    // 菜单按钮
-    if (p.x > 745 && p.y > 6 && p.y < 32) { this.abandonLevel(); return; }
-    if (p.x > 745 && p.y > 36 && p.y < 62) {
-      board.speed = board.speed === 1 ? 2 : board.speed === 2 ? 4 : 1;
-      this.audio.play('tap');
-      return;
-    }
-    // 铲子
+    // 菜单按钮 (原版石质按钮 681,-10,117,46)
+    if (p.x > 681 && p.x < 798 && p.y > 0 && p.y < 36) { this.abandonLevel(); return; }
+    // 铲子 (原版: (extra+456, 0) 70x72)
     const cards = board.seedCards;
-    const sx = 80 + cards.length * 55 + 6;
-    if (p.x > sx && p.x < sx + 56 && p.y > 6 && p.y < 86) {
+    const extra = cards.length <= 6 ? 0 : cards.length === 7 ? 60 : cards.length === 8 ? 76 : cards.length === 9 ? 112 : 153;
+    const sx = extra + 456;
+    if (p.x > sx && p.x < sx + 70 && p.y > 0 && p.y < 72) {
       this.shovelMode = !this.shovelMode;
       this.selectedCard = -1;
       this.audio.play('shovel');
@@ -212,8 +217,8 @@ const Game = {
     }
     // 选卡
     for (let i = 0; i < cards.length; i++) {
-      const x = 80 + i * 55;
-      if (p.x > x && p.x < x + 52 && p.y > 6 && p.y < 86) {
+      const x = this.packetX(i, cards.length);
+      if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
         const c = cards[i];
         if (c.cd <= 0 && board.sun >= PLANTS[c.type].cost) {
           this.selectedCard = this.selectedCard === i ? -1 : i;
@@ -357,6 +362,14 @@ const Game = {
     return null;
   },
 
+  // 原版卡包位置 (Board::GetSeedPacketPositionX)
+  packetX(i, n) {
+    if (n <= 7) return i * 59 + 85;
+    if (n === 8) return i * 54 + 81;
+    if (n === 9) return i * 52 + 80;
+    return i * 51 + 79;
+  },
+
   // ---------- 流程 (原版冒险: 线性推进) ----------
   // 主菜单点击冒险 → 下一未通关卡
   startAdventure() {
@@ -394,15 +407,8 @@ const Game = {
         }
       }
     }
-    if (level.chooseSeeds && !level.fixed) {
-      // 选卡界面
-      this.state = 'seedselect';
-      board.state = 'select';
-      this.audio.playBGM('choose_card');
-    } else {
-      // 直接进入开场过场
-      this.beginPlay();
-    }
+    // 选卡融入开场过场 (原版): CutScene 在 t=4.25s 暂停等玩家选卡
+    this.beginPlay();
   },
 
   beginPlay() {
@@ -469,6 +475,7 @@ const Game = {
   // ---------- 更新 ----------
   update(dt) {
     Screens.update(dt);
+    Screens.updateHover(this.mouse);
     Banners.update(dt);
     Transition.update(dt);
     if (this.state === 'playing' && this.board) {
@@ -501,15 +508,15 @@ const Game = {
       case 'note': Screens.note.draw(ctx); break;
       case 'lose': Screens.lose.draw(ctx); break;
       case 'almanac': UI.drawAlmanac(ctx); break;
-      case 'seedselect':
-        Renderer.drawBoard(ctx, this.board);
-        UI.drawSeedSelect(ctx, this.board);
-        break;
       case 'playing': {
         Renderer.drawBoard(ctx, this.board);
         UI.drawGameHUD(ctx, this.board);
         Banners.draw(ctx);
         if (Cutscene.active) Cutscene.draw(ctx, this.board);
+        // 选卡界面 (开场过场期间, 原版滑入滑出)
+        if (Cutscene.active && (Cutscene.seedChoosing || Cutscene.chooserY < 516)) {
+          UI.drawSeedChooser(ctx, this.board);
+        }
         if (this.board.paused) UI.drawPause(ctx, this.board);
         // 种植预览
         this.drawPreview(ctx);
