@@ -1,4 +1,6 @@
-# Build artifacts
+# 构建产物
 node_modules/
 *.log
 .DS_Store
+# 巨大的开发版不进库
+dev.html

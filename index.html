@@ -3,54 +3,53 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>植物大战僵尸 Web 版 · PvZ Web Edition</title>
-<meta name="description" content="基于 HTML5 Canvas 的植物大战僵尸复刻版：全程序化矢量绘制 + Web Audio 合成音乐，零外部资源，单文件可玩。">
+<title>植物大战僵尸 · Web 原版复刻版</title>
 <style>
-  html, body {
-    margin: 0;
-    padding: 0;
-    width: 100%;
-    height: 100%;
-    background: #101418;
-    overflow: hidden;
-    font-family: 'Comic Sans MS', 'Chalkboard SE', 'Microsoft YaHei UI', sans-serif;
-    touch-action: none;
-  }
-  #game {
-    position: absolute;
-    display: block;
-    image-rendering: auto;
-    cursor: pointer;
-    box-shadow: 0 0 60px rgba(0,0,0,0.8);
-  }
-  #audio-hint {
-    position: fixed;
-    bottom: 18px;
-    left: 50%;
-    transform: translateX(-50%);
-    color: rgba(255,255,255,0.75);
-    font-size: 13px;
-    background: rgba(0,0,0,0.45);
-    padding: 8px 18px;
-    border-radius: 20px;
-    pointer-events: none;
-    z-index: 10;
-  }
+  html, body { margin: 0; padding: 0; height: 100%; background: #1a1206; overflow: hidden; }
+  #wrap { display: flex; align-items: center; justify-content: center; height: 100%; }
+  canvas { max-width: 100vw; max-height: 100vh; aspect-ratio: 4/3; image-rendering: auto; cursor: pointer;
+           box-shadow: 0 0 40px rgba(0,0,0,0.6); }
+  #overlay { position: fixed; inset: 0; background: linear-gradient(160deg,#241a08,#0d0904); color: #ffe9a8;
+             display: flex; flex-direction: column; align-items: center; justify-content: center;
+             font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; z-index: 10; }
+  #overlay h1 { font-size: 34px; margin-bottom: 8px; color: #c8f542; text-shadow: 0 2px 8px rgba(0,0,0,.5); }
+  #loadtext { font-size: 15px; opacity: .85; margin-bottom: 18px; }
+  #loadbarwrap { width: 340px; height: 10px; background: rgba(255,255,255,.12); border-radius: 6px; overflow: hidden; }
+  #loadbar { height: 100%; width: 0%; background: linear-gradient(90deg,#5ad04a,#c8f542); border-radius: 6px; transition: width .2s; }
 </style>
 </head>
 <body>
-<canvas id="game" width="960" height="600"></canvas>
-<div id="audio-hint">🔇 点击任意位置开启声音</div>
-
-<!-- 源码版按顺序加载模块（发布版由 tools/build.py 内联合并为单文件） -->
-<script src="js/util.js"></script>
-<script src="js/audio.js"></script>
-<script src="js/data.js"></script>
-<script src="js/sprites.js"></script>
-<script src="js/sprites_z.js"></script>
-<script src="js/entities.js"></script>
-<script src="js/board.js"></script>
-<script src="js/scenes.js"></script>
-<script src="js/main.js"></script>
+<div id="wrap"><canvas id="game" width="800" height="600"></canvas></div>
+<div id="overlay">
+  <h1>植物大战僵尸 · Web 原版复刻版</h1>
+  <div id="loadtext">正在准备…</div>
+  <div id="loadbarwrap"><div id="loadbar"></div></div>
+</div>
+<script>
+// ---- CommonJS 风格模块加载器 (开发模式) ----
+window.__mods = {};
+window.require = function (name) {
+  const key = name.replace(/^\.\//, '').replace(/\.js$/, '');
+  const m = window.__mods[key];
+  if (!m) { console.error('模块未加载:', key); return {}; }
+  return m;
+};
+(async function () {
+  const files = ['reanim', 'data', 'assets', 'audio', 'board', 'plants', 'zombies', 'projectiles', 'render', 'ui', 'main'];
+  for (const f of files) {
+    try {
+      const src = await (await fetch(`js/${f}.js`)).text();
+      const fn = new Function('module', 'require', src + '\n;return module.exports;');
+      const mod = { exports: {} };
+      window.__mods[f] = fn(mod, window.require);
+      if (f === 'assets') window.Assets = window.__mods[f];
+    } catch (e) {
+      console.error('模块加载失败:', f, e);
+      const lt = document.getElementById('loadtext');
+      if (lt) lt.textContent = '模块加载失败: ' + f + ' — ' + e.message;
+    }
+  }
+})();
+</script>
 </body>
 </html>
