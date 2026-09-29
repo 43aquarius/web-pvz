@@ -43,7 +43,20 @@ class Zombie {
     this.anim = Assets.reanim(this.def.reanim);
     this.anim.scale = this.scale;
     this.setupType();
-    this.walkAnimRate = 12 * (this.vel / 30); // 速度联动动画
+    this.bodyMax = this.body;
+    this.armLost = false;
+    this.headLost = false;
+    this.streetIdle = false;
+    this.walkAnimRate = this.calcWalkRate();
+  }
+
+  // 原版动画速度公式: animRate = vel × frameCount/_ground位移 (fps)
+  // 使脚步滑动与实际移速完全同步 (UpdateAnimSpeed 移植)
+  calcWalkRate() {
+    const dist = this.anim.groundDist ? this.anim.groundDist('anim_walk') : null;
+    const frames = this.anim.def.anims['anim_walk'] ? this.anim.def.anims['anim_walk'][1] : 46;
+    if (dist && dist > 1) return Math.max(2, this.vel * frames / dist);
+    return Math.max(2, this.vel * 0.94);
   }
 
   // ---------- 绘制 ----------
@@ -360,7 +373,10 @@ class Zombie {
         this.x = this.vaultFrom - p * 160;
         if (p >= 1) {
           this.phase = 'walk';
-          this.vel = this.def.walkVel;
+          const _wv = Array.isArray(this.def.walkVel) ? this.def.walkVel : [this.def.walkVel, this.def.walkVel];
+          this.vel = _wv[0] + Math.random() * (_wv[1] - _wv[0]);
+          this.walkAnimRate = this.calcWalkRate();
+          this.walkAnimRate = this.calcWalkRate();
           this.anim.play('anim_walk', RE.LOOP, this.walkAnimRate * 0.45);
         }
         break;
@@ -494,6 +510,11 @@ class Zombie {
 
   // ---------- 行走与啃食 ----------
   walkUpdate(dt, board, v) {
+    // 开场过场街边僵尸: 原地踏步不前进
+    if (this.streetIdle) {
+      if (this.x < 800) this.x = 800;
+      return;
+    }
     // 梯子僵尸: 高坚果前放梯子
     if (this.type === 'LADDER' && this.phase === 'carrying') {
       const plant = this.plantAhead(board, 60);
@@ -502,7 +523,8 @@ class Zombie {
           board.ladders.push({ row: this.row, col: plant.col });
           this.shield = 0;
           this.anim.play('anim_walk', RE.LOOP, this.walkAnimRate * 0.5);
-          this.vel = 33;
+          this.vel = 14;
+          this.walkAnimRate = this.calcWalkRate();
           this.phase = 'walk';
           board.game.audio.play('laddersound');
           return;
@@ -517,7 +539,7 @@ class Zombie {
       if (plant && plant.type === 'TALLNUT') {
         // 高坚果拦截 → 下杆行走
         this.phase = 'walk';
-        this.vel = 33;
+        this.vel = 14;
         this.anim.play('anim_walk', RE.LOOP, this.walkAnimRate * 0.45);
         board.game.audio.play('pogo_stick');
         return;
@@ -546,7 +568,8 @@ class Zombie {
     if (this.type === 'NEWSPAPER' && this.shield <= 0 && this.phase !== 'running') {
       this.phase = 'running';
       this.vel = this.def.rageVel;
-      this.anim.play('anim_walk', RE.LOOP, 40);
+      this.walkAnimRate = this.calcWalkRate();
+      this.anim.play('anim_walk', RE.LOOP, this.walkAnimRate);
       board.game.audio.play('newspaper_rarrgh');
       return;
     }
@@ -572,7 +595,7 @@ class Zombie {
       this.walkTime -= dt;
       if (this.walkTime <= 0 && this.phase === 'walking') {
         this.phase = 'running';
-        this.vel = 80;
+        this.vel = 31;
         this.anim.play('anim_walk', RE.LOOP, 30);
       }
     }
@@ -771,7 +794,10 @@ class Zombie {
     if (p >= 1) {
       this.altitude = 0;
       this.phase = 'walk';
-      this.vel = this.def.walkVel;
+      const _wv = Array.isArray(this.def.walkVel) ? this.def.walkVel : [this.def.walkVel, this.def.walkVel];
+          this.vel = _wv[0] + Math.random() * (_wv[1] - _wv[0]);
+          this.walkAnimRate = this.calcWalkRate();
+          this.walkAnimRate = this.calcWalkRate();
       this.anim.play('anim_walk', RE.LOOP, this.walkAnimRate * 0.45);
       board.game.audio.play('dolphin');
     }
@@ -934,7 +960,75 @@ class Zombie {
     this.body -= d;
     if (flags.chill) this.applyChill(board);
     if (flags.fire && this.chilled > 0) this.chilled = 0;
+    // ---- 原版肢体脱落: 本体血量<2/3掉手臂, <1/3掉头 ----
+    if (this.body > 0) {
+      if (!this.armLost && this.body < this.bodyMax * 2 / 3) this.dropArm(board);
+      if (!this.headLost && this.body < this.bodyMax / 3) this.dropHead(board);
+    }
     if (this.body <= 0) this.die(board, flags);
+  }
+
+  // ---- 断臂 (原版 SetupReanimForLostArm): 换残臂贴图 + 切 anim_walk2 + 掉落手臂 ----
+  dropArm(board) {
+    if (this.armLost || this.type === 'BOSS' || this.shield > 0) return;
+    this.armLost = true;
+    const a = this.anim;
+    if (a.trackExists('Zombie_outerarm_upper')) {
+      a.setImageOverride('Zombie_outerarm_upper', 'zombie_outerarm_upper2');
+      // 手/小臂随手臂掉落隐藏
+      if (a.trackExists('Zombie_outerarm_hand')) a.showTrack('Zombie_outerarm_hand', false);
+      if (a.trackExists('Zombie_outerarm_lower')) a.showTrack('Zombie_outerarm_lower', false);
+    }
+    // 掉落手臂粒子 (旋转下落)
+    board.effects.push(this.makeLimb(board, 'zombie_outerarm_hand.png', { vx: 30 + Math.random() * 40, vy: -130, vr: 6 }));
+    board.game.audio.play('limbs_pop');
+    // 行走动画切换到无臂变体
+    if ((this.phase === 'walk' || this.phase === 'walking') && a.def.anims['anim_walk2']) {
+      a.play('anim_walk2', RE.LOOP, this.walkAnimRate);
+    }
+  }
+
+  // ---- 掉头 (原版 SetupReanimForNoHead) ----
+  dropHead(board) {
+    if (this.headLost || this.type === 'BOSS') return;
+    this.headLost = true;
+    const a = this.anim;
+    for (const tr of ['anim_head1', 'anim_head2', 'Zombie_neck', 'anim_hair', 'anim_tongue', 'Zombie_mustache1', 'Zombie_jaw', 'Zombie_mustache']) {
+      if (a.trackExists(tr)) a.showTrack(tr, false);
+    }
+    // 头盔/路障也一起掉
+    if (a.trackExists('anim_cone')) a.showTrack('anim_cone', false);
+    if (a.trackExists('anim_bucket')) a.showTrack('anim_bucket', false);
+    board.effects.push(this.makeLimb(board, 'zombie_head.png', { vx: 20 + Math.random() * 30, vy: -160, vr: 4 }));
+    board.game.audio.play('limbs_pop');
+  }
+
+  // 掉落肢体特效 (抛物线 + 旋转 + 淡出)
+  makeLimb(board, imgName, opts = {}) {
+    return {
+      kind: 'limb', img: imgName,
+      x: this.x + 30, y: board.gridY(this.row) + 30,
+      vx: opts.vx || 40, vy: opts.vy || -140, vr: opts.vr || 5,
+      rot: 0, t: 0, dur: 1.4, dead: false,
+      update(dt, b) {
+        this.t += dt;
+        this.vy += 500 * dt;
+        this.x += this.vx * dt;
+        this.y += this.vy * dt;
+        this.rot += this.vr * dt;
+        if (this.t >= this.dur) this.dead = true;
+      },
+      draw(ctx, b) {
+        const im = Assets.image(this.img.toLowerCase());
+        if (!im) return;
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, (this.dur - this.t) / 0.4);
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rot);
+        ctx.drawImage(im, -im.width / 2, -im.height / 2);
+        ctx.restore();
+      },
+    };
   }
 
   updateHelmStage() {
@@ -1026,7 +1120,7 @@ class Zombie {
     } else if (this.type === 'POGO') {
       // 吸走跳杆
       this.phase = 'walk';
-      this.vel = 33;
+      this.vel = 14;
       this.anim.play('anim_walk', RE.LOOP, this.walkAnimRate * 0.45);
       this.anim.showPrefix('Zombie_pogo_pogo', false);
     }

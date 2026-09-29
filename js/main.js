@@ -1,17 +1,22 @@
 // ============================================================
 // main.js — 游戏主控制器: 状态机 / 输入 / 主循环
-// 状态: loading → menu → levelselect → seedselect → playing → win/lose / almanac
+// 状态: loading → title → menu → (options/help/almanac) → seedselect → playing(intro→play) → award/note → menu
+// 冒险模式线性推进 (原版): 无自由选关
 // ============================================================
 'use strict';
 
-const { CONST, PLANTS, ZOMBIES, LEVELS, availablePlants, MUSHROOMS, AQUATIC, GROUNDCOVER } = require('./data');
+const { CONST, PLANTS, ZOMBIES, LEVELS, availablePlants, MUSHROOMS, AQUATIC, GROUNDCOVER, awardPlantForLevel } = require('./data');
 const { Board } = require('./board');
 const { Plant } = require('./plants');
 const { Zombie } = require('./zombies');
 const { Projectile } = require('./projectiles');
 const { Renderer } = require('./render');
 const { UI, roundRect } = require('./ui');
+const { Screens } = require('./screens');
+const { Cutscene, Banners, Transition, setZombieDefs } = require('./cutscene');
 const RE = require('./reanim');
+
+setZombieDefs(ZOMBIES);
 
 const Game = {
   state: 'loading',
@@ -51,9 +56,9 @@ const Game = {
     this.bindInput();
     // 开始
     if (overlay) overlay.style.display = 'none';
-    this.state = 'menu';
+    this.state = 'title';
+    Screens.game = this;
     this.audio.init();
-    this.audio.playBGM('start_menu');
     // 主循环
     let last = Date.now();
     const loop = () => {
@@ -77,9 +82,9 @@ const Game = {
         y: (e.clientY - r.top) / r.height * 600,
       };
     };
-    this.canvas.addEventListener('mousemove', e => { this.mouse = pos(e); });
+    this.canvas.addEventListener('mousemove', e => { this.mouse = pos(e); Screens.mouse = this.mouse; });
     this.canvas.addEventListener('touchmove', e => {
-      if (e.touches[0]) { this.mouse = pos(e.touches[0]); e.preventDefault(); }
+      if (e.touches[0]) { this.mouse = pos(e.touches[0]); Screens.mouse = this.mouse; e.preventDefault(); }
     }, { passive: false });
     this.canvas.addEventListener('mousedown', e => { this.onClick(pos(e)); this.audio.resume(); });
     this.canvas.addEventListener('touchstart', e => {
@@ -97,37 +102,16 @@ const Game = {
 
   onClick(p) {
     switch (this.state) {
-      case 'menu': this.menuClick(p); break;
-      case 'levelselect': this.levelSelectClick(p); break;
+      case 'title': Screens.title.click(p, this); break;
+      case 'menu': Screens.menu.click(p, this); break;
+      case 'options': Screens.options.click(p, this); break;
+      case 'help': Screens.help.click(p, this); break;
+      case 'award': Screens.award.click(p, this); break;
+      case 'note': Screens.note.click(p, this); break;
+      case 'lose': Screens.lose.click(p, this); break;
       case 'seedselect': this.seedSelectClick(p); break;
       case 'playing': this.gameClick(p); break;
-      case 'win': case 'lose': this.state = 'levelselect'; this.audio.playBGM('start_menu'); break;
       case 'almanac': this.almanacClick(p); break;
-    }
-  },
-
-  menuClick(p) {
-    for (const b of UI.menuButtons || []) {
-      if (p.x > b.x - b.w / 2 && p.x < b.x + b.w / 2 && p.y > b.y - b.h / 2 && p.y < b.y + b.h / 2) {
-        this.audio.play('buttonclick');
-        if (b.txt === '开始冒险') { this.endless = false; this.state = 'levelselect'; }
-        if (b.txt === '植物图鉴') { this.state = 'almanac'; this.almanac.selected = null; }
-        if (b.txt === '无尽模式') { this.endless = true; this.startLevel(0); }
-        return;
-      }
-    }
-  },
-
-  levelSelectClick(p) {
-    if (UI.backButton && hit(p, UI.backButton)) {
-      this.state = 'menu'; this.audio.play('buttonclick'); return;
-    }
-    for (const b of UI.levelButtons || []) {
-      if (hit(p, b) && b.lv <= this.progress.unlocked) {
-        this.audio.play('buttonclick');
-        this.startLevel(b.lv);
-        return;
-      }
     }
   },
 
@@ -188,8 +172,14 @@ const Game = {
   gameClick(p) {
     const board = this.board;
     if (board.paused) { board.paused = false; return; }
+    // 开场过场: 点击跳过
+    if (Cutscene.active) {
+      if (this.t_sinceIntro === undefined) this.t_sinceIntro = 0;
+      Cutscene.t = Math.max(Cutscene.t, 5.9); // 跳到尾声
+      return;
+    }
     // 菜单按钮
-    if (p.x > 745 && p.y > 6 && p.y < 32) { this.state = 'levelselect'; this.audio.stopBGM(); this.audio.play('buttonclick'); return; }
+    if (p.x > 745 && p.y > 6 && p.y < 32) { this.abandonLevel(); return; }
     if (p.x > 745 && p.y > 36 && p.y < 62) {
       board.speed = board.speed === 1 ? 2 : board.speed === 2 ? 4 : 1;
       this.audio.play('tap');
@@ -260,6 +250,18 @@ const Game = {
         return;
       }
     }
+  },
+
+  // 放弃当前关回菜单
+  abandonLevel() {
+    this.audio.play('buttonclick');
+    this.audio.playBGM(null);
+    Cutscene.active = false;
+    Banners.clear();
+    Transition.to(() => {
+      this.state = 'menu';
+      this.audio.playBGM('start_menu');
+    }, 0.35);
   },
 
   removePlant(p, board) {
@@ -355,93 +357,166 @@ const Game = {
     return null;
   },
 
-  // ---------- 流程 ----------
+  // ---------- 流程 (原版冒险: 线性推进) ----------
+  // 主菜单点击冒险 → 下一未通关卡
+  startAdventure() {
+    const lv = Math.min(this.progress.unlocked, 50);
+    this.startLevel(lv);
+  },
+
   startLevel(lv) {
     this.levelId = lv;
-    if (lv === 0) {
-      // 无尽模式
-      this.endless = true;
-      this.levelDef = {
-        id: 50, scene: 'day', sub: 10, waves: 999, rows: 5, startSun: 150,
-        unlock: null, graves: 0, bgm: 'mini_game', skySun: true, bigWave: true, fixed: null, endless: true,
-      };
-    } else {
-      this.endless = false;
-      this.levelDef = LEVELS[lv - 1];
-    }
-    // 选卡
-    this.state = 'seedselect';
-    const board = new Board(this, this.levelDef);
-    board.waveTimer = 999; // 暂不开始
-    board.state = 'select';
-    board.seedSlots = Math.min(10, 4 + Math.floor((this.levelId || 1) / 8));
-    if (this.endless) board.seedSlots = 10;
-    board.chosenSeeds = [];
+    this.endless = false;
+    this.levelDef = LEVELS[lv - 1];
+    const level = this.levelDef;
+    const board = new Board(this, level);
     this.board = board;
-    this.audio.playBGM('choose_card');
+    this.selectedCard = -1;
+    this.shovelMode = false;
+    Banners.clear();
+    // 选卡方式 (原版): 1-7 固定卡槽(全部解锁植物), 1-8+ 手动选卡
+    const pool = availablePlants(lv);
+    board.seedSlots = level.chooseSeeds ? Math.min(pool.length, level.bankSlots) : pool.length;
+    board.chosenSeeds = [];
+    if (!level.chooseSeeds) {
+      board.chosenSeeds = pool.slice();           // 1-7: 固定全部
+    } else if (level.fixed) {
+      board.chosenSeeds = pool.slice(0, board.seedSlots); // 传送带关卡: 预填满, 后续随机替换
+    }
+    // 花盆预植 (屋顶)
+    if (level.potColumns > 0) {
+      for (let c = 0; c < level.potColumns; c++) {
+        for (let r = 0; r < board.rows; r++) {
+          if (board.isWater(r)) continue;
+          const pot = new Plant('FLOWERPOT', r, c, board);
+          board.plants.push(pot);
+          board.gridPot[r][c] = pot;
+        }
+      }
+    }
+    if (level.chooseSeeds && !level.fixed) {
+      // 选卡界面
+      this.state = 'seedselect';
+      board.state = 'select';
+      this.audio.playBGM('choose_card');
+    } else {
+      // 直接进入开场过场
+      this.beginPlay();
+    }
   },
 
   beginPlay() {
     const board = this.board;
+    const level = board.level;
     board.seedCards = board.chosenSeeds.map(t => ({ type: t, cd: 0 }));
-    // 初始冷却
-    for (const c of board.seedCards) c.cd = 3;
+    // 初始冷却 (原版: 开局短暂冷却)
+    for (const c of board.seedCards) c.cd = 2;
     board.state = 'intro';
-    board.waveTimer = 15;
     this.state = 'playing';
-    this.audio.playBGM(board.level.bgm);
-    this.audio.play('readysetplant');
+    this.audio.playBGM(level.bgm);
+    Cutscene.start(board);
+  },
+
+  // 重新挑战当前关
+  retryLevel() {
+    this.audio.play('buttonclick');
+    this.startLevel(this.levelId);
   },
 
   onLevelWin() {
     this.justUnlocked = null;
-    if (!this.endless) {
-      const lv = this.levelId;
-      const unlock = LEVELS[lv - 1].unlock;
-      if (unlock && lv >= this.progress.unlocked) {
-        this.progress.unlocked = Math.min(50, lv + 1);
-        this.justUnlocked = unlock;
-        try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked })); } catch (e) { }
-      } else if (lv >= this.progress.unlocked) {
-        this.progress.unlocked = Math.min(50, lv + 1);
-        try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked })); } catch (e) { }
-      }
+    const lv = this.levelId;
+    const level = LEVELS[lv - 1];
+    if (lv >= this.progress.unlocked) {
+      this.progress.unlocked = Math.min(50, lv + 1);
+      try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked })); } catch (e) { }
     }
-    this.state = 'win';
+    // 奖励判定 (原版): X-5/X-10 → 纸条; 其余有新植物 → 植物奖励; 5-10 → 通关
+    this.justUnlocked = awardPlantForLevel(lv);
+    const isNoteLevel = level.sub === 5 || level.sub === 10;
+    this.audio.playBGM(null);
+    this.audio.play('winmusic');
+    Transition.to(() => {
+      if (lv >= 50) { this.state = 'award'; }               // 通关: 奖杯
+      else if (this.justUnlocked) { this.state = 'award'; }  // 新植物
+      else if (isNoteLevel) { this.state = 'note'; }         // 纸条关
+      else { this.state = 'note'; }                          // 其他: 简短纸条/奖励过场
+    }, 0.8);
+  },
+
+  // 奖励/纸条屏点击后 → 下一关
+  afterAward() {
+    this.audio.play('buttonclick');
+    const next = this.levelId + 1;
+    if (next > 50) {
+      // 通关 → 回菜单
+      this.state = 'menu';
+      this.audio.playBGM('start_menu');
+      return;
+    }
+    this.startLevel(next);
   },
 
   onLevelLose(row) {
-    this.state = 'lose';
+    this.audio.playBGM(null);
+    this.audio.play('losemusic');
+    Transition.to(() => {
+      this.state = 'lose';
+      Screens.t = 0;
+    }, 0.8);
   },
 
   // ---------- 更新 ----------
   update(dt) {
-    if (this.state === 'playing' && this.board && !this.board.paused) {
-      this.board.update(dt * this.board.speed);
-      // 卡片冷却
-      for (const c of this.board.seedCards) c.cd = Math.max(0, c.cd - dt * this.board.speed);
+    Screens.update(dt);
+    Banners.update(dt);
+    Transition.update(dt);
+    if (this.state === 'playing' && this.board) {
+      if (!this.board.paused) {
+        const sdt = dt * this.board.speed;
+        this.board.update(sdt);
+        Cutscene.update(sdt);
+        // 卡片冷却
+        for (const c of this.board.seedCards) c.cd = Math.max(0, c.cd - sdt);
+      }
     }
   },
 
   // ---------- 渲染 ----------
   render() {
     const ctx = this.ctx;
+    // 防御: 每帧重置变换/合成状态 (防止异常导致的泄漏累积)
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.filter = 'none';
     ctx.clearRect(0, 0, 800, 600);
     switch (this.state) {
       case 'loading': break;
-      case 'menu': UI.drawMenu(ctx); break;
-      case 'levelselect': UI.drawLevelSelect(ctx); break;
-      case 'seedselect': UI.drawSeedSelect(ctx, this.board); break;
-      case 'playing':
+      case 'title': Screens.title.draw(ctx); break;
+      case 'menu': Screens.menu.draw(ctx); break;
+      case 'options': Screens.options.draw(ctx); break;
+      case 'help': Screens.help.draw(ctx); break;
+      case 'award': Screens.award.draw(ctx, this); break;
+      case 'note': Screens.note.draw(ctx); break;
+      case 'lose': Screens.lose.draw(ctx); break;
+      case 'almanac': UI.drawAlmanac(ctx); break;
+      case 'seedselect':
+        Renderer.drawBoard(ctx, this.board);
+        UI.drawSeedSelect(ctx, this.board);
+        break;
+      case 'playing': {
         Renderer.drawBoard(ctx, this.board);
         UI.drawGameHUD(ctx, this.board);
+        Banners.draw(ctx);
+        if (Cutscene.active) Cutscene.draw(ctx, this.board);
+        if (this.board.paused) UI.drawPause(ctx, this.board);
         // 种植预览
         this.drawPreview(ctx);
         break;
-      case 'win': Renderer.drawBoard(ctx, this.board); UI.drawWin(ctx, this.board); break;
-      case 'lose': Renderer.drawBoard(ctx, this.board); UI.drawLose(ctx, this.board); break;
-      case 'almanac': UI.drawAlmanac(ctx); break;
+      }
     }
+    Transition.draw(ctx);
   },
 
   drawPreview(ctx) {

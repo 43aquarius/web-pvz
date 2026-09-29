@@ -18,6 +18,7 @@ const RE = (function () {
   function setImages(map) { images = map; }
 
   function buildDef(name, json) {
+    if (!json || !Array.isArray(json.tracks)) return null; // 非法数据跳过
     const n = json.n, nt = json.tracks.length;
     const tracks = new Array(nt);
     // 每轨道: Float32Array(8*n) + Int32Array(n) 图索引
@@ -102,6 +103,22 @@ const RE = (function () {
       if (!r) { return [0, 0]; }
       // anim轨道若含绘制数据(如anim_head1), 其区间由fill-in语义决定
       return r;
+    }
+
+    // 原版 GetTrackVelocity 支撑: _ground 轨道在动画区间内的 X 位移
+    // 用于把行走动画速度与移动速度精确同步 (原版 animRate = velX*(frames/dist)*47)
+    groundDist(animName) {
+      const [s, c] = this.getAnimRange(animName);
+      if (c <= 0) return null;
+      const ti = this.def.trackIdx['_ground'];
+      if (ti === undefined) return null;
+      const F = this.def.tracks[ti].F;
+      if (!F) return null;
+      // F 是逐帧 fill-in 后的扁平数组 (8 项/帧), x = F[i*8]
+      const i0 = Math.min(s, this.def.n - 1);
+      const i1 = Math.min(s + c - 1, this.def.n - 1);
+      const dx = F[i1 * 8] - F[i0 * 8];
+      return Math.abs(dx);
     }
     setFramesForLayer(animName) {
       const [s, c] = this.getAnimRange(animName);

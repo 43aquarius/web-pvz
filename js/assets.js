@@ -33,6 +33,22 @@ const Assets = (function () {
         const txt = await new Response(b64ToBlob(b64, 'application/json')).text();
         state.reanimJson[name] = JSON.parse(txt);
       }
+    } else {
+      // 开发模式: 逐个 fetch reanim JSON
+      const list = window.__REANIM_LIST__ || [];
+      let ri = 0;
+      const rtotal = list.length || 1;
+      const rworker = async () => {
+        while (ri < list.length) {
+          const name = list[ri++];
+          try {
+            const j = await (await fetch(`assets/reanim/${name}.json`)).json();
+            state.reanimJson[name] = j;
+          } catch (e) { console.warn('reanim加载失败', name); }
+          if (progress && (ri % 20 === 0 || ri === list.length)) progress(ri / rtotal * 0.3, `动画 ${ri}/${rtotal}`);
+        }
+      };
+      await Promise.all(Array.from({ length: 8 }, rworker));
     }
     // 图片清单
     let keys;

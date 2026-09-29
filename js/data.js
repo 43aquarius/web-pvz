@@ -88,36 +88,67 @@ const GROUNDCOVER = new Set(['SPIKEWEED', 'SPIKEROCK']);
 const UPGRADES = new Set(['GATLINGPEA', 'TWINSUNFLOWER', 'GLOOMSHROOM', 'CATTAIL', 'WINTERMELON', 'GOLDMAGNET', 'SPIKEROCK', 'COBCANNON', 'IMITATER']);
 
 // ---------- 僵尸定义 ----------
-// vel: px/s; helm/shield: 护甲血量; body: 本体血量
+// vel: px/s (原版 mVelX×47, 实际地面行走速度; 原版逻辑 100Hz)
+// helm/shield: 护甲血量; body: 本体血量; walkGround: 用 _ground 轨道驱动(动画脚步同步)
 const ZOMBIES = {
-  NORMAL:       { cn: '普通僵尸',     reanim: 'Zombie', body: 270, vel: [23, 37], value: 1, unlock: 1, weight: 4000, desc: '最普通的僵尸' },
-  FLAG:         { cn: '旗帜僵尸',     reanim: 'Zombie', body: 270, vel: [45, 45], value: 1, unlock: 1, weight: 0, flag: true, desc: '标志着一大波僵尸来袭' },
-  CONE:         { cn: '路障僵尸',     reanim: 'Zombie', body: 270, helm: 370, helmType: 'cone', vel: [23, 37], value: 2, unlock: 3, weight: 4000, desc: '路障提供中等防护' },
-  POLEVAULTER:  { cn: '撑杆僵尸',     reanim: 'Zombie_polevaulter', body: 500, vel: [80, 80], runVel: 80, walkVel: 33, value: 2, unlock: 6, weight: 2000, vault: true, desc: '撑杆跳过第一个植物' },
-  BUCKET:       { cn: '铁桶僵尸',     reanim: 'Zombie', body: 270, helm: 1100, helmType: 'bucket', vel: [23, 37], value: 4, unlock: 8, weight: 3000, desc: '铁桶提供强力防护' },
-  NEWSPAPER:    { cn: '读报僵尸',     reanim: 'Zombie_paper', body: 500, shield: 150, shieldType: 'newspaper', vel: [23, 37], rageVel: 90, value: 2, unlock: 11, weight: 1000, desc: '报纸被毁后会暴走' },
-  DOOR:         { cn: '铁门僵尸',     reanim: 'Zombie', body: 270, shield: 1100, shieldType: 'screendoor', vel: [23, 37], value: 4, unlock: 13, weight: 3500, desc: '铁门可挡正面子弹' },
-  FOOTBALL:     { cn: '橄榄球僵尸',   reanim: 'Zombie_football', body: 500, helm: 1400, helmType: 'football', vel: [66, 68], value: 7, unlock: 16, weight: 2000, desc: '高速冲锋的重甲僵尸' },
-  DANCER:       { cn: '舞王僵尸',     reanim: 'Zombie_dancer', body: 500, vel: [45, 45], scale: 0.8, value: 5, unlock: 18, weight: 1000, summon: 4, desc: '召唤伴舞僵尸' },
-  BACKUP:       { cn: '伴舞僵尸',     reanim: 'Zombie_backup', body: 500, vel: [45, 45], scale: 0.8, value: 1, unlock: 99, weight: 0, desc: '舞王的伴舞' },
-  DUCKY:        { cn: '鸭子救生圈僵尸', reanim: 'Zombie', body: 270, vel: [23, 37], value: 1, unlock: 21, weight: 0, water: true, desc: '带着救生圈游泳' },
-  SNORKEL:      { cn: '潜水僵尸',     reanim: 'Zombie_snorkle', body: 500, vel: [66, 68], value: 3, unlock: 23, weight: 2000, water: true, dive: true, desc: '潜入水中躲避攻击' },
-  ZAMBONI:      { cn: '冰车僵尸',     reanim: 'Zombie_zamboni', body: 1350, vel: [25, 25], value: 7, unlock: 26, weight: 2000, crush: true, iceTrail: true, desc: '压碎植物并留下冰道' },
-  BOBSLED:      { cn: '雪橇小队僵尸', reanim: 'Zombie_bobsled', body: 270, helm: 300, helmType: 'bobsled', vel: [60, 60], value: 3, unlock: 26, weight: 2000, team: 4, desc: '四人雪橇队, 冰面上疾驰' },
-  DOLPHIN:      { cn: '海豚骑士僵尸', reanim: 'Zombie_dolphinrider', body: 500, vel: [89, 91], runVel: 90, walkVel: 33, value: 3, unlock: 28, weight: 1500, water: true, vault: true, desc: '骑着海豚跃过植物' },
-  JACK:         { cn: '玩偶匣僵尸',   reanim: 'Zombie_jackbox', body: 500, vel: [66, 68], value: 3, unlock: 31, weight: 1000, explode: true, desc: '走到半路自爆' },
-  BALLOON:      { cn: '气球僵尸',     reanim: 'Zombie_balloon', body: 500, fly: 20, altitude: 25, vel: [23, 37], value: 2, unlock: 33, weight: 2000, desc: '飞过地面防线' },
-  DIGGER:       { cn: '矿工僵尸',     reanim: 'Zombie_digger', body: 500, helm: 100, helmType: 'digger', vel: [23, 37], digVel: 40, value: 4, unlock: 36, weight: 1000, dig: true, desc: '挖地道绕到后方' },
-  POGO:         { cn: '跳跳僵尸',     reanim: 'Zombie_pogo', body: 500, vel: [45, 45], value: 4, unlock: 38, weight: 1000, pogo: true, desc: '不断跳跃越过植物' },
-  YETI:         { cn: '雪人僵尸',     reanim: 'Zombie_yeti', body: 1350, vel: [40, 40], value: 4, unlock: 40, weight: 1, flee: true, yeti: true, desc: '罕见, 掉落钻石' },
-  BUNGEE:       { cn: '蹦极僵尸',     reanim: 'Zombie_bungi', body: 450, vel: [0, 0], value: 3, unlock: 41, weight: 1000, bungee: true, desc: '从天而降偷走植物' },
-  LADDER:       { cn: '梯子僵尸',     reanim: 'Zombie_ladder', body: 500, shield: 500, shieldType: 'ladder', vel: [80, 80], value: 4, unlock: 43, weight: 1000, ladder: true, desc: '搭梯翻越高坚果' },
-  CATAPULT:     { cn: '投石车僵尸',   reanim: 'Zombie_catapult', body: 850, vel: [20, 20], value: 5, unlock: 46, weight: 1500, catapult: 20, desc: '远距离投掷篮球' },
-  GARGANTUAR:   { cn: '巨人僵尸',     reanim: 'Zombie_gargantuar', body: 3000, vel: [29, 29], value: 10, unlock: 48, weight: 1500, smash: true, throwImp: true, desc: '碾压一切, 血量极高' },
-  REDEYE:       { cn: '红眼巨人僵尸', reanim: 'Zombie_gargantuar', body: 6000, vel: [29, 29], value: 10, unlock: 99, weight: 6000, smash: true, throwImp: true, redEye: true, desc: '强化版巨人' },
-  IMP:          { cn: '小鬼僵尸',     reanim: 'Zombie_imp', body: 270, vel: [90, 90], value: 10, unlock: 99, weight: 0, desc: '被巨人抛出的炮灰' },
+  NORMAL:       { cn: '普通僵尸',     reanim: 'Zombie', body: 270, vel: [10.8, 17.4], value: 1, unlock: 1, weight: 4000, firstWave: 1, desc: '最普通的僵尸' },
+  FLAG:         { cn: '旗帜僵尸',     reanim: 'Zombie', body: 270, vel: [21, 21], value: 1, unlock: 1, weight: 0, firstWave: 1, flag: true, desc: '标志着一大波僵尸来袭' },
+  CONE:         { cn: '路障僵尸',     reanim: 'Zombie', body: 270, helm: 370, helmType: 'cone', vel: [10.8, 17.4], value: 2, unlock: 3, weight: 4000, firstWave: 1, desc: '路障提供中等防护' },
+  POLEVAULTER:  { cn: '撑杆僵尸',     reanim: 'Zombie_polevaulter', body: 500, vel: [31, 32], runVel: 31.5, walkVel: [10.8, 17.4], value: 2, unlock: 6, weight: 2000, firstWave: 5, vault: true, desc: '撑杆跳过第一个植物' },
+  BUCKET:       { cn: '铁桶僵尸',     reanim: 'Zombie', body: 270, helm: 1100, helmType: 'bucket', vel: [10.8, 17.4], value: 4, unlock: 8, weight: 3000, firstWave: 1, desc: '铁桶提供强力防护' },
+  NEWSPAPER:    { cn: '读报僵尸',     reanim: 'Zombie_paper', body: 500, shield: 150, shieldType: 'newspaper', vel: [10.8, 17.4], rageVel: 42, value: 2, unlock: 11, weight: 1000, firstWave: 1, desc: '报纸被毁后会暴走' },
+  DOOR:         { cn: '铁门僵尸',     reanim: 'Zombie', body: 270, shield: 1100, shieldType: 'screendoor', vel: [10.8, 17.4], value: 4, unlock: 13, weight: 3500, firstWave: 5, desc: '铁门可挡正面子弹' },
+  FOOTBALL:     { cn: '橄榄球僵尸',   reanim: 'Zombie_football', body: 500, helm: 1400, helmType: 'football', vel: [31, 32], value: 7, unlock: 16, weight: 2000, firstWave: 5, desc: '高速冲锋的重甲僵尸' },
+  DANCER:       { cn: '舞王僵尸',     reanim: 'Zombie_dancer', body: 500, vel: [21, 21], scale: 0.8, value: 5, unlock: 18, weight: 1000, firstWave: 5, summon: 4, desc: '召唤伴舞僵尸' },
+  BACKUP:       { cn: '伴舞僵尸',     reanim: 'Zombie_backup', body: 500, vel: [21, 21], scale: 0.8, value: 1, unlock: 99, weight: 0, desc: '舞王的伴舞' },
+  DUCKY:        { cn: '鸭子救生圈僵尸', reanim: 'Zombie', body: 270, vel: [10.8, 17.4], value: 1, unlock: 21, weight: 0, firstWave: 5, water: true, desc: '带着救生圈游泳' },
+  SNORKEL:      { cn: '潜水僵尸',     reanim: 'Zombie_snorkle', body: 500, vel: [31, 32], poolVel: 30, value: 3, unlock: 23, weight: 2000, firstWave: 10, water: true, dive: true, desc: '潜入水中躲避攻击' },
+  ZAMBONI:      { cn: '冰车僵尸',     reanim: 'Zombie_zamboni', body: 1350, vel: [23, 37], value: 7, unlock: 26, weight: 2000, firstWave: 10, crush: true, iceTrail: true, desc: '压碎植物并留下冰道' },
+  BOBSLED:      { cn: '雪橇小队僵尸', reanim: 'Zombie_bobsled', body: 270, helm: 300, helmType: 'bobsled', vel: [60, 60], walkVel: [10.8, 17.4], value: 3, unlock: 26, weight: 2000, firstWave: 10, team: 4, desc: '四人雪橇队, 冰面上疾驰' },
+  DOLPHIN:      { cn: '海豚骑士僵尸', reanim: 'Zombie_dolphinrider', body: 500, vel: [31, 32], walkVel: [41.8, 42.8], value: 3, unlock: 28, weight: 1500, firstWave: 10, water: true, vault: true, desc: '骑着海豚跃过植物' },
+  JACK:         { cn: '玩偶匣僵尸',   reanim: 'Zombie_jackbox', body: 500, vel: [31, 32], value: 3, unlock: 31, weight: 1000, firstWave: 10, explode: true, desc: '走到半路自爆' },
+  BALLOON:      { cn: '气球僵尸',     reanim: 'Zombie_balloon', body: 500, fly: 20, altitude: 25, vel: [23, 37], value: 2, unlock: 33, weight: 2000, firstWave: 10, desc: '飞过地面防线' },
+  DIGGER:       { cn: '矿工僵尸',     reanim: 'Zombie_digger', body: 500, helm: 100, helmType: 'digger', vel: [10.8, 17.4], digVel: 12, value: 4, unlock: 36, weight: 1000, firstWave: 10, dig: true, desc: '挖地道绕到后方' },
+  POGO:         { cn: '跳跳僵尸',     reanim: 'Zombie_pogo', body: 500, vel: [45, 45], value: 4, unlock: 38, weight: 1000, firstWave: 10, pogo: true, desc: '不断跳跃越过植物' },
+  YETI:         { cn: '雪人僵尸',     reanim: 'Zombie_yeti', body: 1350, vel: [18.8, 18.8], runVel: 37.6, value: 4, unlock: 40, weight: 1, firstWave: 1, flee: true, yeti: true, desc: '罕见, 掉落钻石' },
+  BUNGEE:       { cn: '蹦极僵尸',     reanim: 'Zombie_bungi', body: 450, vel: [0, 0], value: 3, unlock: 41, weight: 1000, firstWave: 10, bungee: true, desc: '从天而降偷走植物' },
+  LADDER:       { cn: '梯子僵尸',     reanim: 'Zombie_ladder', body: 500, shield: 500, shieldType: 'ladder', vel: [37, 38], walkVel: [10.8, 17.4], value: 4, unlock: 43, weight: 1000, firstWave: 10, ladder: true, desc: '搭梯翻越高坚果' },
+  CATAPULT:     { cn: '投石车僵尸',   reanim: 'Zombie_catapult', body: 850, vel: [23, 37], value: 5, unlock: 46, weight: 1500, firstWave: 10, catapult: 20, desc: '远距离投掷篮球' },
+  GARGANTUAR:   { cn: '巨人僵尸',     reanim: 'Zombie_gargantuar', body: 3000, vel: [10.8, 17.4], value: 10, unlock: 48, weight: 1500, firstWave: 15, smash: true, throwImp: true, desc: '碾压一切, 血量极高' },
+  REDEYE:       { cn: '红眼巨人僵尸', reanim: 'Zombie_gargantuar', body: 6000, vel: [10.8, 17.4], value: 10, unlock: 99, weight: 6000, smash: true, throwImp: true, redEye: true, desc: '强化版巨人' },
+  IMP:          { cn: '小鬼僵尸',     reanim: 'Zombie_imp', body: 270, vel: [10.8, 17.4], value: 10, unlock: 99, weight: 0, desc: '被巨人抛出的炮灰' },
   BOSS:         { cn: '僵王博士',     reanim: 'Zombie_boss', body: 40000, vel: [0, 0], value: 10, unlock: 99, weight: 0, boss: true, desc: '终极Boss: 僵王博士' },
 };
+
+// 原版 gZombieAllowedLevels: 特殊僵尸仅在指定关卡出现 (PvZ-Portable 反编译数据)
+const ZOMBIE_ALLOWED = {
+  POLEVAULTER: [6, 7, 9, 10, 14, 15, 24, 29, 42],
+  NEWSPAPER: [11, 12, 15, 22, 24],
+  DOOR: [13, 14, 17, 19, 20],
+  FOOTBALL: [16, 17, 20, 22, 25, 32, 44],
+  DANCER: [18, 19, 20],
+  BACKUP: [18, 19, 20],
+  SNORKEL: [23, 24, 25, 27, 30],
+  ZAMBONI: [26, 27, 29, 30],
+  BOBSLED: [26, 27, 29, 30],
+  DOLPHIN: [28, 29, 30, 34],
+  JACK: [31, 32, 37, 40, 49, 50],
+  BALLOON: [33, 34, 39, 40],
+  DIGGER: [36, 37, 40],
+  POGO: [38, 39, 40, 44],
+  YETI: [40],
+  BUNGEE: [41, 42, 47, 49, 50],
+  LADDER: [43, 44, 45, 47, 49, 50],
+  CATAPULT: [46, 47, 49, 50],
+  GARGANTUAR: [48, 49, 50],
+  IMP: [48, 49, 50],
+};
+// 僵尸能否在某关出现
+function zombieAllowedOnLevel(type, level) {
+  const list = ZOMBIE_ALLOWED[type];
+  if (!list) { const d = ZOMBIES[type]; return d && d.unlock <= level; }
+  return list.includes(level);
+}
 
 // ---------- 子弹定义 ----------
 const PROJECTILES = {
@@ -141,58 +172,109 @@ const PROJECTILES = {
   bossice:      { dmg: 2000, speed: 220, img: 'zombie_boss_iceball', zproj: true },
 };
 
-// ---------- 关卡 (冒险模式 1-1 ~ 5-10) ----------
-// scene: day/night/pool/fog/roof; rows: 5/6; waves: 波数
-// unlock: 通关解锁植物; fixed: 该关特殊
+// ---------- 关卡 (冒险模式 1-1 ~ 5-10, 原版精确数据) ----------
+// 世界结构: 1-10白天 / 11-20黑夜 / 21-30泳池 / 31-40浓雾 / 41-50屋顶
+// 原版 gZombieWaves 波数表 (PvZ-Portable 反编译)
+const WAVE_COUNTS = [
+  4,  6,  8,  10, 8,  10, 20, 10, 20, 20,
+  10, 20, 10, 20, 10, 10, 20, 10, 20, 20,
+  10, 20, 20, 30, 20, 20, 30, 20, 30, 30,
+  10, 20, 10, 20, 20, 10, 20, 10, 20, 20,
+  10, 20, 20, 30, 20, 20, 30, 20, 30, 30,
+];
+
+// 原版植物解锁顺序 = SeedType 枚举顺序
+const SEED_ORDER = [
+  'PEASHOOTER', 'SUNFLOWER', 'CHERRYBOMB', 'WALLNUT', 'POTATOMINE',
+  'SNOWPEA', 'CHOMPER', 'REPEATER', 'PUFFSHROOM', 'SUNSHROOM',
+  'FUMESHROOM', 'GRAVEBUSTER', 'HYPNOSHROOM', 'SCAREDYSHROOM', 'ICESHROOM',
+  'DOOMSHROOM', 'LILYPAD', 'SQUASH', 'THREEPEATER', 'TANGLEKELP',
+  'JALAPENO', 'SPIKEWEED', 'TORCHWOOD', 'TALLNUT', 'SEASHROOM',
+  'PLANTERN', 'CACTUS', 'BLOVER', 'SPLITPEA', 'STARFRUIT',
+  'PUMPKIN', 'MAGNETSHROOM', 'CABBAGEPULT', 'FLOWERPOT', 'KERNELPULT',
+  'COFFEEBEAN', 'GARLIC', 'UMBRELLALEAF', 'MARIGOLD', 'MELONPULT',
+];
+
+// 原版 GetAwardSeedForLevel: 玩到第 N 关时已解锁的植物数
+// (每区 8 个新植物; sub>=5 减1, sub>=10 减2 — X-5/X-10 是纸条关不发植物)
+function seedsAvailableCount(level) {
+  const area = Math.floor((level - 1) / 10) + 1;
+  const sub = ((level - 1) % 10) + 1;
+  let n = (area - 1) * 8 + sub;
+  if (sub >= 10) n -= 2;
+  else if (sub >= 5) n -= 1;
+  return Math.min(n, 40);
+}
+// 玩到第 level 关时可用植物列表
+function availablePlants(level) {
+  const n = seedsAvailableCount(level);
+  return SEED_ORDER.slice(0, n);
+}
+// 通关第 level 关后奖励的植物 (null=纸条/无植物)
+function awardPlantForLevel(level) {
+  const before = seedsAvailableCount(level);
+  const after = seedsAvailableCount(level + 1);
+  if (after > before) return SEED_ORDER[after - 1];
+  return null;
+}
+
+// 原版墓碑数量表 (夜晚关卡, 按列分布: 列号→数量)
+function gravesForLevel(lv) {
+  if (lv >= 11 && lv <= 13) return [[6, 1], [7, 1], [8, 2]];
+  if (lv === 14 || lv === 16) return [[5, 1], [6, 1], [7, 2], [8, 3]];
+  if (lv >= 17 && lv <= 19) return [[4, 1], [5, 2], [6, 2], [7, 3], [8, 3]];
+  if (lv >= 20) return [[3, 1], [4, 2], [5, 2], [6, 2], [7, 3], [8, 3]];
+  return [];
+}
+
 function makeLevels() {
   const L = [];
-  const sceneOf = lv => lv <= 10 ? 'day' : lv <= 20 ? 'night' : lv <= 30 ? 'pool' : lv <= 40 ? 'fog' : 'roof';
-  // 每关新植物 (原版顺序)
-  const unlocks = { 1: 'PEASHOOTER', 2: 'SUNFLOWER', 3: 'CHERRYBOMB', 4: 'WALLNUT', 5: 'POTATOMINE', 6: 'SNOWPEA', 7: 'CHOMPER', 8: 'REPEATER', 9: null, 10: 'LILYPAD(预告)',
-    11: 'PUFFSHROOM', 12: 'SUNSHROOM', 13: 'FUMESHROOM', 14: 'GRAVEBUSTER', 15: null, 16: 'HYPNOSHROOM', 17: 'SCAREDYSHROOM', 18: 'ICESHROOM', 19: 'DOOMSHROOM', 20: null,
-    21: 'SQUASH', 22: 'THREEPEATER', 23: 'TANGLEKELP', 24: 'JALAPENO', 25: null, 26: 'SPIKEWEED', 27: 'TORCHWOOD', 28: 'TALLNUT', 29: 'SEASHROOM', 30: null,
-    31: 'CACTUS', 32: 'BLOVER', 33: 'SPLITPEA', 34: 'STARFRUIT', 35: null, 36: 'PUMPKIN', 37: 'MAGNETSHROOM', 38: 'CABBAGEPULT', 39: 'FLOWERPOT', 40: null,
-    41: 'COFFEEBEAN', 42: 'GARLIC', 43: 'UMBRELLALEAF', 44: 'MARIGOLD', 45: null, 46: 'MELONPULT', 47: 'GATLINGPEA', 48: 'TWINSUNFLOWER', 49: 'GLOOMSHROOM', 50: null };
   for (let lv = 1; lv <= 50; lv++) {
-    const scene = sceneOf(lv);
+    const scene = lv <= 10 ? 'day' : lv <= 20 ? 'night' : lv <= 30 ? 'pool' : lv <= 40 ? 'fog' : 'roof';
     const sub = ((lv - 1) % 10) + 1;
-    // 波数: 随进度增长
-    let waves = 10 + Math.floor((lv - 1) / 6) * 5 + (sub >= 9 ? 5 : 0);
-    if (lv === 50) waves = 20;
     const level = {
-      id: lv, scene, sub, waves,
-      rows: (scene === 'pool' || scene === 'fog') ? 6 : 5,
-      startSun: 50,
-      unlock: (unlocks[lv + 1] && unlocks[lv + 1] !== 'LILYPAD(预告)') ? unlocks[lv + 1] : (lv === 9 ? 'LILYPAD' : null),
+      id: lv, scene, sub,
+      world: Math.ceil(lv / 10),
+      label: `${Math.ceil(lv / 10)}-${sub}`,
+      waves: WAVE_COUNTS[lv - 1],
+      // 行配置: 1-1单行(中间), 1-2/1-3三行, 1-4起五行; 泳池六行
+      grassRows: scene === 'pool' || scene === 'fog' ? [0, 1, 4, 5] : (lv === 1 ? [2] : (lv === 2 || lv === 3) ? [1, 2, 3] : [0, 1, 2, 3, 4]),
+      rows: scene === 'pool' || scene === 'fog' ? 6 : 5,
+      startSun: lv === 1 ? 150 : 50,
+      unlock: awardPlantForLevel(lv),
       fixed: null,
-      graves: scene === 'night' ? Math.min(2 + sub, 8) : (lv === 7 ? 6 : 0),
+      graves: scene === 'night' ? gravesForLevel(lv) : [],
       bgm: scene === 'day' ? 'front_day' : scene === 'night' ? 'front_night' : scene === 'pool' ? 'pool' : scene === 'fog' ? 'fog' : 'roof',
       skySun: !(scene === 'night' || scene === 'fog'),
-      bigWave: sub === 10 || lv === 50,
+      potColumns: lv === 41 ? 5 : lv === 42 ? 4 : lv >= 43 ? 3 : 0,
+      sodRoll: lv === 1 || lv === 2 || lv === 4,       // 草皮扩展关: 开场铺草皮动画
+      chooseSeeds: lv > 7,                              // 1-8 起需要选卡
+      bankSlots: Math.min(6 + Math.max(0, Math.floor((lv - 8) / 12)), 10), // 6槽起步, 后期最多10
+      flagWaves: WAVE_COUNTS[lv - 1] >= 10 ? 10 : 0,   // <10波无旗 (1-1)
+      introZombies: lv <= 20,                           // 开场镜头右侧展示僵尸
     };
-    // 特殊关
-    if (lv === 5) level.fixed = 'wallnut_bowling';   // 1-5 保龄球小关(简化:送坚果)
-    if (lv === 10) level.fixed = 'night_intro';
-    if (lv === 15) level.fixed = 'vasebreaker';       // 简化为普通关+限制卡
-    if (lv === 20) level.fixed = 'whack';
-    if (lv === 25) level.fixed = 'seeing_gold';
-    if (lv === 35) level.fixed = 'beghouled';
-    if (lv === 45) level.fixed = 'art_challenge';
-    if (lv === 50) level.fixed = 'boss';
+    // 特殊关 (原版: 传送带/小游戏)
+    if (lv === 5)  level.fixed = 'bowling';    // 1-5 坚果保龄球 (传送带)
+    if (lv === 10 || lv === 20 || lv === 30) level.fixed = 'miniboss'; // 小Boss关 (传送带)
+    if (lv === 25) level.fixed = 'little';     // 3-5 小僵尸关 (传送带)
+    if (lv === 40) level.fixed = 'storm';      // 4-10 暴风雨夜 (传送带)
+    if (lv === 45) level.fixed = 'bungee';     // 5-5 蹦极突袭 (传送带)
+    if (lv === 50) level.fixed = 'boss';       // 5-10 僵王博士
     L.push(level);
   }
   return L;
 }
 const LEVELS = makeLevels();
 
-// 可用植物池(随关卡进度)
-function availablePlants(levelId) {
-  const pool = [];
-  for (let lv = 1; lv <= levelId; lv++) {
-    const u = LEVELS[lv - 1].unlock;
-    if (u && PLANTS[u] && !UPGRADES.has(u)) pool.push(u);
-  }
-  return [...new Set(pool)];
-}
+// 原版波次生成常量
+const WAVE = {
+  FIRST_WAVE_DELAY: 18,        // 秒 — 原版1800tick
+  WAVE_DELAY: 25,              // 秒 — 原版2500tick
+  WAVE_DELAY_RANGE: 6,         // 秒 — 原版600tick 随机
+  BEFORE_FLAG: 45,             // 秒 — 大波前延迟 4500tick
+  HUGE_WAVE_WARN: 7.5,         // 秒 — 大波警告 750tick
+  ACCEL_THRESHOLD: 0.55,       // 波血量降到55%以下且已过4s → 加速
+  ACCEL_DELAY: 2,              // 加速后2秒刷下一波
+};
 
-if (typeof module !== 'undefined') module.exports = { CONST, PLANTS, ZOMBIES, PROJECTILES, LEVELS, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, availablePlants };
+if (typeof module !== 'undefined') module.exports = { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, PROJECTILES, LEVELS, WAVE_COUNTS, SEED_ORDER, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, availablePlants, seedsAvailableCount, awardPlantForLevel, gravesForLevel };

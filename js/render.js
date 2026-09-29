@@ -11,18 +11,55 @@ const BG_OFFSET_X = -210; // 背景草坪与网格对齐偏移
 const Renderer = {
   drawBoard(ctx, board) {
     const game = board.game;
+    const cam = board.cameraX || 0;
+    ctx.save();
+    if (cam > 0) { ctx.beginPath(); ctx.rect(0, 0, 800, 600); ctx.clip(); ctx.translate(-cam, 0); }
     // ---- 背景 ----
     const bg = Assets.image(SCENE_BG[board.scene]);
-    if (bg) {
+    const isEarlyDay = board.scene === 'day' && board.level && board.level.id <= 3;
+    if (isEarlyDay) {
+      // 早期关卡: 未铺草皮背景 + 草皮覆盖层 (1-1单行 / 1-2·1-3三行)
+      const un = Assets.image('background1unsodded.jpg');
+      if (un) ctx.drawImage(un, BG_OFFSET_X + 210, 0, 1400, 600, -210, 0, 1400, 600);
+      const sodImg = board.level.id === 1 ? 'sod1row.jpg' : 'sod3row.jpg';
+      const sod = Assets.image(sodImg);
+      if (sod) {
+        if (board.sodDone) {
+          // 已铺完
+          const sy = board.level.id === 1 ? 252 : 143;
+          ctx.drawImage(sod, 10, sy, 771, sod.height);
+        } else if (board.cutsceneSod !== undefined) {
+          // 铺设中: 从左向右展开 + 草皮卷滚筒
+          const p = Math.max(0.02, board.cutsceneSod);
+          const w = 771 * p;
+          const sy = board.level.id === 1 ? 252 : 143;
+          ctx.drawImage(sod, 0, 0, Math.max(1, w), sod.height, 10, sy, w, sod.height);
+          const roll = Assets.image('sodroll.png');
+          if (roll) {
+            const rx = 10 + w - 40;
+            ctx.save();
+            ctx.translate(rx, sy + sod.height / 2);
+            ctx.rotate(-board.time * 9);
+            ctx.drawImage(roll, -34, -34, 68, 68);
+            ctx.restore();
+          }
+        }
+      }
+    } else if (bg) {
       if (board.scene === 'pool' || board.scene === 'fog') {
         // 泳池背景用 base (白天/夜晚)
-        const isNight = false;
         const base = Assets.image(board.scene === 'fog' ? 'background4.jpg' : 'background3.jpg');
         if (base) ctx.drawImage(base, BG_OFFSET_X + 210, 0, 1400, 600, -210, 0, 1400, 600);
       } else {
         ctx.drawImage(bg, BG_OFFSET_X + 210, 0, 1400, 600, -210, 0, 1400, 600);
       }
     }
+    // ---- 其余场景元素渲染 ----
+    this.drawScene(ctx, board);
+    ctx.restore();
+  },
+
+  drawScene(ctx, board) {
     // ---- 屋顶坡度提示(无需额外绘制, 背景自带) ----
     // ---- 泳池水面波光 ----
     if (board.waterRows.length) {

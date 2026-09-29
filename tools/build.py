@@ -9,7 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = ROOT
 MODE = sys.argv[1] if len(sys.argv) > 1 else 'dev'
 
-MODULES = ['reanim', 'data', 'assets', 'audio', 'projectiles', 'plants', 'zombies', 'board', 'render', 'ui', 'main']
+MODULES = ['reanim', 'data', 'assets', 'audio', 'cutscene', 'projectiles', 'zombies', 'plants', 'board', 'render', 'ui', 'screens', 'main']
 
 HTML_HEAD = '''<!DOCTYPE html>
 <html lang="zh-CN">
@@ -82,7 +82,7 @@ def load_reanim_data():
     out = {}
     d = os.path.join(WEB, 'assets/reanim')
     for f in sorted(os.listdir(d)):
-        if f.endswith('.json') and f != '_imginfo.json':
+        if f.endswith('.json') and f != '_imginfo.json' and f != '_list.json':
             out[f[:-5]] = json.load(open(os.path.join(d, f)))
     return out
 

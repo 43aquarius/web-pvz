@@ -521,29 +521,24 @@ const UI = {
   },
 
   // ---------- 结算 ----------
-  drawWin(ctx, board) {
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, 800, 600);
-    ctx.font = 'bold 52px "Noto Sans SC", sans-serif';
-    ctx.textAlign = 'center'; ctx.fillStyle = '#ffe9a8';
-    ctx.fillText('关卡完成！', 400, 240);
-    const lv = this.game.levelId;
-    if (LEVELS[lv - 1].unlock && this.game.justUnlocked) {
-      ctx.font = '22px "Noto Sans SC", sans-serif';
-      ctx.fillStyle = '#a8f542';
-      ctx.fillText(`获得新植物: ${PLANTS[LEVELS[lv - 1].unlock].cn}`, 400, 300);
-    }
-    ctx.font = '20px "Noto Sans SC", sans-serif';
-    ctx.fillStyle = '#e8d9b5';
-    ctx.fillText('点击任意处返回', 400, 360);
-  },
-  drawLose(ctx, board) {
-    ctx.fillStyle = 'rgba(20,0,0,0.6)'; ctx.fillRect(0, 0, 800, 600);
-    ctx.font = 'bold 52px "Noto Sans SC", sans-serif';
-    ctx.textAlign = 'center'; ctx.fillStyle = '#ff6a5a';
-    ctx.fillText('僵尸吃掉了你的脑子！', 400, 280);
-    ctx.font = '20px "Noto Sans SC", sans-serif';
-    ctx.fillStyle = '#e8d9b5';
-    ctx.fillText('点击任意处返回', 400, 340);
+  // ---------- 暂停菜单 ----------
+  drawPause(ctx, board) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, 800, 600);
+    const dlg = Assets.image('option_dialog.png');
+    const dw = 380, dh = 260, dx = 210, dy = 170;
+    if (dlg) ctx.drawImage(dlg, dx, dy, dw, dh);
+    else { ctx.fillStyle = '#c8b28a'; ctx.fillRect(dx, dy, dw, dh); }
+    ctx.font = 'bold 34px "Noto Sans SC", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#4a2f10';
+    ctx.fillText('游戏已暂停', 400, dy + 62);
+    ctx.font = '17px "Noto Sans SC", sans-serif';
+    ctx.fillStyle = '#6a4a20';
+    ctx.fillText('点击任意处继续', 400, dy + 120);
+    ctx.fillText('按 Esc 或 P 键也可暂停', 400, dy + 150);
+    ctx.restore();
   },
 };
 

@@ -106,6 +106,7 @@ const Audio2 = (function () {
   function resume() { /* no-op for element audio */ }
 
   function playBGM(name) {
+    if (!name) { stopBGM(); return; }
     if (!musicOn) return;
     if (currentBGM === name && bgmEl) return;
     stopBGM();
@@ -115,7 +116,7 @@ const Audio2 = (function () {
     try {
       bgmEl = new Audio(url(file));
       bgmEl.loop = true;
-      bgmEl.volume = 0.5;
+      bgmEl.volume = 0.5 * masterVol;
       bgmEl.play().catch(() => { });
     } catch (e) { }
   }
@@ -142,8 +143,10 @@ const Audio2 = (function () {
 
   function setMusic(on) { musicOn = on; if (!on) stopBGM(); }
   function setSFX(on) { sfxOn = on; }
+  let masterVol = 0.8;
+  function setMaster(v) { masterVol = Math.max(0, Math.min(1, v)); try { localStorage.setItem('webpvz_vol', String(masterVol)); } catch (e) { } if (bgmEl) bgmEl.volume = 0.5 * masterVol; }
 
-  return { init, play, playBGM, stopBGM, setMusic, setSFX, resume };
+  return { init, play, playBGM, stopBGM, setMusic, setSFX, setMaster, resume, get master() { return masterVol; }, get sfxOn() { return sfxOn; } };
 })();
 
 if (typeof module !== 'undefined') module.exports = Audio2;

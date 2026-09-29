@@ -3,8 +3,9 @@
 // ============================================================
 'use strict';
 
-const { CONST, PLANTS, ZOMBIES, MUSHROOMS, AQUATIC, GROUNDCOVER } = require('./data');
+const { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER } = require('./data');
 const { Zombie } = require('./zombies');
+const { Banners } = require('./cutscene');
 
 const SCENE_BG = {
   day: 'background1.jpg', night: 'background2.jpg',
@@ -51,34 +52,44 @@ class Board {
     // 夜晚
     this.isNight = this.scene === 'night';
 
-    // 波次
+    // 波次 (原版算法预生成)
     this.wave = 0;
     this.waves = this.buildWaves(level);
-    this.waveTimer = 20;      // 第一波前倒计时
     this.totalWaves = this.waves.length;
-    this.zombiesRemaining = this.waves.reduce((s, w) => s + w.count, 0);
-    this.state = 'intro';     // intro/playing/lastwave/win/lose
-    this.hugeWaveBanner = 0;
-    this.finalWaveBanner = 0;
+    this.waveTimer = 0;           // beginWaves() 后启动
+    this.wavesStarted = false;
+    this.lastWaveTime = 0;
+    this._waveHP = 0;
+    this.hugeWaveWarned = false;  // 大波预告已显示
+    this.state = 'intro';     // intro/playing/win/lose
+
+    // 草地行 (早期关卡部分行是土, 不可种植)
+    this.grassRows = level.grassRows || Array.from({ length: this.rows }, (_, i) => i);
+    this.sodDone = !level.sodRoll;
+    this.cameraX = 0;
 
     // 天降阳光
     this.skySunTimer = 5;
-    // 割草机
+    // 割草机 (只在草地行)
     for (let r = 0; r < this.rows; r++) {
+      if (!this.grassRows.includes(r)) continue;
       this.mowers.push({
         row: r, x: -20, state: 'idle', type: this.waterRows.includes(r) ? 'pool' : (this.isRoof ? 'roof' : 'lawn'),
         reanim: null,
       });
     }
-    // 墓碑
-    if (level.graves) {
-      const n = level.graves;
-      const spots = [];
-      for (let c = 4; c < 9; c++) for (let r = 0; r < this.rows; r++) if (!this.waterRows.includes(r)) spots.push([c, r]);
-      for (let i = 0; i < n && spots.length; i++) {
-        const j = Math.floor(Math.random() * spots.length);
-        const [c, r] = spots.splice(j, 1)[0];
-        this.graves.push({ row: r, col: c, hp: CONST.GRAVE_HP, type: Math.floor(Math.random() * 4) });
+    // 墓碑 (原版列分布表: [[col, count], ...])
+    if (level.graves && level.graves.length) {
+      for (const [col, cnt] of level.graves) {
+        const rowsPool = [];
+        for (let r = 0; r < this.rows; r++) {
+          if (!this.waterRows.includes(r) && this.grassRows.includes(r)) rowsPool.push(r);
+        }
+        for (let i = 0; i < cnt && rowsPool.length; i++) {
+          const j = Math.floor(Math.random() * rowsPool.length);
+          const r = rowsPool.splice(j, 1)[0];
+          this.graves.push({ row: r, col, hp: CONST.GRAVE_HP, type: Math.floor(Math.random() * 4) });
+        }
       }
     }
     // 屋顶坡度
@@ -103,49 +114,81 @@ class Board {
   }
 
   // ---------- 波次构建 ----------
+  // ---- 原版波次生成 (PvZ-Portable PickZombieWaves 移植) ----
+  // 僵尸点数 = wave/3+1; 旗帜波(第10/20/30波) ×2.5 + 8普通 + 旗帜僵尸
+  // 最终波包含本关所有僵尸种类 (PutInMissingZombies); 新登场僵尸在中间波+最终波固定出现
+  canSpawnType(ty) {
+    const d = ZOMBIES[ty];
+    if (!d || d.weight <= 0 || d.boss) return false;
+    return zombieAllowedOnLevel(ty, this.level.id);
+  }
+  introZombieType() {
+    const lv = this.level.id;
+    if (lv <= 1) return null;
+    for (const ty of Object.keys(ZOMBIES)) {
+      const d = ZOMBIES[ty];
+      if (d.unlock === lv && d.weight > 0 && !d.boss && ty !== 'DUCKY') return ty;
+    }
+    return null;
+  }
   buildWaves(level) {
-    const waves = [];
     const lv = level.id;
-    // 可用僵尸类型 (原版解锁表)
-    const avail = Object.entries(ZOMBIES).filter(([k, z]) => z.unlock <= lv && z.weight > 0 && !z.boss);
-    const nWaves = level.waves;
-    for (let w = 1; w <= nWaves; w++) {
-      const isFlag = w % 10 === 0;                 // 每10波一大波
-      const isFinal = w === nWaves;
-      let count = Math.round(1 + lv * 0.35 + w * 0.22);
-      if (isFlag || isFinal) count = Math.round(count * 2.2) + 2;
-      count = Math.min(count, 30);
-      // 类型池: 后期波次引入高级僵尸
-      const pool = avail.filter(([k, z]) => z.unlock <= lv);
-      // Boss关
+    const numWaves = level.waves;
+    const wavesPerFlag = numWaves >= 10 ? 10 : numWaves;
+    const intro = this.introZombieType();
+    const out = [];
+    for (let w = 0; w < numWaves; w++) {
+      const isFlag = numWaves >= 10 && w % wavesPerFlag === wavesPerFlag - 1 && lv !== 1;
+      const isFinal = w === numWaves - 1;
+      const types = [];
+      let points = Math.floor(w / 3) + 1;
+      // Boss关: 最终波只有僵王
       if (level.fixed === 'boss' && isFinal) {
-        waves.push({ flag: isFlag, final: true, boss: true, count: 1, types: [['BOSS', 1]] });
+        out.push({ flag: false, final: true, boss: true, count: 1, types: [['BOSS', 1]] });
         continue;
       }
-      const types = [];
-      // 加权选择
-      let remaining = count;
-      // 大波保证多样性
-      const picks = Math.max(1, Math.min(6, 1 + Math.floor(lv / 8) + (isFlag ? 2 : 0)));
-      const used = new Set();
-      for (let p = 0; p < picks && remaining > 0; p++) {
-        const cands = pool.filter(([k]) => !used.has(k));
-        if (!cands.length) break;
-        const totalW = cands.reduce((s, [, z]) => s + z.weight, 0);
-        let r = Math.random() * totalW, pick = cands[0];
-        for (const c of cands) { r -= c[1].weight; if (r <= 0) { pick = c; break; } }
-        used.add(pick[0]);
-        // 高级僵尸限制数量
-        let maxN = pick[1].unlock >= 46 ? 1 : pick[1].unlock >= 26 ? 2 : 5;
-        if (isFlag) maxN = Math.ceil(maxN * 1.5);
-        const n = Math.max(1, Math.min(remaining, Math.min(maxN, Math.ceil(remaining / (picks - p || 1)))));
-        types.push([pick[0], n]);
-        remaining -= n;
+      if (isFlag) {
+        const plain = Math.min(points, 8);
+        points = Math.round(points * 2.5);
+        types.push(['NORMAL', plain]);
+        types.push(['FLAG', 1]);
       }
-      if (remaining > 0) types.push(['NORMAL', remaining]);
-      waves.push({ flag: isFlag, final: isFinal, count, types });
+      // 新登场僵尸: 中间波 + 最终波各一只
+      if (intro && !isFlag) {
+        if (w === Math.floor(numWaves / 2) || isFinal) types.push([intro, 1]);
+      }
+      // 最终波: 本关全部种类
+      if (isFinal) {
+        for (const ty of Object.keys(ZOMBIES)) {
+          if (ty === 'FLAG' || ty === 'BOSS') continue;
+          if (this.canSpawnType(ty) && !types.some(([t]) => t === ty)) types.push([ty, 1]);
+        }
+      }
+      // 5-10 最终波加巨人
+      if (lv === 50 && isFinal && !types.some(([t]) => t === 'GARGANTUAR')) types.push(['GARGANTUAR', 1]);
+      // 点数选购
+      const pool = Object.keys(ZOMBIES).filter(ty => {
+        const d = ZOMBIES[ty];
+        if (d.weight <= 0 || d.boss) return false;
+        if (!zombieAllowedOnLevel(ty, lv)) return false;
+        if ((d.firstWave || 1) > w + 1) return false;
+        return true;
+      });
+      let guard = 60;
+      while (points > 0 && guard-- > 0) {
+        const cands = pool.filter(ty => ZOMBIES[ty].value <= points);
+        if (!cands.length) break;
+        // 加权随机
+        const totalW = cands.reduce((s, ty) => s + ZOMBIES[ty].weight, 0);
+        let r = Math.random() * totalW, pick = cands[0];
+        for (const ty of cands) { r -= ZOMBIES[ty].weight; if (r <= 0) { pick = ty; break; } }
+        types.push([pick, 1]);
+        points -= ZOMBIES[pick].value;
+      }
+      const count = types.reduce((s, [, n]) => s + n, 0);
+      out.push({ flag: isFlag, final: isFinal, count, types });
     }
-    return waves;
+    return out;
   }
 
   // ---------- 主循环 ----------
@@ -180,26 +223,45 @@ class Board {
     this.checkWinLose();
   }
 
+  // ---- 原版波次计时 (PvZ-Portable Board.cpp UpdateWaves 移植) ----
+  // 首波18s; 常规波25s+rand(6)s; 旗帜波前45s且提前7.5s警告; 杀怪加速
   updateWaves(dt) {
-    if (this.state !== 'playing' && this.state !== 'intro') return;
-    if (this.state === 'intro') {
-      this.waveTimer -= dt;
-      if (this.waveTimer <= 0) { this.state = 'playing'; this.waveTimer = 0; }
-      return;
-    }
+    if (this.state !== 'playing') return;
+    if (!this.wavesStarted) return;
     if (this.wave >= this.totalWaves) {
-      if (this.zombies.length === 0 && this.state !== 'win') this.triggerWin();
+      if (this.zombies.length === 0) this.triggerWin();
       return;
     }
-    // 下一波触发: 场上僵尸血量比例低 或 超时
-    const aliveHP = this.zombies.reduce((s, z) => s + (z.body + (z.helm || 0) + (z.shield || 0)), 0);
-    const spawnHP = this.currentWaveHP;
     this.waveTimer -= dt;
-    const lowHP = spawnHP > 0 && aliveHP < spawnHP * 0.35;
-    const timeout = this.waveTimer <= 0;
-    if (timeout || (lowHP && this.time - this.lastWaveTime > 4)) {
+    // 加速: 上一波血量降到阈值以下且过4s → 2s后刷
+    if (this.waveTimer > 2 && this._waveHP > 0) {
+      const aliveHP = this.zombies.reduce((s, z) => s + (z.body + (z.helm || 0) + (z.shield || 0)), 0);
+      if (aliveHP < this._waveHP * WAVE.ACCEL_THRESHOLD && this.time - this.lastWaveTime > 4) {
+        this.waveTimer = Math.min(this.waveTimer, WAVE.ACCEL_DELAY);
+      }
+    }
+    // 大波预告 (提前7.5s)
+    const nextW = this.wave; // 下一波索引
+    if (this.waveTimer <= WAVE.HUGE_WAVE_WARN && this.waveTimer > 0 && !this.hugeWaveWarned) {
+      const isFlagNext = this.waves[nextW] && this.waves[nextW].flag;
+      const isFinalNext = this.waves[nextW] && this.waves[nextW].final;
+      if (isFlagNext || isFinalNext) {
+        this.hugeWaveWarned = true;
+        const bn = isFinalNext ? 'finalwave.png' : 'approaching.png';
+        Banners.show(bn, 3.6, isFinalNext ? 'finalwave' : 'hugewave', this.game.audio);
+      }
+    }
+    if (this.waveTimer <= 0) {
       this.spawnWave();
     }
+  }
+
+  // 过场结束后启动波次
+  beginWaves() {
+    if (this.wavesStarted) return;
+    this.wavesStarted = true;
+    this.waveTimer = WAVE.FIRST_WAVE_DELAY;
+    this.hugeWaveWarned = false;
   }
 
   get currentWaveHP() { return this._waveHP || 0; }
@@ -209,22 +271,17 @@ class Board {
     if (this.wave > this.totalWaves) return;
     const w = this.waves[this.wave - 1];
     this.lastWaveTime = this.time;
-    this.waveTimer = 24 + Math.random() * 6;
-    if (w.flag) {
-      this.hugeWaveBanner = 3.2;
-      this.game.audio.play('hugewave');
-      // 旗帜僵尸领头
-      this.spawnZombie('FLAG', Math.floor(Math.random() * this.rows));
-    }
-    if (w.final && !w.boss) {
-      this.finalWaveBanner = 3.2;
-      this.game.audio.play('hugewave');
-    }
+    this.hugeWaveWarned = false;
+    // 下一波倒计时 (原版: 常规25s+rand, 旗帜波后45s)
+    const next = this.waves[this.wave];
+    if (next && next.flag) this.waveTimer = WAVE.BEFORE_FLAG;
+    else this.waveTimer = WAVE.WAVE_DELAY + Math.random() * WAVE.WAVE_DELAY_RANGE;
+
     const list = [];
     for (const [type, n] of w.types) {
       for (let i = 0; i < n; i++) list.push(type);
     }
-    // 水僵尸必须进水行
+    // 水僵尸进水行, 陆僵尸进草地行
     let hp = 0;
     for (const type of list) {
       const z = ZOMBIES[type];
@@ -232,11 +289,9 @@ class Board {
       let row;
       if (z.water) row = this.waterRows[Math.floor(Math.random() * this.waterRows.length)];
       else {
-        const landRows = [];
-        for (let r = 0; r < this.rows; r++) if (!this.waterRows.includes(r)) landRows.push(r);
+        const landRows = this.grassRows.filter(r => !this.waterRows.includes(r));
         row = landRows[Math.floor(Math.random() * landRows.length)];
       }
-      // 避免过度扎堆
       this.spawnZombie(type, row, list.length > 12 ? Math.random() * 150 : Math.random() * 60);
     }
     this._waveHP = hp;
@@ -246,6 +301,7 @@ class Board {
       this.game.audio.play('bossintro');
     }
   }
+
 
   spawnZombie(type, row, extraX = 0) {
     const Z = new Zombie(type, row, this);
@@ -294,7 +350,7 @@ class Board {
     s.collected = true;
     this.sun += s.value;
     this.game.audio.play('points');
-    this.game.ui.sunPulse = 1;
+    try { const _U = (window.__mods && window.__mods['ui']) || require('./ui'); if (_U && _U.UI) _U.UI.sunPulse = 1; } catch (e) { }
   }
   addCoin(x, y, value = 25) {
     this.coins.push(new Coin(x, y, value));

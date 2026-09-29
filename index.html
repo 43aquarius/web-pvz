@@ -26,7 +26,7 @@
   <div id="loadbarwrap"><div id="loadbar"></div></div>
 </div>
 <script>
-// ---- CommonJS 风格模块加载器 (开发模式) ----
+// ---- CommonJS 风格模块加载器 (开发模式: fetch js/ + assets/) ----
 window.__mods = {};
 window.require = function (name) {
   const key = name.replace(/^\.\//, '').replace(/\.js$/, '');
@@ -35,10 +35,24 @@ window.require = function (name) {
   return m;
 };
 (async function () {
-  const files = ['reanim', 'data', 'assets', 'audio', 'board', 'plants', 'zombies', 'projectiles', 'render', 'ui', 'main'];
+  // 1. 资产清单
+  let imageList = [];
+  try {
+    const man = await (await fetch('assets/manifest.json', { cache: 'no-store' })).json();
+    imageList = man.images || [];
+  } catch (e) { console.error('manifest 加载失败', e); }
+  window.__IMAGE_LIST__ = imageList;
+  // 2. reanim JSON (fetch)
+  try {
+    const r = await fetch('assets/reanim/_list.json', { cache: 'no-store' });
+    if (r.ok) window.__REANIM_LIST__ = await r.json();
+  } catch (e) {}
+  // 3. 模块 (依赖顺序: data/reanim 先, zombies 在 board 前)
+  const files = ['reanim', 'data', 'assets', 'audio', 'cutscene', 'projectiles', 'zombies', 'plants', 'board', 'render', 'ui', 'screens', 'main'];
   for (const f of files) {
     try {
-      const src = await (await fetch(`js/${f}.js`)).text();
+      const res = await fetch(`js/${f}.js?v=${window.__BUILD__ || Date.now()}`, { cache: 'no-store' });
+      const src = await res.text();
       const fn = new Function('module', 'require', src + '\n;return module.exports;');
       const mod = { exports: {} };
       window.__mods[f] = fn(mod, window.require);
@@ -48,6 +62,15 @@ window.require = function (name) {
       const lt = document.getElementById('loadtext');
       if (lt) lt.textContent = '模块加载失败: ' + f + ' — ' + e.message;
     }
+  }
+  // 4. 启动
+  const Game = window.__mods['main'] && window.__mods['main'].Game;
+  if (Game) {
+    window.Game = Game;
+    Game.boot();
+  } else {
+    const lt = document.getElementById('loadtext');
+    if (lt) lt.textContent = '主模块加载失败';
   }
 })();
 </script>
