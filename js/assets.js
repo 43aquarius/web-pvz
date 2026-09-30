@@ -87,7 +87,7 @@ const Assets = (function () {
   }
 
   function image(key) { return state.images.get(key); }
-  function reanim(name) { return new RE.Reanim(name); }
+  function reanim(name) { return new RE.Reanimation(name); }
 
   return { load, image, reanim, state };
 })();

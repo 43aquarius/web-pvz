@@ -1,5 +1,6 @@
 // ============================================================
-// plants.js — 48种植物实体与行为
+// plants.js — 48种植物实体与行为 (Plant.cpp 移植结构)
+// 头部挂载: Reanimation.attachToTrack (原版 AttachToAnotherReanimation 完整矩阵语义)
 // ============================================================
 'use strict';
 
@@ -59,8 +60,7 @@ class Plant {
           const L = this.anims[1 + i];
           if (!L) return;
           if (body.trackExists(tr)) {
-            const ti = body.trackIndex(tr);
-            body.attach[ti] = [L.r];
+            body.attachToTrack(tr, L.r);
             L.attached = true;
           }
         });
@@ -69,10 +69,10 @@ class Plant {
         const track = body.trackExists('anim_stem') ? 'anim_stem'
           : body.trackExists('anim_idle') ? 'anim_idle' : null;
         if (track) {
-          const ti = body.trackIndex(track);
-          const heads = this.anims.slice(1).map(L => L.r);
-          body.attach[ti] = heads.length === 1 ? heads[0] : heads;
-          for (const L of this.anims.slice(1)) L.attached = true;
+          for (const L of this.anims.slice(1)) {
+            body.attachToTrack(track, L.r);
+            L.attached = true;
+          }
         }
       }
     }
@@ -575,6 +575,49 @@ class Plant {
     return this.y + oy;
   }
 
+  // ---------- C++ 兼容层 (Zombie.cpp 交互接口) ----------
+  get plantHealth() { return this.hp; }
+  set plantHealth(v) { this.hp = v; }
+  get recentlyEatenCountdown() { return this._recentlyEaten || 0; }
+  set recentlyEatenCountdown(v) { this._recentlyEaten = v; if (v > 0) this.eatFlash = Math.min(0.3, v / 200); }
+  get isAsleep() { return this.sleeping; }
+  get notOnGround() { return this.type === 'COFFEEBEAN' || this.type === 'GRAVEBUSTER' || this.type === 'SQUASH' && this.state === 'rising'; }
+  get isSpiky() { return this.type === 'SPIKEWEED' || this.type === 'SPIKEROCK'; }
+  getPlantRect() { return { x: this.x, y: this.y + 10, w: 80, h: 70 }; }
+  spikeRockTakeDamage() { this.hp -= 20; if (this.hp <= 0) this.dead = true; }
+  die() {
+    if (this.dead) return;
+    this.hp = 0;
+    this.dead = true;
+    // 从网格移除
+    try {
+      if (this.board.grid[this.row][this.col] === this) this.board.grid[this.row][this.col] = null;
+      if (this.board.gridPumpkin[this.row][this.col] === this) this.board.gridPumpkin[this.row][this.col] = null;
+      if (this.board.gridLily[this.row][this.col] === this) this.board.gridLily[this.row][this.col] = null;
+      if (this.board.gridPot[this.row][this.col] === this) this.board.gridPot[this.row][this.col] = null;
+    } catch (e) { }
+  }
+  squish() {
+    // 被巨人/冰车/投石压扁
+    this.board.addEffect('squish', this.x + 40, this.y + 40);
+    this.board.game.audio.play('squish');
+    this.die();
+  }
+  doSpecial() {
+    // 即时触发 (Blover/ICESHROOM被啃时)
+    if (this.state === 'fuse' || this.state === 'idle') {
+      this.fuseT = 0.01;
+      this.state = 'fuse';
+    }
+  }
+  drawAt(ctx, x, y) {
+    // 被蹦极抓走的植物
+    ctx.save();
+    ctx.translate(x - this.x, y - this.y);
+    this.draw(ctx, this.board);
+    ctx.restore();
+  }
+
   draw(ctx, board) {
     if (this.dead) return;
     const dy = this.drawY(board);
@@ -585,10 +628,9 @@ class Plant {
     }
     const sc = this.buildT < 0.25 ? Math.min(1, 0.6 + this.buildT * 1.6) : 1;
     for (const L of this.anims) {
-      if (L.attached) continue;   // 已由身体轨道挂载绘制 (保持图层顺序)
-      L.r.x = this.x;
-      L.r.y = dy;
-      L.r.scale = sc;
+      if (L.attached) continue;   // 已由身体轨道挂载绘制 (完整矩阵跟随: 旋转/缩放/位移)
+      L.r.setPosition(this.x, dy);
+      L.r.overrideScale(sc, sc);
       if (this.eatFlash > 0) {
         ctx.save();
         ctx.filter = 'brightness(2.2)';

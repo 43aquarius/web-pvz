@@ -537,9 +537,8 @@ const UI = {
       }
       const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
       const sc = Math.min(86 / bw, 76 / bh, 1);
-      r.x = 45 - (minX + maxX) / 2 * sc;
-      r.y = 40 - (minY + maxY) / 2 * sc;
-      r.scale = sc;
+      r.setPosition(45 - (minX + maxX) / 2 * sc, 40 - (minY + maxY) / 2 * sc);
+      r.overrideScale(sc, sc);
       r.draw(c);
     } catch (e) { console.warn('僵尸缩略图失败', type, e); }
     this._zThumbs.set(type, cv);

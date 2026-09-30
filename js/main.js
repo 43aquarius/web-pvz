@@ -8,7 +8,7 @@
 const { CONST, PLANTS, ZOMBIES, LEVELS, availablePlants, MUSHROOMS, AQUATIC, GROUNDCOVER, awardPlantForLevel } = require('./data');
 const { Board } = require('./board');
 const { Plant } = require('./plants');
-const { Zombie } = require('./zombies');
+const { Zombie } = require('./zombie');
 const { Projectile } = require('./projectiles');
 const { Renderer } = require('./render');
 const { UI, roundRect } = require('./ui');

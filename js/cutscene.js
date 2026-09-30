@@ -135,16 +135,17 @@ const Cutscene = {
     };
     big.forEach(place);
     rest.forEach(place);
-    // 创建实体
+    // 创建实体 (原版: fromWave=ZOMBIE_WAVE_CUTSCENE → 不参与逻辑, 仅播放待机动画)
     for (const p of placed.slice(0, 12)) {
-      const z = board.spawnZombie(p.ty, 0);
+      const z = this.board.addZombie(p.ty, -2);
       if (!z) continue;
-      z.x = p.gx * 56 + 830;                       // 原版 mPosX
-      z.streetY = p.gy * 90 + 70 + (p.gx % 2 === 1 ? 30 : 0); // 原版 mPosY
-      z.streetIdle = true;
+      z.posX = p.gx * 56 + 830;                       // 原版 mPosX
+      z.x = Math.floor(z.posX);
+      z.posY = p.gy * 90 + 70 + (p.gx % 2 === 1 ? 30 : 0); // 原版 mPosY
+      z.y = Math.floor(z.posY);
       z.row = -1;             // 不属于任何行
-      z.vel = 0;
-      if (z.anim) { try { z.anim.play('anim_idle', RE.LOOP, 8); } catch (e) { } }
+      z.velX = 0;
+      if (z.bodyReanim) { try { z.playZombieReanim('anim_idle', RE.LOOP, 0, 8); z.updateReanim(); } catch (e) { } }
     }
   },
 
@@ -263,8 +264,11 @@ const Cutscene = {
       this.sodRolls = [];
       board.rspAnim = null;
       this.rspAnim = null;
-      // 移除街边僵尸 (原版 RemoveCutsceneZombies)
-      board.zombies = board.zombies.filter(z => !z.streetIdle);
+      // 移除街边僵尸 (原版 RemoveCutsceneZombies; fromWave=WAVE_CUTSCENE=-2)
+      for (const z of board.zombies) {
+        if (z.fromWave === -2) z.dieNoLoot();
+      }
+      board.zombies = board.zombies.filter(z => z.fromWave !== -2);
       board.state = 'playing';
       board.beginWaves();
     }

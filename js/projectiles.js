@@ -265,7 +265,7 @@ class Projectile {
     if (this.delay > 0) return;
     if (this.dead) return;
     if (this.reanim) {
-      this.reanim.x = this.x; this.reanim.y = this.y;
+      this.reanim.setPosition(this.x, this.y);
       this.reanim.draw(ctx);
       return;
     }

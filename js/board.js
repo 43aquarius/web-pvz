@@ -1,10 +1,17 @@
 // ============================================================
-// board.js — 战场核心: 网格/场景/波次/阳光/割草机/墓碑
+// board.js — 战场核心 (Board.cpp 移植 + 已验证波次系统)
+//  - 100Hz 固定 tick (SECONDS_PER_UPDATE=0.01 语义)
+//  - 原版网格: GridToPixelX=col*80+40 / GridToPixelY=行高100|85+80 / 屋顶坡度
+//  - 渲染顺序系统: renderOrder = row*10000 + layer + offset
+//  - GetTopPlantAt / 泳池判定 / 高地 / 梯子 / 冰道 / 践踏
+//  - 割草机 → Zombie.mowDown()
 // ============================================================
 'use strict';
 
-const { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER } = require('./data');
-const { Zombie } = require('./zombies');
+const { CONST, PLANTS, ZOMBIES, zombieAllowedOnLevel, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER } = require('./data');
+const { Zombie } = require('./zombie');
+const RE = require('./reanim');
+const { Projectile } = require('./projectiles');
 const { Banners } = require('./cutscene');
 
 const SCENE_BG = {
@@ -12,73 +19,74 @@ const SCENE_BG = {
   pool: 'background3.jpg', fog: 'background4.jpg', roof: 'background5.jpg',
 };
 
+const RENDER_LAYER = {
+  ROW_OFFSET: 10000, GROUND: 200000, LAWN: 300000, GRAVE: 301000,
+  PLANT: 302000, ZOMBIE: 303000, BOSS: 304000, PROJECTILE: 305000,
+  MOWER: 306000, PARTICLE: 307000, TOP: 400000,
+};
+
 class Board {
   constructor(game, level) {
     this.game = game;
     this.level = level;
+    this.rows = (level.scene === 'pool' || level.scene === 'fog') ? 6 : 5;
     this.scene = level.scene;
-    this.rows = level.rows;
-    this.time = 0;
-    this.sun = level.startSun;
-    this.paused = false;
-    this.speed = 1;
+    this.isRoof = level.scene === 'roof';
+    this.isNight = level.scene === 'night' || level.scene === 'fog';
+    this.waterRows = this.scene === 'pool' || this.scene === 'fog' ? [2, 3] : [];
+    this.grassRows = level.grassRows || Array.from({ length: this.rows }, (_, i) => i);
+    this.cols = 9;
 
-    // 实体容器
-    this.plants = [];      // 按行种植: plants[row][col] 直接网格 + 列表
-    this.grid = Array.from({ length: this.rows }, () => new Array(9).fill(null));
-    this.gridPot = Array.from({ length: this.rows }, () => new Array(9).fill(null)); // 花盆层
-    this.gridLily = Array.from({ length: this.rows }, () => new Array(9).fill(null)); // 睡莲层
-    this.gridPumpkin = Array.from({ length: this.rows }, () => new Array(9).fill(null)); // 南瓜层
-    this.gridSpikes = Array.from({ length: this.rows }, () => new Array(9).fill(null)); // 地刺层(地面)
+    this.sun = level.startSun !== undefined ? level.startSun : CONST.START_SUN;
+    this.plants = [];
     this.zombies = [];
     this.projectiles = [];
     this.suns = [];
     this.coins = [];
     this.effects = [];
+    this.reanims = [];         // reanim型特效 (水花/尘土/掉落物)
     this.mowers = [];
-    this.graves = [];      // {row, col, hp, reanim}
-    this.ladders = [];     // 梯子道具
-    this.iceTrails = [];   // 冰道
-    this.craters = [];     // 弹坑
-    this.pots = [];        // 花盆(渲染用) — 用gridPot
-    this.fogCleared = 0;   // 雾清除时间戳
-    this.fogClearUntil = 0;
-    this.lanternCols = new Set(); // 路灯花照亮的列
+    this.graves = [];
+    this.grid = Array.from({ length: this.rows }, () => new Array(this.cols).fill(null));
+    this.gridPumpkin = Array.from({ length: this.rows }, () => new Array(this.cols).fill(null));
+    this.gridLily = Array.from({ length: this.rows }, () => new Array(this.cols).fill(null));
+    this.gridPot = Array.from({ length: this.rows }, () => new Array(this.cols).fill(null));
+    this.ladders = [];         // 梯子 GridItem
+    this.craters = [];
+    this.iceTrails = [];
+    this.iceTimers = new Array(this.rows).fill(0);
+    this.iceMinXs = new Array(this.rows).fill(900);
+    this.seedCards = [];
+    this.shakeX = 0; this.shakeY = 0;
+    this.plantsEaten = 0;
+    this.time = 0;
+    this.speed = 1;
 
-    // 水行(泳池/雾): 行2-3为水
-    this.waterRows = (this.scene === 'pool' || this.scene === 'fog') ? [2, 3] : [];
-    // 屋顶
-    this.isRoof = this.scene === 'roof';
-    // 夜晚
-    this.isNight = this.scene === 'night';
-
-    // 波次 (原版算法预生成)
-    this.wave = 0;
+    // 波次
     this.waves = this.buildWaves(level);
     this.totalWaves = this.waves.length;
-    this.waveTimer = 0;           // beginWaves() 后启动
+    this.wave = 0;
+    this.waveTimer = 0;
     this.wavesStarted = false;
     this.lastWaveTime = 0;
     this._waveHP = 0;
-    this.hugeWaveWarned = false;  // 大波预告已显示
-    this.state = 'intro';     // intro/playing/win/lose
+    this.hugeWaveWarned = false;
+    this.state = 'intro';
 
-    // 草地行 (早期关卡部分行是土, 不可种植)
-    this.grassRows = level.grassRows || Array.from({ length: this.rows }, (_, i) => i);
     this.sodDone = !level.sodRoll;
     this.cameraX = 0;
-
-    // 天降阳光
     this.skySunTimer = 5;
-    // 割草机 (只在草地行)
+
+    // 割草机
     for (let r = 0; r < this.rows; r++) {
       if (!this.grassRows.includes(r)) continue;
       this.mowers.push({
-        row: r, x: -20, state: 'idle', type: this.waterRows.includes(r) ? 'pool' : (this.isRoof ? 'roof' : 'lawn'),
+        row: r, x: -20, state: 'idle',
+        type: this.waterRows.includes(r) ? 'pool' : (this.isRoof ? 'roof' : 'lawn'),
         reanim: null,
       });
     }
-    // 墓碑 (原版列分布表: [[col, count], ...])
+    // 墓碑
     if (level.graves && level.graves.length) {
       for (const [col, cnt] of level.graves) {
         const rowsPool = [];
@@ -92,31 +100,123 @@ class Board {
         }
       }
     }
-    // 屋顶坡度
-    // BGM
     this.game.audio.playBGM(level.bgm);
   }
 
-  // ---------- 网格坐标 ----------
-  gridX(col) { return col * CONST.CELL_W + CONST.LAWN_XMIN; }
-  gridY(row) {
-    if (this.scene === 'pool' || this.scene === 'fog') return row * CONST.CELL_H_POOL + CONST.LAWN_YMIN;
-    return row * CONST.CELL_H_LAWN + CONST.LAWN_YMIN;
+  // ---------- 网格坐标 (原版 Board.cpp 8846-8930) ----------
+  gridToPixelX(col) { return col * CONST.CELL_W + CONST.LAWN_XMIN; }
+  gridX(col) { return this.gridToPixelX(col); }
+  gridToPixelY(row, col = 0) {
+    let y;
+    if (this.isRoof) {
+      const slope = col < 5 ? (5 - col) * 20 : 0;
+      y = row * 85 + slope + CONST.LAWN_YMIN - 10;
+    } else if (this.waterRows.length) {
+      y = row * 85 + CONST.LAWN_YMIN;
+    } else {
+      y = row * 100 + CONST.LAWN_YMIN;
+    }
+    return y;
   }
+  gridY(row) { return this.gridToPixelY(row, 0); }
+  cellY(row, col) { return this.gridToPixelY(row, col); }
   roofOffset(col) { return this.isRoof && col < 5 ? (5 - col) * 20 : 0; }
-  cellY(row, col) { return this.gridY(row) - this.roofOffset(col); }
-  isWater(row, col) { return this.waterRows.includes(row); }
-  canPlantOn(row, col) {
-    if (this.isWater(row, col)) return this.gridLily[row][col] && !this.grid[row][col];
-    if (this.isRoof) return (this.gridPot[row][col] || this.gridLily[row][col]) && !this.grid[row][col];
-    return !this.grid[row][col] && !this.craters.some(c => c.row === row && c.col === col) &&
-      !this.iceTrails.some(c => c.row === row && c.col === col) && !this.graves.some(g => g.row === row && g.col === col);
+  getPosYBasedOnRow(posX, row) {
+    if (this.isRoof) {
+      const slope = posX < 440 ? (440 - posX) * 0.25 : 0;
+      return this.gridToPixelY(row, 8) + slope;
+    }
+    return this.gridToPixelY(row, 0);
+  }
+  pixelToGridX(x, y = 0) {
+    return Math.max(0, Math.min(this.cols - 1, Math.floor((x - CONST.LAWN_XMIN) / CONST.CELL_W)));
+  }
+  pixelToGridXKeepOnBoard(x, y = 0) { return this.pixelToGridX(x, y); }
+  pixelToGridY(x, y) {
+    const rowH = this.waterRows.length ? 85 : 100;
+    return Math.max(0, Math.min(this.rows - 1, Math.floor((y - CONST.LAWN_YMIN) / rowH)));
   }
 
-  // ---------- 波次构建 ----------
-  // ---- 原版波次生成 (PvZ-Portable PickZombieWaves 移植) ----
-  // 僵尸点数 = wave/3+1; 旗帜波(第10/20/30波) ×2.5 + 8普通 + 旗帜僵尸
-  // 最终波包含本关所有僵尸种类 (PutInMissingZombies); 新登场僵尸在中间波+最终波固定出现
+  isWater(row, col) { return this.waterRows.includes(row); }
+  isPoolRow(row) { return this.waterRows.includes(row); }
+  isPoolSquare(col, row) { return this.waterRows.includes(row); }
+  isHighGround(col, row) {
+    // 原版: 5-? 高地格子 — 屋顶关无高地, 白天关无. 保留接口
+    return false;
+  }
+  zombieTypeCanGoInPool(type) {
+    if (this.waterRows.length === 0) return false;
+    switch (type) {
+      case 'ZAMBONI': case 'CATAPULT': case 'BALLOON': case 'BUNGEE': case 'DANCER': case 'BACKUP':
+      case 'GARGANTUAR': case 'REDEYE': case 'IMP': case 'BOSS': case 'DIGGER':
+        return false;
+      default: return true;
+    }
+  }
+  isFlagWave(w) {
+    if (w < 0 || this.totalWaves < 10) return false;
+    return w > 0 && w % 10 === 0;
+  }
+  bungeeIsTargetingCell(col, row) {
+    for (const z of this.zombies) {
+      if (!z.dead && z.type === 'BUNGEE' && z.targetCol === col && z.row === row) return true;
+    }
+    return false;
+  }
+  getGraveAt(col, row) {
+    return this.graves.find(g => g.col === col && g.row === row) || null;
+  }
+  makeRenderOrder(layer, row, offset) { return row * RENDER_LAYER.ROW_OFFSET + layer + offset; }
+
+  // ---------- 植物查询 (GetTopPlantAt 家族) ----------
+  getTopPlantAt(col, row, priority = 'eating') {
+    // 返回该格最顶层可交互植物
+    const order = { eating: ['grid', 'pumpkin'], normal: ['grid', 'pumpkin'], bungee: ['grid', 'pumpkin', 'pot', 'lily'] };
+    const seq = order[priority] || order.eating;
+    for (const key of seq) {
+      const g = key === 'grid' ? this.grid[row][col]
+        : key === 'pumpkin' ? this.gridPumpkin[row][col]
+          : key === 'pot' ? this.gridPot[row][col]
+            : this.gridLily[row][col];
+      if (g && !g.dead) return g;
+    }
+    return null;
+  }
+  getFlowerPotAt(col, row) {
+    const p = this.gridPot[row][col];
+    return p && !p.dead ? p : null;
+  }
+  getLadderAt(col, row) {
+    return this.ladders.find(l => l.col === col && l.row === row && !l.dead) || null;
+  }
+  addLadder(col, row) {
+    this.ladders.push({ col, row, dead: false, rise: 0 });
+  }
+  setIceTrail(row, time) { this.iceTimers[row] = Math.max(this.iceTimers[row] || 0, time); }
+  iceTimer(row) { return this.iceTimers[row]; }
+  setIceMinX(row, x) { this.iceMinXs[row] = Math.min(this.iceMinXs[row] ?? 900, x); }
+  iceMinX(row) { return this.iceMinXs[row]; }
+
+  shakeBoard(x, y) { this.shakeX += x; this.shakeY += y; }
+
+  killAllZombiesInRadius(row, x, y, radius, mindControlled = false) {
+    for (const z of this.zombies) {
+      if (z.dead || z.isDeadOrDying) continue;
+      if (Math.hypot(z.x + 40 - x, z.y + 50 - y) <= radius) {
+        z.takeDamage(1800, 1);
+      }
+    }
+  }
+  killAllPlantsInRadius(x, y, radius) {
+    for (const p of this.plants) {
+      if (p.dead) continue;
+      if (Math.hypot(p.x + 40 - x, p.y + 40 - y) <= radius) {
+        p.die();
+      }
+    }
+  }
+
+  // ---------- 波次构建 (已验证的原版移植) ----------
   canSpawnType(ty) {
     const d = ZOMBIES[ty];
     if (!d || d.weight <= 0 || d.boss) return false;
@@ -142,7 +242,6 @@ class Board {
       const isFinal = w === numWaves - 1;
       const types = [];
       let points = Math.floor(w / 3) + 1;
-      // Boss关: 最终波只有僵王
       if (level.fixed === 'boss' && isFinal) {
         out.push({ flag: false, final: true, boss: true, count: 1, types: [['BOSS', 1]] });
         continue;
@@ -153,20 +252,16 @@ class Board {
         types.push(['NORMAL', plain]);
         types.push(['FLAG', 1]);
       }
-      // 新登场僵尸: 中间波 + 最终波各一只
       if (intro && !isFlag) {
         if (w === Math.floor(numWaves / 2) || isFinal) types.push([intro, 1]);
       }
-      // 最终波: 本关全部种类
       if (isFinal) {
         for (const ty of Object.keys(ZOMBIES)) {
           if (ty === 'FLAG' || ty === 'BOSS') continue;
           if (this.canSpawnType(ty) && !types.some(([t]) => t === ty)) types.push([ty, 1]);
         }
       }
-      // 5-10 最终波加巨人
       if (lv === 50 && isFinal && !types.some(([t]) => t === 'GARGANTUAR')) types.push(['GARGANTUAR', 1]);
-      // 点数选购
       const pool = Object.keys(ZOMBIES).filter(ty => {
         const d = ZOMBIES[ty];
         if (d.weight <= 0 || d.boss) return false;
@@ -178,7 +273,6 @@ class Board {
       while (points > 0 && guard-- > 0) {
         const cands = pool.filter(ty => ZOMBIES[ty].value <= points);
         if (!cands.length) break;
-        // 加权随机
         const totalW = cands.reduce((s, ty) => s + ZOMBIES[ty].weight, 0);
         let r = Math.random() * totalW, pick = cands[0];
         for (const ty of cands) { r -= ZOMBIES[ty].weight; if (r <= 0) { pick = ty; break; } }
@@ -191,57 +285,118 @@ class Board {
     return out;
   }
 
-  // ---------- 主循环 ----------
+  // ---------- 僵尸生命周期 ----------
+  addZombie(type, fromWave = 0, parent = null) {
+    const z = new Zombie(type, 0, this, fromWave, parent);
+    if (z.dead) return null;
+    this.zombies.push(z);
+    return z;
+  }
+  spawnZombie(type, row, extraX = 0) {
+    const z = new Zombie(type, row, this, this.wave);
+    if (extraX) z.posX += extraX;
+    if (z.dead) return z;
+    this.zombies.push(z);
+    return z;
+  }
+  spawnZombieForWave(type, row, waveIdx) {
+    const z = new Zombie(type, row, this, waveIdx + 1);
+    this.zombies.push(z);
+    return z;
+  }
+  zombiesWon(zombie) {
+    if (this.state !== 'playing') return;
+    const m = this.mowers.find(m => m.row === zombie.row && m.state === 'idle');
+    if (!m) {
+      this.triggerLose(zombie.row);
+    }
+  }
+
+  // ---------- 主循环: 100Hz tick ----------
   update(dt) {
-    if (this.state === 'win' || this.state === 'lose') { this.updateEffects(dt); return; }
+    if (this.state === 'win' || this.state === 'lose') { this.updateVisuals(dt); return; }
     this.time += dt;
-    // 波次
-    this.updateWaves(dt);
-    // 天降阳光
+    const ticks = Math.max(1, Math.round(dt * 100 * this.speed));
+    const tickDt = dt * this.speed;
+    // 波次与天降阳光 (秒)
+    this.updateWaves(tickDt);
     if (this.level.skySun) {
-      this.skySunTimer -= dt;
+      this.skySunTimer -= tickDt;
       if (this.skySunTimer <= 0) {
         this.skySunTimer = CONST.SKY_SUN_INTERVAL[0] + Math.random() * (CONST.SKY_SUN_INTERVAL[1] - CONST.SKY_SUN_INTERVAL[0]);
         this.spawnSkySun();
       }
     }
-    // 实体
+    // 实体: 僵尸/植物按tick, 子弹按帧
+    for (let i = 0; i < ticks; i++) {
+      for (const z of this.zombies) if (!z.dead) z.update();
+      for (const p of this.plants) if (!p.dead) p.tick && p.tick();
+      this.tick++;
+    }
     for (const p of this.plants) if (!p.dead) p.update(dt, this);
-    for (const z of this.zombies) if (!z.dead) z.update(dt, this);
     for (const pr of this.projectiles) if (!pr.dead) pr.update(dt, this);
     for (const s of this.suns) s.update(dt, this);
     for (const c of this.coins) c.update(dt, this);
     for (const m of this.mowers) this.updateMower(m, dt);
-    this.updateEffects(dt);
+    this.updateVisuals(dt);
     // 清理
     this.plants = this.plants.filter(p => !p.dead);
     this.zombies = this.zombies.filter(z => !z.dead);
     this.projectiles = this.projectiles.filter(p => !p.dead);
     this.suns = this.suns.filter(s => !s.dead);
     this.coins = this.coins.filter(c => !c.dead);
-    // 胜负判定
+    this.ladders = this.ladders.filter(l => !l.dead);
     this.checkWinLose();
   }
+  get tick() { return this._tick || (this._tick = 0); }
+  set tick(v) { this._tick = v; }
 
-  // ---- 原版波次计时 (PvZ-Portable Board.cpp UpdateWaves 移植) ----
-  // 首波18s; 常规波25s+rand(6)s; 旗帜波前45s且提前7.5s警告; 杀怪加速
+  updateVisuals(dt) {
+    // reanim 特效池
+    for (const r of this.reanims) r.update(dt);
+    this.reanims = this.reanims.filter(r => !r.dead);
+    for (const e of this.effects) e.update(dt, this);
+    this.effects = this.effects.filter(e => !e.dead);
+    // 冰道衰减
+    for (let r = 0; r < this.rows; r++) {
+      if (this.iceTimers[r] > 0) {
+        this.iceTimers[r] -= dt * 100;
+        if (this.iceTimers[r] <= 0) { this.iceTimers[r] = 0; this.iceMinXs[r] = 900; }
+      }
+    }
+    this.shakeX *= 0.85; this.shakeY *= 0.85;
+    if (this.fogClearUntil < this.time) this.fogCleared = 0;
+  }
+
+  // ---------- reanim 特效 ----------
+  addReanimEffect(name, x, y, rate = 0) {
+    const r = new RE.Reanimation(name);
+    r.setPosition(x, y);
+    if (rate) r.animRate = rate;
+    this.reanims.push(r);
+    return r;
+  }
+  addLimbParticle(kind, x, y) {
+    // 掉落肢体: 简化物理粒子 (原版为 AttachEffect + 掉落动画)
+    this.effects.push(new LimbParticle(kind, x, y));
+  }
+
+  // ---------- 波次计时 (已验证原版移植) ----------
   updateWaves(dt) {
     if (this.state !== 'playing') return;
     if (!this.wavesStarted) return;
     if (this.wave >= this.totalWaves) {
-      if (this.zombies.length === 0) this.triggerWin();
+      if (this.zombies.filter(z => z.fromWave !== -2 && !z.dead).length === 0) this.triggerWin();
       return;
     }
     this.waveTimer -= dt;
-    // 加速: 上一波血量降到阈值以下且过4s → 2s后刷
     if (this.waveTimer > 2 && this._waveHP > 0) {
       const aliveHP = this.zombies.reduce((s, z) => s + (z.body + (z.helm || 0) + (z.shield || 0)), 0);
       if (aliveHP < this._waveHP * WAVE.ACCEL_THRESHOLD && this.time - this.lastWaveTime > 4) {
         this.waveTimer = Math.min(this.waveTimer, WAVE.ACCEL_DELAY);
       }
     }
-    // 大波预告 (提前7.5s)
-    const nextW = this.wave; // 下一波索引
+    const nextW = this.wave;
     if (this.waveTimer <= WAVE.HUGE_WAVE_WARN && this.waveTimer > 0 && !this.hugeWaveWarned) {
       const isFlagNext = this.waves[nextW] && this.waves[nextW].flag;
       const isFinalNext = this.waves[nextW] && this.waves[nextW].final;
@@ -256,7 +411,6 @@ class Board {
     }
   }
 
-  // 过场结束后启动波次
   beginWaves() {
     if (this.wavesStarted) return;
     this.wavesStarted = true;
@@ -264,15 +418,12 @@ class Board {
     this.hugeWaveWarned = false;
   }
 
-  get currentWaveHP() { return this._waveHP || 0; }
-
   spawnWave() {
     this.wave++;
     if (this.wave > this.totalWaves) return;
     const w = this.waves[this.wave - 1];
     this.lastWaveTime = this.time;
     this.hugeWaveWarned = false;
-    // 下一波倒计时 (原版: 常规25s+rand, 旗帜波后45s)
     const next = this.waves[this.wave];
     if (next && next.flag) { this.waveTimer = WAVE.BEFORE_FLAG; this._waveTimerStart = this.waveTimer; }
     else { this.waveTimer = WAVE.WAVE_DELAY + Math.random() * WAVE.WAVE_DELAY_RANGE; this._waveTimerStart = this.waveTimer; }
@@ -281,33 +432,23 @@ class Board {
     for (const [type, n] of w.types) {
       for (let i = 0; i < n; i++) list.push(type);
     }
-    // 水僵尸进水行, 陆僵尸进草地行
     let hp = 0;
     for (const type of list) {
-      const z = ZOMBIES[type];
-      hp += z.body + (z.helm || 0) + (z.shield || 0);
+      const zd = ZOMBIES[type];
+      hp += zd.body + (zd.helm || 0) + (zd.shield || 0);
       let row;
-      if (z.water) row = this.waterRows[Math.floor(Math.random() * this.waterRows.length)];
+      if (zd.water) row = this.waterRows[Math.floor(Math.random() * this.waterRows.length)];
       else {
         const landRows = this.grassRows.filter(r => !this.waterRows.includes(r));
         row = landRows[Math.floor(Math.random() * landRows.length)];
       }
-      this.spawnZombie(type, row, list.length > 12 ? Math.random() * 150 : Math.random() * 60);
+      this.spawnZombieForWave(type, row, this.wave - 1);
     }
     this._waveHP = hp;
-    // Boss
     if (w.boss) {
-      this.spawnZombie('BOSS', 0);
+      this.spawnZombieForWave('BOSS', 0, this.wave - 1);
       this.game.audio.play('bossintro');
     }
-  }
-
-
-  spawnZombie(type, row, extraX = 0) {
-    const Z = new Zombie(type, row, this);
-    Z.x = 870 + extraX + Math.random() * 40;
-    this.zombies.push(Z);
-    return Z;
   }
 
   spawnSkySun() {
@@ -319,9 +460,8 @@ class Board {
   // ---------- 割草机 ----------
   updateMower(m, dt) {
     if (m.state === 'idle') {
-      // 触发: 僵尸接近
       for (const z of this.zombies) {
-        if (!z.dead && z.row === m.row && z.x < 90 && !z.flyingHigh && z.phase !== 'dying' && !z.boss) {
+        if (!z.dead && z.row === m.row && z.x < 90 && !z.flyingHigh && !z.isDeadOrDying && !z.boss && z.zombieHeight !== 1 && z.zombieHeight !== 9) {
           m.state = 'running';
           m.x = 0;
           this.game.audio.play(m.type === 'pool' ? 'pool_cleaner' : 'lawnmower');
@@ -330,18 +470,17 @@ class Board {
       }
     } else if (m.state === 'running') {
       m.x += 320 * dt;
-      // 杀僵尸 (单次命中)
       for (const z of this.zombies) {
         if (!z.dead && !z._mowedHit && z.row === m.row && !z.boss && Math.abs(z.x + 40 - m.x) < 60 && !z.isThrown) {
           z._mowedHit = true;
-          z.mowed(this);
+          z.mowDown();
         }
       }
       if (m.x > 900) m.state = 'gone';
     }
   }
 
-  // ---------- 阳光 ----------
+  // ---------- 阳光/金币 ----------
   addSun(x, y, targetY, from) {
     this.suns.push(new Sun(x, y, targetY, from));
   }
@@ -356,6 +495,11 @@ class Board {
     this.coins.push(new Coin(x, y, value));
     this.game.audio.play('coin');
   }
+  addProjectile(type, x, y, row, opts = {}) {
+    const pr = new Projectile(type, x, y, row, this, opts);
+    this.projectiles.push(pr);
+    return pr;
+  }
 
   // ---------- 特效 ----------
   addEffect(name, x, y, opts = {}) {
@@ -363,20 +507,12 @@ class Board {
     this.effects.push(e);
     return e;
   }
-  updateEffects(dt) {
-    for (const e of this.effects) e.update(dt, this);
-    this.effects = this.effects.filter(e => !e.dead);
-    if (this.hugeWaveBanner > 0) this.hugeWaveBanner -= dt;
-    if (this.finalWaveBanner > 0) this.finalWaveBanner -= dt;
-    if (this.fogClearUntil < this.time) this.fogCleared = 0;
-  }
 
   // ---------- 胜负 ----------
   checkWinLose() {
-    // 输: 僵尸走到最左且该行割草机没了
     for (const z of this.zombies) {
-      if (!z.dead && !z.boss && z.x < -30) {
-        if (z.flyingHigh) { this.triggerLose(z.row); return; } // 气球直接进屋
+      if (!z.dead && !z.boss && z.x < -60 && z.hasHead) {
+        if (z.flyingHigh) { this.triggerLose(z.row); return; }
         const m = this.mowers.find(m => m.row === z.row && m.state === 'idle');
         if (!m) { this.triggerLose(z.row); return; }
       }
@@ -399,12 +535,12 @@ class Board {
   // ---------- 查询 ----------
   zombiesInRow(row, minX = -100, maxX = 900) {
     return this.zombies.filter(z => !z.dead && z.row === row && z.x >= minX && z.x <= maxX &&
-      z.hittable !== false && z.phase !== 'dying' && !z.underwater && !z.underground && !z.boss);
+      z.hittable !== false && !z.underwater && !z.underground && !z.boss);
   }
   firstZombieInRow(row, fromX, toX) {
     let best = null;
     for (const z of this.zombies) {
-      if (z.dead || z.row !== row || z.hittable === false || z.phase === 'dying' || z.boss) continue;
+      if (z.dead || z.row !== row || z.hittable === false || z.boss) continue;
       const zx = z.hitX();
       if (zx >= fromX && zx <= toX) {
         if (!best || zx < best.hitX()) best = z;
@@ -413,17 +549,14 @@ class Board {
     return best;
   }
   plantAt(row, col) { return this.grid[row][col]; }
-  // 僵尸要啃食的目标 (含南瓜/地刺不算)
   eatTargetAt(row, col) {
     const pk = this.gridPumpkin[row][col];
     if (pk && !pk.dead) return pk;
     return this.grid[row][col];
   }
-  // 雾是否清除
   fogLevel(x) {
     if (this.scene !== 'fog') return 0;
     if (this.time < this.fogClearUntil) return 0;
-    // 路灯花: 照亮周围
     for (const p of this.plants) {
       if (!p.dead && p.type === 'PLANTERN') {
         if (Math.abs(p.x - x) < 200) return 0;
@@ -431,13 +564,19 @@ class Board {
     }
     return x > 340 ? 1 : 0;
   }
+  canPlantOn(row, col) {
+    if (this.isWater(row, col)) return this.gridLily[row][col] && !this.grid[row][col];
+    if (this.isRoof) return (this.gridPot[row][col] || this.gridLily[row][col]) && !this.grid[row][col];
+    return !this.grid[row][col] && !this.craters.some(c => c.row === row && c.col === col) &&
+      !this.iceTrails.some(c => c.row === row && c.col === col) && !this.graves.some(g => g.row === row && g.col === col);
+  }
 }
 
-// ===== 实体类 (sun/coin/effect 也放这里) =====
+// ===== 实体类 =====
 class Sun {
   constructor(x, y, targetY, from) {
     this.x = x; this.y = y; this.targetY = targetY;
-    this.from = from;        // sky / flower
+    this.from = from;
     this.value = CONST.SUN_VALUE;
     this.life = CONST.SUN_LIFETIME;
     this.dead = false;
@@ -448,7 +587,6 @@ class Sun {
   }
   update(dt, board) {
     if (this.collected) {
-      // 飞向阳光计数器
       this.flyT += dt * 4;
       const tx = 30, ty = -30;
       this.x += (tx - this.x) * Math.min(1, dt * 8);
@@ -494,13 +632,8 @@ class Effect {
   constructor(name, x, y, opts) {
     this.name = name; this.x = x; this.y = y;
     this.t = 0; this.dead = false;
-    this.opts = opts;
+    this.opts = opts || {};
     this.reanim = null;
-    // reanim类特效
-    const REANIMS = {
-      splat: 'Puff', snowsplat: 'Puff', firesplat: 'fire', powie: null, explosion: null,
-      spudow: null, boom: null, chomp: null, ice: null, freeze: null,
-    };
   }
   update(dt, board) {
     this.t += dt;
@@ -521,4 +654,24 @@ class Effect {
   }
 }
 
-if (typeof module !== 'undefined') module.exports = { Board, Sun, Coin, Effect, SCENE_BG };
+// 掉落肢体粒子 (断臂/掉头/掉盔)
+class LimbParticle {
+  constructor(kind, x, y) {
+    this.kind = kind; this.x = x; this.y = y;
+    this.vx = 30 + Math.random() * 20;
+    this.vy = -180 - Math.random() * 60;
+    this.rot = 0;
+    this.vr = (Math.random() - 0.5) * 8;
+    this.t = 0; this.dead = false;
+  }
+  update(dt) {
+    this.t += dt;
+    this.vy += 500 * dt;
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.rot += this.vr * dt;
+    if (this.t > 1.6) this.dead = true;
+  }
+}
+
+if (typeof module !== 'undefined') module.exports = { Board, Sun, Coin, Effect, LimbParticle, SCENE_BG, RENDER_LAYER };
