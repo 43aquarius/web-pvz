@@ -38,17 +38,18 @@ const Game = {
     this.ctx = cv.getContext('2d');
     UI.init(this);
     this.audio = require('./audio');
-    // 进度遮罩
-    const overlay = document.getElementById('overlay');
-    const loadText = document.getElementById('loadtext');
-    // 加载资产
+    // 极简加载提示 (无全屏加载动画): 网络慢(>3s)才显示底部小字, 加载完成即隐藏
+    const hint = document.getElementById('loadhint');
+    let hintShown = false;
+    const hintTimer = setTimeout(() => {
+      if (hint && !this._assetsReady) { hint.style.display = 'block'; hintShown = true; }
+    }, 3000);
     await Assets.load((p, msg) => {
-      if (loadText) loadText.textContent = `正在加载原版素材 ${(p * 100).toFixed(0)}% · ${msg || ''}`;
-      if (overlay) {
-        const bar = document.getElementById('loadbar');
-        if (bar) bar.style.width = (p * 100) + '%';
-      }
+      if (hint && hintShown) hint.textContent = `正在进入游戏 ${(p * 100).toFixed(0)}%`;
     });
+    clearTimeout(hintTimer);
+    if (hint) { hint.style.display = 'none'; hint.textContent = ''; }
+    this._assetsReady = true;
     // 读取进度
     try {
       const save = JSON.parse(localStorage.getItem('webpvz_save') || '{}');
@@ -58,7 +59,6 @@ const Game = {
     // 输入
     this.bindInput();
     // 开始
-    if (overlay) overlay.style.display = 'none';
     this.state = 'title';
     Screens.game = this;
     this.audio.init();
@@ -227,6 +227,7 @@ const Game = {
       }
     }
     // 选卡
+    const cards = board.seedCards;
     for (let i = 0; i < cards.length; i++) {
       const x = this.packetX(i, cards.length);
       if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
@@ -294,6 +295,8 @@ const Game = {
     const def = PLANTS[type];
     const card = board.seedCards[this.selectedCard];
     if (!card || card.cd > 0 || board.sun < def.cost) { this.audio.play('buzzer'); return; }
+    // 只能种在草地行或水行 (1-1~1-3 单/三行关的泥地不可种植)
+    if (!board.grassRows.includes(row) && !board.isWater(row, col)) { this.audio.play('buzzer'); return; }
     // 种植规则
     const isWater = board.isWater(row, col);
     // 水生植物必须种水, 非水生需要睡莲
@@ -578,6 +581,8 @@ const Game = {
   },
 
   canPlacePreview(type, row, col, board) {
+    // 泥地行不可种 (1-1~1-3)
+    if (!board.grassRows.includes(row) && !board.isWater(row, col)) return false;
     const isWater = board.isWater(row, col);
     if (AQUATIC.has(type)) {
       if (type === 'LILYPAD') return isWater && !board.gridLily[row][col];

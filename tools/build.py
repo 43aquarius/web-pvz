@@ -2,8 +2,9 @@
 """build.py — 打包构建 (单script块架构, 保证执行顺序)
   python3 tools/build.py dev   -> dev.html (js+reanim内联, 图片音频相对路径, file://可玩)
   python3 tools/build.py dist  -> dist/web-pvz.html (全内嵌base64, 单文件发布)
+  python3 tools/build.py pack  -> assets/pack.bin + assets/reanim.json (网络部署单请求资产包)
 """
-import base64, json, os, sys
+import base64, json, os, struct, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = ROOT
@@ -33,14 +34,11 @@ HTML_HEAD = '''<!DOCTYPE html>
            -webkit-user-select:none; user-select:none;
            -webkit-touch-callout:none;              /* 长按不弹菜单 */
            -webkit-tap-highlight-color:transparent; }
-  #overlay { position:fixed; inset:0; background:linear-gradient(160deg,#241a08,#0d0904); color:#ffe9a8;
-             display:flex; flex-direction:column; align-items:center; justify-content:center;
-             font-family:"Noto Sans SC","Microsoft YaHei",sans-serif; z-index:10;
-             padding:16px; box-sizing:border-box; text-align:center; }
-  #overlay h1 { font-size:34px; margin-bottom:8px; color:#c8f542; text-shadow:0 2px 8px rgba(0,0,0,.5); }
-  #loadtext { font-size:15px; opacity:.85; margin-bottom:18px; }
-  #loadbarwrap { width:min(340px, 80vw); height:10px; background:rgba(255,255,255,.12); border-radius:6px; overflow:hidden; }
-  #loadbar { height:100%; width:0%; background:linear-gradient(90deg,#5ad04a,#c8f542); border-radius:6px; transition:width .2s; }
+  /* 极简加载提示: 仅慢速(>3s)时出现, 无全屏加载动画 */
+  #loadhint { position:fixed; left:0; right:0; bottom:max(14px, env(safe-area-inset-bottom)); display:none;
+              color:rgba(255,233,168,.75); font-size:12px; text-align:center; z-index:10;
+              font-family:"Noto Sans SC","Microsoft YaHei",sans-serif; letter-spacing:1px;
+              text-shadow:0 1px 3px rgba(0,0,0,.8); pointer-events:none; }
   /* 移动端竖屏提示 (手机竖屏时可关闭, 不阻断游戏) */
   #rotate-hint { display:none; position:fixed; top:0; left:0; right:0; z-index:50; background:rgba(26,18,6,.94); color:#ffe9a8;
     flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:6px;
@@ -65,11 +63,7 @@ HTML_HEAD = '''<!DOCTYPE html>
   <p>旋转手机至横屏获得最佳体验</p>
   <button id="rotate-dismiss" type="button">仍要竖屏继续</button>
 </div>
-<div id="overlay">
-  <h1>植物大战僵尸 · Web 原版复刻版</h1>
-  <div id="loadtext">正在准备…</div>
-  <div id="loadbarwrap"><div id="loadbar"></div></div>
-</div>
+<div id="loadhint"></div>
 <script>
 // 竖屏提示关闭逻辑
 (function () {
@@ -148,6 +142,34 @@ def audio_list():
     return sorted(out)
 
 
+def build_pack():
+    """生成网络部署资产包: assets/pack.bin (全部图片单文件) + assets/reanim.json (全部reanim合一)"""
+    img_dir = os.path.join(WEB, 'assets/images')
+    keys = sorted(os.listdir(img_dir))
+    index = {"images": {}}
+    blobs = []
+    offset = 0
+    for k in keys:
+        data = open(os.path.join(img_dir, k), 'rb').read()
+        mime = 'image/jpeg' if k.lower().endswith(('.jpg', '.jpeg')) else 'image/png'
+        index["images"][k] = [offset, len(data), mime]
+        blobs.append(data)
+        offset += len(data)
+    idx_bytes = json.dumps(index, separators=(',', ':')).encode('utf-8')
+    with open(os.path.join(WEB, 'assets/pack.bin'), 'wb') as f:
+        f.write(b'WPZ1')
+        f.write(struct.pack('<I', len(idx_bytes)))
+        f.write(idx_bytes)
+        for b in blobs:
+            f.write(b)
+    # reanim 合一 (文本 JSON, 服务端可 gzip)
+    rd = load_reanim_data()
+    with open(os.path.join(WEB, 'assets/reanim.json'), 'w', encoding='utf-8') as f:
+        json.dump(rd, f, separators=(',', ':'))
+    print(f'assets/pack.bin -> {os.path.getsize(os.path.join(WEB, "assets/pack.bin")) / 1e6:.1f} MB ({len(keys)} 张图片)')
+    print(f'assets/reanim.json -> {os.path.getsize(os.path.join(WEB, "assets/reanim.json")) / 1e6:.1f} MB ({len(rd)} 个动画)')
+
+
 def build(mode):
     parts = [HTML_HEAD, '<script>\n', LOADER_PRE]
     # 数据前置
@@ -155,6 +177,7 @@ def build(mode):
         rd = load_reanim_data()
         parts.append('window.__REANIM_DATA__ = ' + json.dumps(rd, separators=(',', ':')) + ';\n')
         parts.append('window.__IMAGE_LIST__ = ' + json.dumps(image_list(), separators=(',', ':')) + ';\n')
+        parts.append('window.__NO_PACK__ = true;\n')
     else:
         # 生产: 分块嵌入 (避免单个script过大)
         pass
@@ -228,4 +251,7 @@ def build(mode):
 
 
 if __name__ == '__main__':
-    build(MODE if MODE in ('dev', 'dist') else 'dev')
+    if MODE == 'pack':
+        build_pack()
+    else:
+        build(MODE if MODE in ('dev', 'dist') else 'dev')

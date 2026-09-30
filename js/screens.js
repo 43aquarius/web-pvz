@@ -224,29 +224,75 @@ Screens.menu = {
     return B;
   },
 
+  // ---- 兜底菜单 (弱网素材缺失时也能进入游戏) ----
+  fallbackButtons() {
+    return [
+      { k: 'adventure', x: 234, y: 210, w: 332, h: 92, label: '冒 险 模 式' },
+      { k: 'almanac', x: 300, y: 330, w: 200, h: 60, label: '植 物 图 鉴' },
+      { k: 'options', x: 300, y: 410, w: 200, h: 60, label: '选　　项' },
+      { k: 'help', x: 300, y: 490, w: 200, h: 60, label: '帮　　助' },
+    ];
+  },
+
+  drawFallback(ctx) {
+    this.buttons = this.fallbackButtons();
+    const hover = Screens.hover;
+    // 天空+草地背景
+    const grad = ctx.createLinearGradient(0, 0, 0, 600);
+    grad.addColorStop(0, '#123a6d');
+    grad.addColorStop(0.62, '#2f9be0');
+    grad.addColorStop(0.62, '#3c8a2a');
+    grad.addColorStop(1, '#2a6b1e');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 800, 600);
+    // 标题 (呼吸浮动)
+    const bob = Math.sin(Screens.t * 1.2) * 3;
+    pvzText(ctx, '植物大战僵尸', 400, 118 + bob, 72, '#c8f542');
+    pvzText(ctx, '素材加载不完整 · 已切换简化菜单', 400, 156, 14, '#ffe9a8');
+    // 文字按钮
+    for (const b of this.buttons) {
+      const h = hover === b.k;
+      ctx.save();
+      ctx.fillStyle = h ? 'rgba(90,208,74,0.95)' : 'rgba(42,72,28,0.92)';
+      ctx.strokeStyle = h ? '#c8f542' : '#7ea85e';
+      ctx.lineWidth = 3;
+      const r = 14, x = b.x, y = b.y, w = b.w, hh = b.h;
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + hh, r);
+      ctx.arcTo(x + w, y + hh, x, y + hh, r);
+      ctx.arcTo(x, y + hh, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.restore();
+      pvzText(ctx, b.label, x + w / 2, y + hh / 2 + 10, 26, h ? '#ffffff' : '#dff7b8');
+    }
+  },
+
   draw(ctx) {
-    if (!this.inst) {
-      // 无 reanim 数据降级
-      ctx.fillStyle = '#2f9be0'; ctx.fillRect(0, 0, 800, 600);
+    // 素材缺失兜底: reanim 或关键背景图缺失 → 简化菜单 (仍可点击进入游戏)
+    if (!this.inst || !img('selectorscreen_bg.jpg')) {
+      this.drawFallback(ctx);
       return;
     }
     this.update2(1 / 60);
     const inst = this.inst;
-    // ---- 1. 天空 (BG 轨道, 8x 缩放) ----
+    // ---- 1. 天空 (仅 BG 轨道: 快照分组 → 全隐藏 → 只显天空 → 绘制 → 还原) ----
     ctx.save();
-    const bgSaved = inst.group[this._skyTrackIdx];
-    for (let i = 0; i < inst.group.length; i++) if (i !== this._skyTrackIdx) inst.group[i] = 1;
-    inst.group[this._skyTrackIdx] = 0;
+    const snap = inst.tracks.map(t => t.renderGroup);
+    for (let i = 0; i < inst.tracks.length; i++) inst.tracks[i].renderGroup = (i === this._skyTrackIdx) ? 0 : -1;
     inst.draw(ctx);
-    for (let i = 0; i < inst.group.length; i++) inst.group[i] = 0;
-    inst.group[this._skyTrackIdx] = bgSaved === 1 ? 1 : 0;
+    for (let i = 0; i < inst.tracks.length; i++) inst.tracks[i].renderGroup = snap[i];
     ctx.restore();
     // ---- 2. 云 ----
     for (const c of this.clouds) c.draw(ctx);
-    // ---- 3. 主景 (BG 轨道隐藏) ----
-    inst.group[this._skyTrackIdx] = 1;
+    // ---- 3. 主景 (隐藏天空轨道后绘制) ----
+    const skyTr = inst.tracks[this._skyTrackIdx];
+    const skySaved = skyTr.renderGroup;
+    skyTr.renderGroup = -1;
     inst.draw(ctx);
-    inst.group[this._skyTrackIdx] = 0;
+    skyTr.renderGroup = skySaved;
     // ---- 4. 草叶 (anim_grass) ----
     if (this.leafInst) this.leafInst.draw(ctx);
     // ---- 5. 花 ----

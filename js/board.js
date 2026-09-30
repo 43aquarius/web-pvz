@@ -316,8 +316,9 @@ class Board {
   update(dt) {
     if (this.state === 'win' || this.state === 'lose') { this.updateVisuals(dt); return; }
     this.time += dt;
-    const ticks = Math.max(1, Math.round(dt * 100 * this.speed));
-    const tickDt = dt * this.speed;
+    // 注: dt 已是乘过 speed 的秒数 (main.js: sdt = dt * board.speed), 此处不再二次乘速
+    const ticks = Math.max(1, Math.round(dt * 100));
+    const tickDt = dt;
     // 波次与天降阳光 (秒)
     this.updateWaves(tickDt);
     if (this.level.skySun) {
