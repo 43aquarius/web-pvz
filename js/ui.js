@@ -26,6 +26,12 @@ const SEED_DRAW_TABLE = {
   STARFRUIT: [0.5, 6, 8], THREEPEATER: [0.5, 5, 10], GATLINGPEA: [0.5, 2, 8],
 };
 
+// 原版 SeedPacketDrawSeed 每植物缩放 (aScale)
+function scaleOf(type) {
+  const e = SEED_DRAW_TABLE[type];
+  return e ? e[0] : 0.5;
+}
+
 const UI = {
   init(game) {
     this.game = game;
@@ -51,12 +57,45 @@ const UI = {
         return r;
       });
       for (const r of layers) r.animTime = 0.15;
-      // 原版参数: scale/offset (默认 0.5, 5, 8)
-      const [sc, ox, oy] = SEED_DRAW_TABLE[type] || [0.5, 5, 8];
-      const scale = sc;
-      // 合并包围盒
+      // 头部挂载到身体轨道 (与 Plant 构造一致, 保证缩略图与场景中形态相同)
+      const headIdx = [];   // 被挂载的层索引
+      if (layers.length > 1) {
+        const body = layers[0];
+        if (type === 'THREEPEATER') {
+          ['anim_head1', 'anim_head2', 'anim_head3'].forEach((tr, i) => {
+            const L = layers[1 + i];
+            if (!L) return;
+            if (body.trackExists(tr)) { body.attach[body.trackIndex(tr)] = [L]; headIdx.push(1 + i); }
+          });
+        } else {
+          const track = body.trackExists('anim_stem') ? 'anim_stem'
+            : body.trackExists('anim_idle') ? 'anim_idle' : null;
+          if (track) {
+            const ti = body.trackIndex(track);
+            const heads = layers.slice(1);
+            body.attach[ti] = heads.length === 1 ? heads[0] : heads;
+            for (let i = 1; i < layers.length; i++) headIdx.push(i);
+          }
+        }
+      }
+      // 合并包围盒 (头的轨道坐标需加上身体挂点偏移)
+      const body = layers[0];
+      const bt = body.frameTime();
+      let attachX = 0, attachY = 0;
+      if (headIdx.length) {
+        // 找到挂载轨道的当前变换
+        for (let ti = 0; ti < body.def.tracks.length; ti++) {
+          if (body.attach[ti]) {
+            const t = body.curTransform(ti, bt);
+            attachX = t.x; attachY = t.y;
+            break;
+          }
+        }
+      }
       let minX = 999, minY = 999, maxX = -999, maxY = -999;
-      for (const r of layers) {
+      layers.forEach((r, li) => {
+        const offX = headIdx.includes(li) ? attachX : 0;
+        const offY = headIdx.includes(li) ? attachY : 0;
         const ft = r.frameTime();
         for (let ti = 0; ti < r.def.tracks.length; ti++) {
           const t = r.curTransform(ti, ft);
@@ -66,22 +105,21 @@ const UI = {
           const img = key ? RE.resolveImage(key) : null;
           if (!img) continue;
           const w = img.width * t.sx, h = img.height * t.sy;
-          minX = Math.min(minX, t.x); minY = Math.min(minY, t.y);
-          maxX = Math.max(maxX, t.x + w); maxY = Math.max(maxY, t.y + h);
+          minX = Math.min(minX, t.x + offX); minY = Math.min(minY, t.y + offY);
+          maxX = Math.max(maxX, t.x + offX + w); maxY = Math.max(maxY, t.y + offY + h);
         }
-      }
+      });
       // 原版直接在 (x+offsetX, y+offsetY) 以 scale 绘制 reanim 原点
       // 此处把植物视觉中心对到卡包中心 (25, 33), 并限制在包内
       const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
-      let fit = Math.min(scale, 44 / bw, 52 / bh);
-      if (!isFinite(fit) || fit <= 0) fit = scale;
-      for (const r of layers) {
-        r.x = 25 - (minX + maxX) / 2 * fit;
-        r.y = 30 - (minY + maxY) / 2 * fit + 3;
-        r.scale = fit;
-        r.animTime = 0.15;
-        r.draw(c);
-      }
+      let fit = Math.min(scaleOf(type), 44 / bw, 52 / bh);
+      if (!isFinite(fit) || fit <= 0) fit = scaleOf(type);
+      // 只画身体实例 — 头部经挂载自动绘制在正确位置
+      body.x = 25 - (minX + maxX) / 2 * fit;
+      body.y = 30 - (minY + maxY) / 2 * fit + 3;
+      body.scale = fit;
+      body.animTime = 0.15;
+      body.draw(c);
     } catch (e) { console.warn('缩略图失败', type, e); }
     this.cardThumbs.set(type, cv);
     return cv;
@@ -182,16 +220,18 @@ const UI = {
           selected: game.selectedCard === i,
         });
       }
-      // ---- 铲子槽 (原版: (extra+456, 0) 70x72) ----
-      const shovelBank = Assets.image('shovelbank.png');
-      const shX = extra + 456;
-      if (shovelBank) ctx.drawImage(shovelBank, shX, bankY);
-      else { ctx.fillStyle = '#8a6642'; ctx.fillRect(shX, bankY, 70, 72); }
-      const shovel = Assets.image('shovel.png');
-      if (shovel && !game.shovelMode) ctx.drawImage(shovel, shX + 4, bankY + 4);
-      if (game.shovelMode) {
-        ctx.strokeStyle = '#ffef7a'; ctx.lineWidth = 3;
-        ctx.strokeRect(shX - 2, bankY - 2, 74, 76);
+      // ---- 铲子槽 (原版: (extra+456, 0) 70x72; 1-4 关无铲子, 1-5 戴夫赠送) ----
+      if (game.shovelUnlocked) {
+        const shovelBank = Assets.image('shovelbank.png');
+        const shX = extra + 456;
+        if (shovelBank) ctx.drawImage(shovelBank, shX, bankY);
+        else { ctx.fillStyle = '#8a6642'; ctx.fillRect(shX, bankY, 70, 72); }
+        const shovel = Assets.image('shovel.png');
+        if (shovel && !game.shovelMode) ctx.drawImage(shovel, shX + 4, bankY + 4);
+        if (game.shovelMode) {
+          ctx.strokeStyle = '#ffef7a'; ctx.lineWidth = 3;
+          ctx.strokeRect(shX - 2, bankY - 2, 74, 76);
+        }
       }
     }
     // ---- 进度条 (原版 DrawProgressMeter: FlagMeter@600,575) ----

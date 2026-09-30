@@ -18,26 +18,34 @@ const Renderer = {
     if (cam > 0) { ctx.beginPath(); ctx.rect(0, 0, 800, 600); ctx.clip(); ctx.translate(-cam, 0); }
     // ---- 背景 (原版: g->DrawImage(bg, -BOARD_OFFSET, 0)) ----
     const lvl = board.level;
-    const earlyDay = board.scene === 'day' && lvl && lvl.sodRoll;
+    // 原版: 首次冒险 1-4 关为铺草皮阶段 (IsFirstTimeAdventureMode && mLevel<=4)
+    // 重复游玩已解锁关 → 直接完整草坪
+    const firstTime = board.game && board.game.progress ? board.game.progress.unlocked <= lvl.id : true;
+    const earlyDay = board.scene === 'day' && lvl && lvl.id <= 4 && firstTime;
     if (earlyDay) {
-      // 早期关卡: 未铺草皮背景 + 草皮层 (原版 Board::DrawBackground1 1/2/4 关逻辑)
+      // 早期关卡: 未铺草皮背景 + 草皮层 (原版 Board::DrawBackdrop 1/2/3/4 关逻辑)
       const un = Assets.image('background1unsodded.jpg');
       if (un) ctx.drawImage(un, BG_OFFSET_X, 0);
-      const sod1 = Assets.image('sod1row.jpg');
-      const sod3 = Assets.image('sod3row.jpg');
+      // 带alpha的草皮 (jpg黑边已由掩码合成去除)
+      const sod1 = Assets.image('sod1row_alpha.png') || Assets.image('sod1row.jpg');
+      const sod3 = Assets.image('sod3row_alpha.png') || Assets.image('sod3row.jpg');
       const bg1 = Assets.image('background1.jpg');
       const p = board.sodDone ? 1 : (board.cutsceneSod !== undefined ? Math.max(0, board.cutsceneSod) : 1);
       const w1 = sod1 ? sod1.width : 771;
       const w3 = sod3 ? sod3.width : 771;
       if (lvl.id === 1) {
-        // 1-1: 单行草皮从左向右展开
+        // 1-1: 单行草皮从左向右展开 (原版: SOD1ROW @ (239-220, 265) srcRect宽度线性)
         if (sod1) ctx.drawImage(sod1, 0, 0, Math.max(1, w1 * p), sod1.height, 19, 265, w1 * p, sod1.height);
-      } else if (lvl.id === 2 || lvl.id === 3) {
-        // 1-2/1-3: 中间一行已有, 上下三行展开
+      } else if (lvl.id === 2) {
+        // 1-2: 中间一行已有, 整块三行草皮展开 (原版: SOD1ROW@19,265 + SOD3ROW@15,149 揭示)
         if (sod1) ctx.drawImage(sod1, 19, 265);
         if (sod3) ctx.drawImage(sod3, 0, 0, Math.max(1, w3 * p), sod3.height, 15, 149, w3 * p, sod3.height);
+      } else if (lvl.id === 3) {
+        // 1-3: 无滚草动画, 三行草皮静态完整 (原版: mSodTime=0 但仍画 unsodded+3row)
+        if (sod1) ctx.drawImage(sod1, 19, 265);
+        if (sod3) ctx.drawImage(sod3, 15, 149);
       } else if (lvl.id === 4) {
-        // 1-4: 上三行已有, 整张背景从 x=232 向右揭示
+        // 1-4: 上三行已有, 整张背景从 src x=232 向右揭示 (原版: BACKGROUND1 srcRect(232,0,w,h))
         if (sod3) ctx.drawImage(sod3, 15, 149);
         if (bg1) {
           const w = 773 * p;
@@ -60,12 +68,17 @@ const Renderer = {
     ctx.restore();
   },
 
-  // ---- 草皮卷滚筒 (原版 REANIM_SODROLL, 2秒 48帧) ----
+  // ---- 草皮卷滚筒 (原版 REANIM_SODROLL, 2秒48帧) ----
+  // 关键: animTime 直接绑定 cutsceneSod 进度 → 滚筒前沿与草皮揭示边缘严格同步
+  // (原版两者同为线性时间驱动; 之前的实现按渲染帧 update(1/60) 推进, 帧率/暂停/倍速下会脱节)
   drawSodRoll(ctx, board) {
     if (!board.sodRolls) return;
     for (const r of board.sodRolls) {
       if (!r || !r.def) continue;
-      r.update(1 / 60);
+      if (board.cutsceneSod !== undefined) {
+        r.animTime = Math.max(0, Math.min(1, board.cutsceneSod));
+        r.loopCount = r.animTime >= 1 ? 1 : 0;
+      }
       r.draw(ctx);
     }
   },

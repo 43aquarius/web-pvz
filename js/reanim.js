@@ -108,6 +108,8 @@ const RE = (function () {
 
     trackIndex(name) { return this.def.trackIdx[name.toLowerCase()] ?? 0; }
     trackExists(name) { return this.def.trackIdx[name.toLowerCase()] !== undefined; }
+    // 动画名存在性 (def.anims 含纯控制轨道推导的区间, 如 anim_shooting 不在 tracks 里)
+    animExists(name) { return this.def.anims[name] !== undefined; }
 
     // 动画控制
     getAnimRange(animName) {
@@ -261,17 +263,18 @@ const RE = (function () {
           if (idx >= 0) key = d.images[idx];
         }
         const img = key ? resolveImage(key) : null;
-        // 挂载的子动画在轨道位置绘制
+        // 挂载的子动画在轨道位置绘制 (支持数组=多个子动画共用同一挂点, 如裂荚射手双头)
         const att = this.attach[ti];
         if (!img && !att) continue;
         const tc = this.trackColor[ti] || this.color;
         {
           const px = this.x + (this.flip ? -t.x * this.scale : t.x * this.scale);
           const py = this.y + t.y * this.scale;
-          if (att) {
-            att.x = px; att.y = py;
-            att.scale = this.scale * (this.flip ? -t.sx : t.sx);
-            att.draw(ctx);
+          const atts = Array.isArray(att) ? att : (att ? [att] : []);
+          for (const at of atts) {
+            at.x = px; at.y = py;
+            at.scale = this.scale * (this.flip ? -t.sx : t.sx);
+            at.draw(ctx);
           }
           if (img) {
             const kx = -t.kx * Math.PI / 180, ky = -t.ky * Math.PI / 180;

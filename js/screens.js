@@ -349,15 +349,17 @@ Screens.menu = {
 };
 
 // ================================================================
-// 选项 — 原版 option_dialog + 滑块/复选框
+// 选项 — 原版 option_dialog + 滑块/复选框 + 调试解锁
 // ================================================================
 Screens.options = {
   rects: {},
+  unlockFlash: 0,
   draw(ctx) {
     const game = Screens.game;
+    this.unlockFlash = Math.max(0, this.unlockFlash - 1 / 60);
     ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, 800, 600);
     const dlg = img('option_dialog.png');
-    const dw = 500, dh = 420, dx = 150, dy = 90;
+    const dw = 500, dh = 470, dx = 150, dy = 90;
     if (dlg) ctx.drawImage(dlg, dx, dy, dw, dh);
     else { ctx.fillStyle = '#c8b28a'; ctx.fillRect(dx, dy, dw, dh); }
     pvzText(ctx, '选  项', 400, dy + 52, 30, '#4a2f10');
@@ -380,6 +382,38 @@ Screens.options = {
       pvzText(ctx, i === 0 ? '音效' : '全屏', sx + 36, cy + 18, 16, '#4a2f10', { align: 'left' });
       this.rects[`cb${i}`] = { x: sx, y: cy, w: 120, h: 26 };
     }
+    // ---- 调试: 一键解锁全部关卡/小游戏 (方便查看所有内容) ----
+    const ubY = cbY + 108;
+    const uRect = { x: dx + 80, y: ubY, w: dw - 160, h: 46 };
+    this.rects.unlock = uRect;
+    ctx.save();
+    const allOpen = game.progress.unlocked > 50;
+    const hov = Screens.hover === 'unlock';
+    // 按钮底色
+    const g2 = ctx.createLinearGradient(0, ubY, 0, ubY + 46);
+    if (allOpen) { g2.addColorStop(0, '#7a8a4a'); g2.addColorStop(1, '#4a5a2a'); }
+    else { g2.addColorStop(0, hov ? '#d4a430' : '#b8891e'); g2.addColorStop(1, hov ? '#a67a1a' : '#8a6410'); }
+    ctx.fillStyle = g2;
+    ctx.strokeStyle = '#3a2a08'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.roundRect(uRect.x, ubY, uRect.w, 46, 10);
+    ctx.fill(); ctx.stroke();
+    if (this.unlockFlash > 0) {
+      ctx.globalAlpha = Math.min(1, this.unlockFlash * 2);
+      ctx.fillStyle = '#fff8c0';
+      ctx.beginPath(); ctx.roundRect(uRect.x, ubY, uRect.w, 46, 10);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.font = 'bold 18px "Noto Sans SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineJoin = 'round';
+    const uLabel = allOpen ? '已解锁全部内容 ✓ (再次点击重新锁定)'
+      : '解锁全部关卡与小游戏 (调试)';
+    ctx.strokeText(uLabel, 400, ubY + 29);
+    ctx.fillStyle = '#fff4d0';
+    ctx.fillText(uLabel, 400, ubY + 29);
+    ctx.restore();
+    pvzText(ctx, '解锁后点主菜单"冒险模式"可选择任意关卡', 400, ubY + 74, 13, '#6a4a20');
     pvzText(ctx, '点击此处返回', 400, dy + dh - 40, 20, '#6b1c04');
     this.rects.back = { x: dx + 120, y: dy + dh - 70, w: 260, h: 50 };
   },
@@ -398,6 +432,22 @@ Screens.options = {
       const c = document.documentElement;
       if (!document.fullscreenElement) { if (c.requestFullscreen) c.requestFullscreen(); }
       else if (document.exitFullscreen) document.exitFullscreen();
+      return;
+    }
+    // 一键解锁/重锁定
+    if (r.unlock && inRect(p, r.unlock.x, r.unlock.y, r.unlock.w, r.unlock.h)) {
+      if (game.progress.unlocked > 50) {
+        game.progress.unlocked = 1;
+        game.debugUnlocked = false;
+        try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: 1 })); } catch (e) { }
+        game.audio.play('buzzer');
+      } else {
+        game.progress.unlocked = 51;
+        game.debugUnlocked = true;
+        try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: 51, debugUnlocked: true })); } catch (e) { }
+        game.audio.play('points');
+        this.unlockFlash = 1.2;
+      }
       return;
     }
     if (r.back && inRect(p, r.back.x, r.back.y, r.back.w, r.back.h)) {
@@ -537,14 +587,107 @@ Screens.lose = {
   click(p, game) { game.retryLevel(); },
 };
 
+// ================================================================
+// 关卡选择屏 (调试: 解锁全部后, 主菜单冒险按钮进入)
+// 5 世界 × 10 关 网格, 点击直接跳转
+// ================================================================
+Screens.levelSelect = {
+  hover: null,
+  enter() { this.scroll = 0; },
+  cells() {
+    // 5 世界各 10 关, 每行一世界
+    const cells = [];
+    const x0 = 60, y0 = 86, cw = 66, ch = 66, gap = 4;
+    for (let lv = 1; lv <= 50; lv++) {
+      const world = Math.floor((lv - 1) / 10);   // 0..4
+      const sub = (lv - 1) % 10;
+      cells.push({
+        lv, x: x0 + sub * (cw + gap), y: y0 + world * (ch + gap),
+        w: cw, h: ch, label: `${world + 1}-${sub + 1}`,
+      });
+    }
+    return cells;
+  },
+  draw(ctx) {
+    // 背景: 菜单背景图 + 半透明遮罩
+    const bg = img('background1.jpg');
+    ctx.fillStyle = '#1a1206'; ctx.fillRect(0, 0, 800, 600);
+    if (bg) { ctx.globalAlpha = 0.25; ctx.drawImage(bg, -220, 0); ctx.globalAlpha = 1; }
+    ctx.fillStyle = 'rgba(10,6,2,0.72)'; ctx.fillRect(0, 0, 800, 600);
+    pvzText(ctx, '选择关卡 (调试模式)', 400, 46, 30, '#ffe36a');
+    pvzText(ctx, '已解锁全部关卡与小游戏 · 点击任意关卡直接开始', 400, 74, 14, '#d8cfa8');
+    const cells = this.cells();
+    const game = Screens.game;
+    const cur = game.levelId;
+    for (const c of cells) {
+      const hov = Screens.hover === 'lv' + c.lv;
+      const isCur = c.lv === cur;
+      ctx.save();
+      // 关卡卡片
+      const g1 = ctx.createLinearGradient(0, c.y, 0, c.y + c.h);
+      if (isCur) { g1.addColorStop(0, '#c8a028'); g1.addColorStop(1, '#8a6410'); }
+      else if (hov) { g1.addColorStop(0, '#5a9a3a'); g1.addColorStop(1, '#2a6a1a'); }
+      else { g1.addColorStop(0, '#4a3720'); g1.addColorStop(1, '#2a1f10'); }
+      ctx.fillStyle = g1;
+      ctx.strokeStyle = hov || isCur ? '#ffe9a8' : '#1a1208';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(c.x, c.y, c.w, c.h, 8);
+      ctx.fill(); ctx.stroke();
+      ctx.font = 'bold 17px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center'; ctx.fillStyle = '#fff4d0';
+      ctx.fillText(c.label, c.x + c.w / 2, c.y + c.h / 2 + 6);
+      ctx.restore();
+    }
+    // 世界标签
+    const names = ['白天草坪', '夜晚墓园', '泳池派对', '浓雾迷局', '屋顶决战'];
+    names.forEach((n, i) => {
+      pvzText(ctx, n, 390, 86 + 35 + i * 70, 15, '#c8b28a');
+    });
+    // 返回按钮
+    ctx.save();
+    ctx.fillStyle = '#a03a3a';
+    ctx.beginPath(); ctx.roundRect(700, 548, 84, 34, 6); ctx.fill();
+    ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+    ctx.fillText('返 回', 742, 570);
+    ctx.restore();
+    this._back = { x: 700, y: 548, w: 84, h: 34 };
+    this._cells = cells;
+  },
+  click(p, game) {
+    if (this._back && inRect(p, this._back.x, this._back.y, this._back.w, this._back.h)) {
+      game.audio.play('buttonclick');
+      game.state = 'menu';
+      return;
+    }
+    for (const c of (this._cells || [])) {
+      if (inRect(p, c.x, c.y, c.w, c.h)) {
+        game.audio.play('gravebutton');
+        game.startLevel(c.lv);
+        return;
+      }
+    }
+  },
+};
+
 // 悬停检测 (主循环调用)
 Screens.updateHover = function (mouse) {
   if (!mouse) return;
   this.hover = null;
-  if (this.game && this.game.state === 'menu' && this.menu.buttons) {
+  const g = this.game;
+  if (g && g.state === 'menu' && this.menu.buttons) {
     for (const b of this.menu.buttons) {
       if (inRect(mouse, b.x, b.y, b.w, b.h)) { this.hover = b.k; break; }
     }
+  }
+  if (g && g.state === 'levelselect' && this.levelSelect._cells) {
+    for (const c of this.levelSelect._cells) {
+      if (inRect(mouse, c.x, c.y, c.w, c.h)) { this.hover = 'lv' + c.lv; break; }
+    }
+  }
+  if (g && g.state === 'options' && this.options.rects && this.options.rects.unlock) {
+    const u = this.options.rects.unlock;
+    if (inRect(mouse, u.x, u.y, u.w, u.h)) this.hover = 'unlock';
   }
 };
 

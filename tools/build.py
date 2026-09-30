@@ -15,28 +15,75 @@ HTML_HEAD = '''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1a1206">
 <title>植物大战僵尸 · Web 原版复刻版</title>
 <style>
-  html, body { margin:0; padding:0; height:100%; background:#1a1206; overflow:hidden; }
-  #wrap { display:flex; align-items:center; justify-content:center; height:100%; }
-  canvas { max-width:100vw; max-height:100vh; aspect-ratio:4/3; cursor:pointer; box-shadow:0 0 40px rgba(0,0,0,.6); }
+  html, body { margin:0; padding:0; height:100%; background:#1a1206; overflow:hidden;
+               overscroll-behavior:none; -webkit-text-size-adjust:100%; }
+  #wrap { display:flex; align-items:center; justify-content:center; height:100%; height:100dvh;
+          padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+          box-sizing:border-box; }
+  canvas { max-width:100%; max-height:100%; aspect-ratio:4/3; cursor:pointer;
+           box-shadow:0 0 40px rgba(0,0,0,.6);
+           touch-action:none;                       /* 禁止手势滚动/缩放 */
+           -webkit-user-select:none; user-select:none;
+           -webkit-touch-callout:none;              /* 长按不弹菜单 */
+           -webkit-tap-highlight-color:transparent; }
   #overlay { position:fixed; inset:0; background:linear-gradient(160deg,#241a08,#0d0904); color:#ffe9a8;
              display:flex; flex-direction:column; align-items:center; justify-content:center;
-             font-family:"Noto Sans SC","Microsoft YaHei",sans-serif; z-index:10; }
+             font-family:"Noto Sans SC","Microsoft YaHei",sans-serif; z-index:10;
+             padding:16px; box-sizing:border-box; text-align:center; }
   #overlay h1 { font-size:34px; margin-bottom:8px; color:#c8f542; text-shadow:0 2px 8px rgba(0,0,0,.5); }
   #loadtext { font-size:15px; opacity:.85; margin-bottom:18px; }
-  #loadbarwrap { width:340px; height:10px; background:rgba(255,255,255,.12); border-radius:6px; overflow:hidden; }
+  #loadbarwrap { width:min(340px, 80vw); height:10px; background:rgba(255,255,255,.12); border-radius:6px; overflow:hidden; }
   #loadbar { height:100%; width:0%; background:linear-gradient(90deg,#5ad04a,#c8f542); border-radius:6px; transition:width .2s; }
+  /* 移动端竖屏提示 (手机竖屏时可关闭, 不阻断游戏) */
+  #rotate-hint { display:none; position:fixed; top:0; left:0; right:0; z-index:50; background:rgba(26,18,6,.94); color:#ffe9a8;
+    flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:6px;
+    font-family:"Noto Sans SC","Microsoft YaHei",sans-serif; padding:10px 16px;
+    border-bottom:2px solid #c8f542; box-sizing:border-box; }
+  #rotate-hint .icon { font-size:26px; animation:rot 2.2s ease-in-out infinite; display:inline-block; }
+  @keyframes rot { 0%,20% { transform:rotate(0deg);} 55%,80% { transform:rotate(90deg);} 100% { transform:rotate(90deg);} }
+  #rotate-hint h2 { margin:0; font-size:15px; color:#c8f542; }
+  #rotate-hint p { margin:0; font-size:11px; opacity:.8; }
+  #rotate-hint button { margin-top:4px; background:#4a3720; color:#ffe9a8; border:1px solid #8a6a3a; border-radius:6px;
+    font-size:12px; padding:5px 14px; font-family:inherit; cursor:pointer; }
+  @media (orientation:portrait) and (pointer:coarse) and (max-width:920px) {
+    #rotate-hint:not(.dismissed) { display:flex; }
+  }
 </style>
 </head>
 <body>
 <div id="wrap"><canvas id="game" width="800" height="600"></canvas></div>
+<div id="rotate-hint">
+  <span class="icon">📱</span>
+  <h2>建议横屏游玩</h2>
+  <p>旋转手机至横屏获得最佳体验</p>
+  <button id="rotate-dismiss" type="button">仍要竖屏继续</button>
+</div>
 <div id="overlay">
   <h1>植物大战僵尸 · Web 原版复刻版</h1>
   <div id="loadtext">正在准备…</div>
   <div id="loadbarwrap"><div id="loadbar"></div></div>
 </div>
+<script>
+// 竖屏提示关闭逻辑
+(function () {
+  var btn = document.getElementById('rotate-dismiss');
+  var hint = document.getElementById('rotate-hint');
+  if (btn && hint) {
+    try { if (localStorage.getItem('webpvz_rotate_dismissed') === '1') hint.classList.add('dismissed'); } catch (e) { }
+    btn.addEventListener('click', function () {
+      hint.classList.add('dismissed');
+      try { localStorage.setItem('webpvz_rotate_dismissed', '1'); } catch (e) { }
+    });
+  }
+})();
+</script>
 '''
 
 BOOT_JS = '''

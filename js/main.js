@@ -26,6 +26,8 @@ const Game = {
   almanac: { tab: 'plants', page: 0, selected: null },
   selectedCard: -1,
   shovelMode: false,
+  shovelUnlocked: false,   // 铲子解锁 (原版: 1-5 戴夫赠送)
+  debugUnlocked: false,    // 调试模式: 选项屏一键解锁后置位
   justUnlocked: null,
   endless: false,
 
@@ -51,6 +53,7 @@ const Game = {
     try {
       const save = JSON.parse(localStorage.getItem('webpvz_save') || '{}');
       if (save.unlocked) this.progress.unlocked = save.unlocked;
+      if (save.debugUnlocked) this.debugUnlocked = true;
     } catch (e) { }
     // 输入
     this.bindInput();
@@ -90,6 +93,9 @@ const Game = {
     this.canvas.addEventListener('touchstart', e => {
       if (e.touches[0]) { this.onClick(pos(e)); this.audio.resume(); e.preventDefault(); }
     }, { passive: false });
+    // 移动端: 长按/双击不弹菜单/缩放
+    this.canvas.addEventListener('contextmenu', e => e.preventDefault());
+    document.addEventListener('gesturestart', e => e.preventDefault());
     window.addEventListener('keydown', e => {
       if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
         if (this.state === 'playing' && this.board) { this.board.paused = !this.board.paused; this.audio.play('pause'); }
@@ -109,6 +115,7 @@ const Game = {
       case 'award': Screens.award.click(p, this); break;
       case 'note': Screens.note.click(p, this); break;
       case 'lose': Screens.lose.click(p, this); break;
+      case 'levelselect': Screens.levelSelect.click(p, this); break;
       case 'playing': this.gameClick(p); break;
       case 'almanac': this.almanacClick(p); break;
     }
@@ -182,6 +189,8 @@ const Game = {
     if (board.paused) { board.paused = false; return; }
     // 选卡期间: 选卡界面交互
     if (Cutscene.active && Cutscene.seedChoosing) { this.seedChooseClick(p); return; }
+    // 戴夫对话 (1-5 赠铲子): 点击推进
+    if (Cutscene.active && Cutscene.davePhase) { Cutscene.daveClick(); return; }
     // 开场过场: 点击跳过 (不跳选卡关)
     if (Cutscene.active) {
       if (!Cutscene.board.level.chooseSeeds) Cutscene.t = Math.max(Cutscene.t, 5.9);
@@ -189,15 +198,17 @@ const Game = {
     }
     // 菜单按钮 (原版石质按钮 681,-10,117,46)
     if (p.x > 681 && p.x < 798 && p.y > 0 && p.y < 36) { this.abandonLevel(); return; }
-    // 铲子 (原版: (extra+456, 0) 70x72)
-    const cards = board.seedCards;
-    const extra = cards.length <= 6 ? 0 : cards.length === 7 ? 60 : cards.length === 8 ? 76 : cards.length === 9 ? 112 : 153;
-    const sx = extra + 456;
-    if (p.x > sx && p.x < sx + 70 && p.y > 0 && p.y < 72) {
-      this.shovelMode = !this.shovelMode;
-      this.selectedCard = -1;
-      this.audio.play('shovel');
-      return;
+    // 铲子 (原版: (extra+456, 0) 70x72; 1-4 关无铲子, 1-5 戴夫赠送后解锁)
+    if (this.shovelUnlocked) {
+      const cards0 = board.seedCards;
+      const extra0 = cards0.length <= 6 ? 0 : cards0.length === 7 ? 60 : cards0.length === 8 ? 76 : cards0.length === 9 ? 112 : 153;
+      const sx = extra0 + 456;
+      if (p.x > sx && p.x < sx + 70 && p.y > 0 && p.y < 72) {
+        this.shovelMode = !this.shovelMode;
+        this.selectedCard = -1;
+        this.audio.play('shovel');
+        return;
+      }
     }
     // 阳光收集
     for (const s of board.suns) {
@@ -371,8 +382,13 @@ const Game = {
   },
 
   // ---------- 流程 (原版冒险: 线性推进) ----------
-  // 主菜单点击冒险 → 下一未通关卡
+  // 主菜单点击冒险 → 下一未通关卡 (全解锁调试模式 → 关卡选择屏)
   startAdventure() {
+    if (this.debugUnlocked && this.progress.unlocked > 50) {
+      this.state = 'levelselect';
+      Screens.levelSelect.enter();
+      return;
+    }
     const lv = Math.min(this.progress.unlocked, 50);
     this.startLevel(lv);
   },
@@ -382,6 +398,10 @@ const Game = {
     this.endless = false;
     this.levelDef = LEVELS[lv - 1];
     const level = this.levelDef;
+    // 铲子解锁 (原版 ShowShovel: 首次冒险 1-4 无铲子, 1-5 戴夫对话末尾赠送, 之后常驻; 重玩旧关直接有)
+    const firstTime = this.progress.unlocked <= lv;
+    if (lv === 5 && firstTime) this.shovelUnlocked = false;   // 1-5 首次: 由戴夫对话解锁
+    else this.shovelUnlocked = lv >= 5 || !firstTime;
     const board = new Board(this, level);
     this.board = board;
     this.selectedCard = -1;
@@ -434,8 +454,8 @@ const Game = {
     const lv = this.levelId;
     const level = LEVELS[lv - 1];
     if (lv >= this.progress.unlocked) {
-      this.progress.unlocked = Math.min(50, lv + 1);
-      try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked })); } catch (e) { }
+      this.progress.unlocked = Math.min(51, lv + 1);
+      try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked, debugUnlocked: this.debugUnlocked || undefined })); } catch (e) { }
     }
     // 奖励判定 (原版): X-5/X-10 → 纸条; 其余有新植物 → 植物奖励; 5-10 → 通关
     this.justUnlocked = awardPlantForLevel(lv);
@@ -508,6 +528,7 @@ const Game = {
       case 'note': Screens.note.draw(ctx); break;
       case 'lose': Screens.lose.draw(ctx); break;
       case 'almanac': UI.drawAlmanac(ctx); break;
+      case 'levelselect': Screens.levelSelect.draw(ctx); break;
       case 'playing': {
         Renderer.drawBoard(ctx, this.board);
         UI.drawGameHUD(ctx, this.board);
@@ -547,7 +568,7 @@ const Game = {
         ctx.restore();
       }
     }
-    if (this.shovelMode) {
+    if (this.shovelMode && this.shovelUnlocked) {
       ctx.save();
       ctx.globalAlpha = 0.8;
       const shovel = Assets.image('shovel_hi_res') || Assets.image('shovel');

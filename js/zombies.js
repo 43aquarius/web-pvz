@@ -261,35 +261,60 @@ class Zombie {
     }
   }
 
-  // 普通僵尸变体轨道设置 (原版 SetupReanimLayers)
+  // 普通僵尸变体轨道设置 (原版 SetupReanimLayers + SetupDoorArms 完整移植)
   setupPlainZombie(opts = {}) {
     const a = this.anim;
     const hide = (p) => a.showPrefix(p, false);
+    const show = (p) => a.showPrefix(p, true);
     hide('anim_cone'); hide('anim_bucket'); hide('anim_screendoor');
     hide('Zombie_flaghand'); hide('Zombie_duckytube'); hide('anim_tongue'); hide('Zombie_mustache');
+    // 原版 SetupDoorArms(false): 门臂轨道默认隐藏 — 否则普通僵尸会多出两条手臂/手!
+    // (Zombie_innerarm_screendoor + Zombie_innerarm_screendoor_hand + Zombie_outerarm_screendoor)
+    this.setupDoorArms(false);
     // 水行显示救生圈
     if (this.board.waterRows.includes(this.row) || this.type === 'DUCKY') {
-      a.showPrefix('Zombie_duckytube', true);
+      show('Zombie_duckytube');
     }
     switch (this.type) {
       case 'CONE':
-        a.showPrefix('anim_cone', true); hide('anim_hair');
+        show('anim_cone'); hide('anim_hair');
         a.setImageOverride('anim_cone', 'zombie_cone1');
         break;
       case 'BUCKET':
-        a.showPrefix('anim_bucket', true); hide('anim_hair');
+        show('anim_bucket'); hide('anim_hair');
         a.setImageOverride('anim_bucket', 'zombie_bucket1');
         break;
       case 'DOOR':
-        a.showPrefix('anim_screendoor', true);
-        a.showPrefix('Zombie_innerarm_screendoor', true);
-        a.showPrefix('Zombie_outerarm_screendoor', true);
-        a.showPrefix('Zombie_innerarm_screendoor_hand', true);
+        // 原版 SetupDoorArms(true): 隐藏正常双臂, 显示门臂
+        this.setupDoorArms(true);
+        show('anim_screendoor');
+        break;
+      case 'FLAG':
+        // 原版: 隐藏内臂, 显示旗手+持旗臂 (Zombie_innerarm_screendoor 为持旗轨道)
+        hide('anim_innerarm');
+        show('Zombie_flaghand');
+        a.showTrack('Zombie_innerarm_screendoor', true);
         break;
       case 'FOOTBALL':
         hide('anim_hair');
         break;
     }
+  }
+
+  // 原版 Zombie::SetupDoorArms(theShow):
+  //   show=true  → 隐藏正常双臂(outerarm_hand/lower/upper + anim_innerarm), 显示门臂三轨
+  //   show=false → 显示正常双臂, 隐藏门臂三轨
+  setupDoorArms(showDoor) {
+    const a = this.anim;
+    const armGroup = !showDoor;   // 正常臂可见性
+    const doorGroup = !!showDoor; // 门臂可见性
+    a.showPrefix('Zombie_outerarm_hand', armGroup);
+    a.showPrefix('Zombie_outerarm_lower', armGroup);
+    a.showPrefix('Zombie_outerarm_upper', armGroup);
+    a.showPrefix('anim_innerarm', armGroup);
+    a.showPrefix('Zombie_outerarm_screendoor', doorGroup);
+    a.showPrefix('Zombie_innerarm_screendoor', doorGroup);
+    a.showPrefix('Zombie_innerarm_screendoor_hand', doorGroup);
   }
 
   // ---------- 护甲金属判定 ----------
@@ -1074,10 +1099,9 @@ class Zombie {
   }
   dropShield(board) {
     if (this.shieldType === 'screendoor') {
+      // 门掉落: 门与门臂隐藏, 恢复正常双臂 (原版 ShowDoorArms(false))
       this.anim.showPrefix('anim_screendoor', false);
-      this.anim.showPrefix('Zombie_innerarm_screendoor', false);
-      this.anim.showPrefix('Zombie_outerarm_screendoor', false);
-      this.anim.showPrefix('Zombie_innerarm_screendoor_hand', false);
+      this.setupDoorArms(false);
     }
     if (this.shieldType === 'newspaper') {
       this.anim.showPrefix('Zombie_paper_paper', false);

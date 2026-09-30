@@ -39,16 +39,43 @@ class Plant {
     this.aiming = false;
     this.magnetCD = 0;
     this.magnetItems = [];
-    // 分层动画 (原版: 身体+头部为独立reanim实例)
+    // 分层动画 (原版: 身体+头部为独立reanim实例, 头部 AttachToAnotherReanimation 到身体轨道)
     this.anims = [];
     const layerList = this.def.layers || [[this.def.anim || 'anim_idle']];
     for (const [layerAnim] of layerList) {
       const r = Assets.reanim(this.def.reanim);
       r.play(layerAnim, RE.LOOP, 9 + Math.random() * 5);
       r.shown = true;
-      this.anims.push({ r, base: layerAnim, head: /head|splitpea/.test(layerAnim) });
+      this.anims.push({ r, base: layerAnim, head: /head|splitpea/.test(layerAnim), shooting: false, attached: false });
     }
     this.anim = this.anims[0].r; // 兼容旧引用
+    // ---- 头部挂载 (原版 Plant::Plant 219-287: AttachToAnotherReanimation) ----
+    // 原版: PEASHOOTER/SNOWPEA/REPEATER/GATLINGPEA → anim_stem(无则anim_idle)
+    //       SPLITPEA → 双头都挂 anim_idle | THREEPEATER → 头1/2/3 挂 anim_head1/2/3
+    if (this.anims.length > 1) {
+      const body = this.anims[0].r;
+      if (this.type === 'THREEPEATER') {
+        ['anim_head1', 'anim_head2', 'anim_head3'].forEach((tr, i) => {
+          const L = this.anims[1 + i];
+          if (!L) return;
+          if (body.trackExists(tr)) {
+            const ti = body.trackIndex(tr);
+            body.attach[ti] = [L.r];
+            L.attached = true;
+          }
+        });
+      } else {
+        // 单头/双头(SPLITPEA): 挂到 anim_stem (存在) 否则 anim_idle
+        const track = body.trackExists('anim_stem') ? 'anim_stem'
+          : body.trackExists('anim_idle') ? 'anim_idle' : null;
+        if (track) {
+          const ti = body.trackIndex(track);
+          const heads = this.anims.slice(1).map(L => L.r);
+          body.attach[ti] = heads.length === 1 ? heads[0] : heads;
+          for (const L of this.anims.slice(1)) L.attached = true;
+        }
+      }
+    }
     this.squashTarget = null;
     this.butterStun = 0;      // 被黄油定身
     this.frozen = 0;          // 被冰球冻结
@@ -82,7 +109,7 @@ class Plant {
     this.sleeping = asleep;
     for (const L of this.anims) {
       if (asleep) {
-        if (L.r.trackExists('anim_sleep')) L.r.play('anim_sleep', RE.LOOP, 6);
+        if (L.r.animExists('anim_sleep')) L.r.play('anim_sleep', RE.LOOP, 6);
       } else {
         L.r.play(L.base, RE.LOOP, 12);
       }
@@ -93,7 +120,14 @@ class Plant {
 
   update(dt, board) {
     if (this.dead) return;
-    for (const L of this.anims) L.r.update(dt);
+    for (const L of this.anims) {
+      L.r.update(dt);
+      // 头部射击动画播完 → 回到基础待机 (原版 UpdatePlant: mHeadReanim 播完重置)
+      if (L.head && L.shooting && L.r.loopCount > 0) {
+        L.shooting = false;
+        L.r.play(L.base, RE.LOOP, 12);
+      }
+    }
     this.eatFlash = Math.max(0, this.eatFlash - dt);
     this.butterStun = Math.max(0, this.butterStun - dt);
     this.frozen = Math.max(0, this.frozen - dt);
@@ -154,8 +188,8 @@ class Plant {
           if (this.growT > d.growTime) {
             this.grown = true;
             for (const L of this.anims) {
-              if (L.r.trackExists('anim_grow')) L.r.play('anim_grow', RE.PLAY_ONCE_HOLD, 12);
-              else if (L.r.trackExists('anim_bigidle')) L.r.play('anim_bigidle', RE.LOOP, 10);
+              if (L.r.animExists('anim_grow')) L.r.play('anim_grow', RE.PLAY_ONCE_HOLD, 12);
+              else if (L.r.animExists('anim_bigidle')) L.r.play('anim_bigidle', RE.LOOP, 10);
             }
           }
         }
@@ -359,8 +393,8 @@ class Plant {
       for (const L of this.anims) {
         if (L.head) {
           const shootAnim = a || L.base.replace('idle', 'shooting');
-          if (L.r.trackExists(shootAnim)) L.r.play(shootAnim, RE.PLAY_ONCE_HOLD, rate || 24);
-          else if (L.r.trackExists(L.base)) L.r.play(L.base, RE.LOOP, 12);
+          if (L.r.animExists(shootAnim)) { L.r.play(shootAnim, RE.PLAY_ONCE_HOLD, rate || 24); L.shooting = true; }
+          else if (L.r.animExists(L.base)) L.r.play(L.base, RE.LOOP, 12);
         }
       }
     };
@@ -522,7 +556,7 @@ class Plant {
       if (this._nutStage !== img) {
         this._nutStage = img;
         // 通过 OverrideScale的y位移或轨道… 简化: 播放对应受击动画
-        for (const L of this.anims) if (L.r.trackExists('anim_cracked' + img)) L.r.play('anim_cracked' + img, RE.LOOP, 12);
+        for (const L of this.anims) if (L.r.animExists('anim_cracked' + img)) L.r.play('anim_cracked' + img, RE.LOOP, 12);
       }
     }
   }
@@ -551,6 +585,7 @@ class Plant {
     }
     const sc = this.buildT < 0.25 ? Math.min(1, 0.6 + this.buildT * 1.6) : 1;
     for (const L of this.anims) {
+      if (L.attached) continue;   // 已由身体轨道挂载绘制 (保持图层顺序)
       L.r.x = this.x;
       L.r.y = dy;
       L.r.scale = sc;

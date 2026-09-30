@@ -9,10 +9,11 @@
 //   4500-4750 选卡界面滑出
 //   4500-6000 镜头左移回正 (cam → 0)
 //   6050-6550 割草机逐行出现 (+草皮/墓碑偏移)
-//   6000-8000 草皮卷铺设 (1/2/4 关首次)
+//   6000-8000 草皮卷铺设 (1/2/4 关首次冒险)
 //   6000-7000 墓碑浮现 (夜关, +草皮偏移)
 //   6550+1830 READY-SET-PLANT (SodRoll/墓碑时间顺延)
 //   结束 = 6000+550+sod+grave+1830
+// 戴夫过场 (1-5 首次): t=2000 Dave入场 → 对话(点击推进) → 赠送铲子 → 离场
 // ============================================================
 'use strict';
 
@@ -71,9 +72,18 @@ const Cutscene = {
     this.gravesShown = false;
     board.sodRolls = [];
     const level = board.level;
-    // 时间分量
-    this.sodTime = level.sodRoll ? 2000 : 0;
+    // 首次冒险判定 (原版 IsFirstTimeAdventureMode): 已解锁 ≤ 本关 → 首次
+    this.firstTime = board.game && board.game.progress ? board.game.progress.unlocked <= level.id : true;
+    // 时间分量 (原版: 首次冒险且关号 1/2/4 才滚草皮)
+    this.sodTime = (level.sodRoll && this.firstTime) ? 2000 : 0;
     this.graveTime = (level.graves && level.graves.length) ? 1000 : 0;
+    // 戴夫过场 (原版: 1-5 保龄球关首次冒险, 对话 2400 系列 → 2406 赠送铲子)
+    this.daveMode = level.id === 5 && this.firstTime;
+    this.davePhase = null;        // null → enter → talk → gift → leave → null
+    this.daveT = 0;
+    this.daveLine = 0;
+    this.daveAnim = null;
+    this.daveTalkT = 0;
     // 房子文案 (原版 [PLAYERS_HOUSE])
     this.houseMsg = level.scene === 'day' || level.scene === 'night' ? '玩家之家'
       : level.scene === 'pool' || level.scene === 'fog' ? '玩家的后院' : '玩家的屋顶';
@@ -87,7 +97,9 @@ const Cutscene = {
     // 街边僵尸 (原版 PlaceAZombie: gridX*56+830, gridY*90+70, 5x5网格)
     this.placeStreetZombies(board);
     board.state = 'intro';
-    board.cutsceneSod = level.sodRoll ? 0 : undefined;
+    // 非滚草皮关: 草皮直接完整 (原版 mSodPosition=1000)
+    board.cutsceneSod = this.sodTime > 0 ? 0 : undefined;
+    board.sodDone = this.sodTime <= 0;
     // 需要重新隐藏已放置植物? 不需要 — 原版开局植物只在1-5保龄球等关卡
   },
 
@@ -149,6 +161,8 @@ const Cutscene = {
   update(dt) {
     if (!this.active) return;
     if (this.seedChoosing) return;   // 选卡期间暂停时间轴
+    // ---- 戴夫过场 (1-5): 入场/对话/离场, 期间主时间轴暂停 ----
+    if (this.daveMode) { this.updateDave(dt); if (this.davePhase) return; }
     this.t += dt;
     const t = this.t * 1000;         // ms
     const board = this.board;
@@ -261,7 +275,7 @@ const Cutscene = {
     const lvl = board.level.id;
     // 原版 CutScene.cpp 1202-1226: 不同关卡滚筒偏移
     const offsets = lvl === 1 ? [[0, 0]]
-      : (lvl === 2 || lvl === 3) ? [[0, -102], [0, 111]]
+      : lvl === 2 ? [[0, -102], [0, 111]]
         : [[-3, -198], [-3, 203]];
     for (const [ox, oy] of offsets) {
       const r = Assets.reanim('SodRoll');
@@ -284,7 +298,7 @@ const Cutscene = {
     // 滚筒前沿 x (轨道 x: 10→770)
     const fx = 10 + 760 * p;
     // 滚筒所在行 y (轨道 y≈244 + 偏移)
-    const rows = lvl === 1 ? [0] : (lvl === 2 || lvl === 3) ? [-102, 111] : [-198, 203];
+    const rows = lvl === 1 ? [0] : lvl === 2 ? [-102, 111] : [-198, 203];
     const colors = ['#7a5a30', '#8a6a3a', '#6a4a28', '#9a7a48'];
     const oy = rows[Math.floor(Math.random() * rows.length)];
     const y = 300 + oy;
@@ -295,11 +309,168 @@ const Cutscene = {
     });
   },
 
+  // ============================================================
+  // 戴夫过场 (原版 1-5 坚果保龄球关: 对话 2400→2406, 末句赠送铲子)
+  // 时间轴: t=2000 入场(0.75s) → 对话(点击推进, 主时间轴暂停) → 赠铲 → 离场
+  // ============================================================
+  daveLines() {
+    return [
+      '嘿！邻居！我是疯狂戴夫！',
+      '看看这些坚果墙！又硬又圆，',
+      '把它们滚向僵尸——就像保龄球一样！',
+      '僵尸是球瓶，坚果就是保龄球！',
+      '哦对了，差点忘了——这把铲子送给你！',
+      '拿起铲子就能把植物挖出来啦！我走了，僵尸让我紧张！',
+    ];
+  },
+
+  updateDave(dt) {
+    const game = this.board.game;
+    const t = this.t * 1000;
+    if (!this.daveAnim && RE.hasDef('CrazyDave')) {
+      const d = Assets.reanim('CrazyDave');
+      d.x = 170; d.y = 88;
+      this.daveAnim = d;
+    }
+    if (!this.davePhase && t >= 1500) {
+      // 入场 (在镜头右移之前冻结时间轴: 原版 mCrazyDaveTime 将右移推迟到 Dave 离场后)
+      this.davePhase = 'enter';
+      this.daveT = 0;
+      this.t = 1.5;              // 冻结在镜头房子视图 (cam=-220)
+      if (this.daveAnim) this.daveAnim.play('anim_enter', RE.PLAY_ONCE_HOLD, 24);
+      game.audio.play('dave_short');
+    }
+    if (this.davePhase === 'enter') {
+      this.daveT += dt;
+      if (this.daveAnim) this.daveAnim.update(dt);
+      if (this.daveT >= 0.75) {
+        this.davePhase = 'talk';
+        this.daveLine = 0;
+        this.daveTalkT = 0;
+        if (this.daveAnim) this.daveAnim.play('anim_mediumtalk', RE.LOOP, 18);
+        game.audio.play('dave_medium');
+      }
+    } else if (this.davePhase === 'talk') {
+      this.daveTalkT += dt;
+      if (this.daveAnim) {
+        this.daveAnim.update(dt);
+        // 说话动画循环切换
+        if (this.daveTalkT > 1.6) {
+          this.daveTalkT = 0;
+          const next = ['anim_smalltalk', 'anim_mediumtalk', 'anim_blahblah'][Math.floor(Math.random() * 3)];
+          this.daveAnim.play(next, RE.LOOP, 16 + Math.random() * 8);
+          game.audio.play(Math.random() < 0.5 ? 'dave_short' : 'dave_medium');
+        }
+      }
+    } else if (this.davePhase === 'gift') {
+      this.daveT += dt;
+      if (this.daveAnim) this.daveAnim.update(dt);
+    } else if (this.davePhase === 'leave') {
+      this.daveT += dt;
+      if (this.daveAnim) this.daveAnim.update(dt);
+      if (this.daveT >= 0.62) {
+        // 离场完成 → 恢复主时间轴
+        this.davePhase = null;
+        this.daveAnim = null;
+        this.daveMode = false;
+      }
+    }
+  },
+
+  // 点击推进对话 (由 gameClick 转发)
+  daveClick() {
+    const game = this.board.game;
+    if (this.davePhase === 'enter') { this.daveT = Math.max(this.daveT, 0.74); return true; }
+    if (this.davePhase === 'talk') {
+      const lines = this.daveLines();
+      this.daveLine++;
+      if (this.daveLine >= lines.length - 1) {
+        // 末句前: 赠送铲子 (原版 2406: "拿起铲子开始挖吧")
+        game.shovelUnlocked = true;
+        game.audio.play('dave_crazy');
+        if (this.daveAnim) this.daveAnim.play('anim_crazy', RE.PLAY_ONCE_HOLD, 20);
+        this.davePhase = 'gift';
+        this.daveT = 0;
+        return true;
+      }
+      game.audio.play(Math.random() < 0.5 ? 'dave_short' : 'dave_medium');
+      return true;
+    }
+    if (this.davePhase === 'gift') {
+      // 点击 → 戴夫离场
+      if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
+      this.davePhase = 'leave';
+      this.daveT = 0;
+      game.audio.play('dave_short');
+      return true;
+    }
+    return false;
+  },
+
+  // 绘制戴夫 + 对话框 (叠加在 board 之上)
+  drawDave(ctx) {
+    if (!this.daveMode || !this.daveAnim) return;
+    this.daveAnim.draw(ctx);
+    // 对话框 (原版风格: 羊皮纸圆角框 + 底部文字)
+    if (this.davePhase === 'talk' || this.davePhase === 'gift') {
+      const lines = this.daveLines();
+      const text = this.davePhase === 'gift' ? lines[lines.length - 1] : lines[this.daveLine];
+      const bx = 400, by = 470, bw = 560, bh = 88;
+      ctx.save();
+      ctx.globalAlpha = 0.96;
+      // 羊皮纸底
+      const grad = ctx.createLinearGradient(0, by, 0, by + bh);
+      grad.addColorStop(0, '#f5e7c0'); grad.addColorStop(1, '#e0c48a');
+      ctx.fillStyle = grad;
+      ctx.strokeStyle = '#7a5222'; ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.roundRect(bx - bw / 2, by, bw, bh, 16);
+      ctx.fill(); ctx.stroke();
+      // 文本 (自动换行)
+      ctx.fillStyle = '#4a2f10';
+      ctx.font = 'bold 19px "Noto Sans SC", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      this.wrapText(ctx, text, bx, by + 34, bw - 60, 26);
+      // 继续指示
+      const a = 0.5 + 0.5 * Math.sin(this.daveTalkT * 6);
+      ctx.globalAlpha = a;
+      ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#8a6a2a';
+      ctx.fillText('点击继续', bx, by + bh - 12);
+      ctx.restore();
+      // 赠送铲子高亮
+      if (this.davePhase === 'gift') {
+        const shovel = Assets.image('shovel_hi_res') || Assets.image('shovel.png');
+        if (shovel) {
+          const bob = Math.sin(this.daveT * 4) * 6;
+          ctx.save();
+          ctx.translate(560, 300 + bob);
+          ctx.rotate(-0.5 + Math.sin(this.daveT * 2) * 0.1);
+          ctx.shadowColor = 'rgba(255,240,140,0.9)'; ctx.shadowBlur = 24;
+          ctx.drawImage(shovel, -28, -40, 56, 80);
+          ctx.restore();
+        }
+      }
+    }
+  },
+
+  wrapText(ctx, text, cx, y, maxW, lineH) {
+    const chars = Array.from(text);
+    const lines = [];
+    let cur = '';
+    for (const ch of chars) {
+      if (ctx.measureText(cur + ch).width > maxW) { lines.push(cur); cur = ch; }
+      else cur += ch;
+    }
+    if (cur) lines.push(cur);
+    lines.forEach((ln, i) => ctx.fillText(ln, cx, y + i * lineH));
+  },
+
   // ---- 绘制 (叠加在 board 渲染之上) ----
   draw(ctx, board) {
     const t = this.t * 1000;
     // 1. 房子文案 (原版 MESSAGE_STYLE_HOUSE_NAME: 镜头房子期间)
-    if (t < 3600 && this.houseMsg) {
+    if (t < 3600 && this.houseMsg && !this.davePhase) {
       const a = t < 300 ? t / 300 : (t > 3300 ? Math.max(0, (3600 - t) / 300) : 1);
       ctx.save();
       ctx.globalAlpha = a;
@@ -311,6 +482,8 @@ const Cutscene = {
       ctx.fillText(this.houseMsg, 400, 110);
       ctx.restore();
     }
+    // 1.5 戴夫过场 (1-5 赠铲子)
+    this.drawDave(ctx);
     // 2. READY-SET-PLANT (reanim, 居中)
     if (this.rspAnim) {
       this.rspAnim.update(1 / 60);

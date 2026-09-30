@@ -82,6 +82,11 @@ const Audio2 = (function () {
     bungee_scream: 'SFX/zombie/bungee_scream.ogg',
     groan_spawn: 'SFX/zombie/groan/groan3.ogg',
     vase_breaking: 'sounds/vase_breaking.ogg',
+    // 疯狂戴夫语音 (SFX/carzy/ 目录)
+    dave_short: 'SFX/carzy/crazydaveshort1.ogg', dave_short2: 'SFX/carzy/crazydaveshort2.ogg', dave_short3: 'SFX/carzy/crazydaveshort3.ogg',
+    dave_medium: 'SFX/carzy/crazydavelong1.ogg', dave_medium2: 'SFX/carzy/crazydavelong2.ogg', dave_medium3: 'SFX/carzy/crazydavelong3.ogg',
+    dave_crazy: 'SFX/carzy/crazydavecrazy.ogg',
+    dave_scream: 'SFX/carzy/crazydavescream.ogg',
   };
 
   function url(file) {
