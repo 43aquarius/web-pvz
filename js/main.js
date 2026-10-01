@@ -5,7 +5,7 @@
 // ============================================================
 'use strict';
 
-const { CONST, PLANTS, ZOMBIES, LEVELS, availablePlants, MUSHROOMS, AQUATIC, GROUNDCOVER, awardPlantForLevel } = require('./data');
+const { CONST, PLANTS, ZOMBIES, LEVELS, MODE_LEVELS, availablePlants, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, UPGRADE_ORDER, SHOP_ITEMS, awardPlantForLevel } = require('./data');
 const { Board } = require('./board');
 const { Plant } = require('./plants');
 const { Zombie } = require('./zombie');
@@ -30,6 +30,11 @@ const Game = {
   debugUnlocked: false,    // 调试模式: 选项屏一键解锁后置位
   justUnlocked: null,
   endless: false,
+  selectedZombieCard: -1,   // 我不是僵尸: 选中的僵尸卡
+  menuDialog: null,         // 游戏内菜单对话框 (#14: 菜单按钮 → 菜单页而非直接回主菜单)
+  coins: 0,                 // 金币 (戴夫商店货币, 原版 $)
+  purchased: {},            // 商店已购物 { key: true }
+  shopTab: 'items',         // 商店页签
 
   async boot() {
     if (this._booted) return; this._booted = true;
@@ -55,7 +60,12 @@ const Game = {
       const save = JSON.parse(localStorage.getItem('webpvz_save') || '{}');
       if (save.unlocked) this.progress.unlocked = save.unlocked;
       if (save.debugUnlocked) this.debugUnlocked = true;
+      if (save.coins) this.coins = save.coins;
+      if (save.purchased) this.purchased = save.purchased;
+      this.daveSeen = JSON.parse(localStorage.getItem('webpvz_dave') || '{}');
     } catch (e) { }
+    this.daveSeen = this.daveSeen || {};
+    this.purchasedSet = new Set(Object.keys(this.purchased));
     // 输入
     this.bindInput();
     // 开始
@@ -98,9 +108,12 @@ const Game = {
     document.addEventListener('gesturestart', e => e.preventDefault());
     window.addEventListener('keydown', e => {
       if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
-        if (this.state === 'playing' && this.board) { this.board.paused = !this.board.paused; this.audio.play('pause'); }
+        if (this.state === 'playing' && this.board) {
+          if (this.menuDialog) this.closeMenuDialog();
+          else this.openMenuDialog();
+        }
       }
-      if (e.key === ' ' && this.state === 'playing' && this.board) {
+      if (e.key === ' ' && this.state === 'playing' && this.board && !this.menuDialog) {
         this.board.speed = this.board.speed === 1 ? 2 : this.board.speed === 2 ? 4 : 1;
       }
     });
@@ -116,6 +129,9 @@ const Game = {
       case 'note': Screens.note.click(p, this); break;
       case 'lose': Screens.lose.click(p, this); break;
       case 'levelselect': Screens.levelSelect.click(p, this); break;
+      case 'modeselect': Screens.modeSelect.click(p, this); break;
+      case 'shop': Screens.shop.click(p, this); break;
+      case 'modewin': Screens.modeWin.click(p, this); break;
       case 'playing': this.gameClick(p); break;
       case 'almanac': this.almanacClick(p); break;
     }
@@ -137,7 +153,7 @@ const Game = {
     }
     // 随机 (原版 (332,546,100,30))
     if (q.x >= 332 && q.x <= 432 && q.y >= 546 && q.y <= 576) {
-      const pool = availablePlants(this.levelId);
+      const pool = availablePlants(this.levelId, this.purchasedSet);
       const n = Math.min(board.seedSlots, pool.length);
       board.chosenSeeds = shuffle(pool.slice()).slice(0, n);
       board.seedCards = board.chosenSeeds.map(t => ({ type: t, cd: 0 }));
@@ -145,7 +161,7 @@ const Game = {
       return;
     }
     // 卡片切换 (原版网格: col*53+22, row*73+128)
-    const pool = availablePlants(this.levelId);
+    const pool = availablePlants(this.levelId, this.purchasedSet);
     let changed = false;
     pool.forEach((type, i) => {
       const gx = (i % 8) * 53 + 22;
@@ -184,9 +200,20 @@ const Game = {
     }
   },
 
+  markDaveSeen(lv) {
+    this.daveSeen[lv] = true;
+    try { localStorage.setItem('webpvz_dave', JSON.stringify(this.daveSeen)); } catch (e) { }
+  },
+
   gameClick(p) {
     const board = this.board;
+    // ---- 游戏内菜单对话框 (打开时仅响应对话框) ----
+    if (this.menuDialog) { this.menuDialogClick(p); return; }
     if (board.paused) { board.paused = false; return; }
+    // ---- 菜单按钮 (原版: 打开选项菜单 = 暂停; 选卡期间同样可用 #15) ----
+    if (p.x > 681 && p.x < 798 && p.y > 0 && p.y < 36) { this.openMenuDialog(); return; }
+    // ---- 特殊模式点击路由 (打僵尸/罐子/我不是僵尸/雨天种子/宝石/坚不可摧) ----
+    if (board.modeClick && board.modeClick(this, p)) return;
     // 选卡期间: 选卡界面交互
     if (Cutscene.active && Cutscene.seedChoosing) { this.seedChooseClick(p); return; }
     // 戴夫对话 (1-5 赠铲子): 点击推进
@@ -196,8 +223,6 @@ const Game = {
       if (!Cutscene.board.level.chooseSeeds) Cutscene.t = Math.max(Cutscene.t, 5.9);
       return;
     }
-    // 菜单按钮 (原版石质按钮 681,-10,117,46)
-    if (p.x > 681 && p.x < 798 && p.y > 0 && p.y < 36) { this.abandonLevel(); return; }
     // 铲子 (原版: (extra+456, 0) 70x72; 1-4 关无铲子, 1-5 戴夫赠送后解锁)
     if (this.shovelUnlocked) {
       const cards0 = board.seedCards;
@@ -210,10 +235,29 @@ const Game = {
         return;
       }
     }
-    // 阳光收集
+    // 阳光/种子包收集 (challenge token 与普通阳光统一)
     for (const s of board.suns) {
-      if (!s.collected && Math.abs(p.x - s.x) < 35 && Math.abs(p.y - s.y) < 35) {
-        board.collectSun(s);
+      if (s.collected || s.dead || s.collecting) continue;
+      const hitW = s.kind === 'seedpacket' ? 30 : 35;
+      if (Math.abs(p.x - s.x) < hitW + 5 && Math.abs(p.y - s.y) < hitW + 5) {
+        if (s.kind) {
+          // challenge token: 阳光→加钱 种子包→拾取为手持卡
+          s.collecting = true;
+          if (s.kind === 'sun') {
+            s.onCollect = () => { board.sun += (s.value || 25); };
+            this.audio.play('points');
+          } else if (s.kind === 'seedpacket') {
+            s.onCollect = () => {
+              if (board.challenge) {
+                if (board.challenge.rainCards) board.challenge.heldCards.push({ type: s.type, life: 14 });
+                else board.challenge.heldType = s.type;
+              }
+            };
+            this.audio.play('seedlift');
+          }
+        } else {
+          board.collectSun(s);
+        }
         return;
       }
     }
@@ -221,18 +265,58 @@ const Game = {
     for (const c of board.coins) {
       if (!c.collected && Math.abs(p.x - c.x) < 30 && Math.abs(p.y - c.y) < 30) {
         c.collected = true;
-        board.sun += c.value;
+        this.coins += c.value;
+        this.coinsEarned = (this.coinsEarned || 0) + c.value;
+        this.saveShop();
         this.audio.play('points');
         return;
       }
     }
-    // 选卡
+    // ---- 特殊模式点击 (challenge.js: 罐子/锤子/老虎机/我是僵尸/宝石/坚不可摧) ----
+    if (board.modeClick(this, p)) return;
+    // ---- 传送带: 点击带上卡片 → 拾取 (原版 ClickOnSeed) ----
+    if (board.mode === 'conveyor' && board.challenge && board.challenge.beltItems) {
+      const ch = board.challenge;
+      const yOff = Cutscene.active ? Cutscene.seedBankY : 0;
+      for (let i = 0; i < ch.beltItems.length; i++) {
+        const it = ch.beltItems[i];
+        const bx = 91 + it.offsetX;
+        if (p.x > bx && p.x < bx + 50 && p.y > 7 + yOff && p.y < 77 + yOff) {
+          if (ch.heldType) {
+            // 已持卡: 放回 (原版不可覆盖, 只能先种)
+            this.audio.play('buzzer');
+          } else {
+            ch.heldType = it.type;
+            this.selectedCard = 900 + i;
+            ch.removeSeed(i);
+            this.audio.play('seedlift');
+          }
+          return;
+        }
+      }
+      // 点击已拾取的卡(顶栏左侧显示) → 取消选择放回? 原版: 只能种植, 右键取消; web简化: 再点卡区无效
+      return;
+    }
+    // ---- 雨天种子: 持有卡选择 ----
+    if (board.mode === 'raining' && board.challenge) {
+      const held = board.challenge.heldCards || [];
+      for (let i = 0; i < held.length; i++) {
+        const x = 130 + i * 60;
+        if (p.x > x && p.x < x + 50 && p.y > 6 && p.y < 76) {
+          this.selectedCard = this.selectedCard === i ? -1 : i;
+          this.audio.play('seedlift');
+          return;
+        }
+      }
+    }
+    // ---- 常规选卡 ----
     const cards = board.seedCards;
     for (let i = 0; i < cards.length; i++) {
       const x = this.packetX(i, cards.length);
       if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
         const c = cards[i];
-        if (c.cd <= 0 && board.sun >= PLANTS[c.type].cost) {
+        const free = board.mode === 'conveyor';   // 传送带关卡无阳光花费
+        if (c.cd <= 0 && (free || board.sun >= PLANTS[c.type].cost)) {
           this.selectedCard = this.selectedCard === i ? -1 : i;
           this.shovelMode = false;
           this.audio.play('seedlift');
@@ -245,19 +329,48 @@ const Game = {
     if (cell) {
       const [col, row] = cell;
       if (this.shovelMode) {
-        // 铲除(花盆/睡莲/南瓜/植物)
+        // 铲除(花盆/睡莲/南瓜/植物) — 原版: 南瓜优先→植物→花盆/睡莲
         const removed = board.gridPumpkin[row][col] || board.grid[row][col] || board.gridPot[row][col] || board.gridLily[row][col] ||
           board.gridSpikes[row][col];
         if (removed) {
           this.removePlant(removed, board);
+          // #19 挖掘动画: 土块飞溅 + 铲子音效
           this.audio.play('shovel');
+          this.audio.play('dirt_rise');
+          board.addEffect('dust', board.gridX(col) + 40, board.cellY(row, col) + 40);
+          // 植物弹出效果
+          removed._shovelPop = 0.001;
+          board.effects.push({
+            kind: 'shovel_pop', x: removed.x + 40, y: removed.y + 40, t: 0, life: 0.4,
+            update(dt) { this.t += dt; if (this.t > this.life) this.dead = true; },
+          });
           this.shovelMode = false;
+          this._shovelAnim = 0.35;   // 铲子挥动动画
           return;
         }
         return;
       }
       if (this.selectedCard >= 0) {
-        this.tryPlant(cards[this.selectedCard].type, row, col, board);
+        // 雨天种子: 持有卡
+        if (board.mode === 'raining') {
+          const held = (board.challenge.heldCards || [])[this.selectedCard];
+          if (held) {
+            this.tryPlant(held.type, row, col, board);
+            if (board.plants[board.plants.length - 1] && board.plants[board.plants.length - 1].row === row && board.plants[board.plants.length - 1].col === col) {
+              board.challenge.heldCards.splice(this.selectedCard, 1);
+              this.selectedCard = -1;
+            }
+          }
+          return;
+        }
+        // 传送带: 手持的卡
+        if (board.mode === 'conveyor' && board.challenge && board.challenge.heldType) {
+          this.tryPlant(board.challenge.heldType, row, col, board);
+          return;
+        }
+        if (cards[this.selectedCard]) {
+          this.tryPlant(cards[this.selectedCard].type, row, col, board);
+        }
         return;
       }
       // 玉米加农炮发射
@@ -293,8 +406,16 @@ const Game = {
 
   tryPlant(type, row, col, board) {
     const def = PLANTS[type];
-    const card = board.seedCards[this.selectedCard];
-    if (!card || card.cd > 0 || board.sun < def.cost) { this.audio.play('buzzer'); return; }
+    // 手持免费卡: 传送带 / 罐子掉落的种子包 / 天降种子
+    const handHeld = !!(board.challenge && board.challenge.heldType === type) ||
+      (board.mode === 'conveyor') || (board.mode === 'vasebreaker');
+    const conveyor = board.mode === 'conveyor' || board.mode === 'vasebreaker';
+    const card = conveyor ? null : board.seedCards[this.selectedCard];
+    if (!conveyor && !card && !handHeld) { this.audio.play('buzzer'); return; }
+    if (!conveyor && !handHeld && card && (card.cd > 0 || board.sun < def.cost)) { this.audio.play('buzzer'); return; }
+    const bowling = board.level.fixed === 'bowling';
+    // 坚果保龄球: 只能种第0-2列 (原版 CanPlantAt: theGridX > 2 ? NOT_PASSED_LINE : OK)
+    if (bowling && col > 2) { this.audio.play('buzzer'); return; }
     // 只能种在草地行或水行 (1-1~1-3 单/三行关的泥地不可种植)
     if (!board.grassRows.includes(row) && !board.isWater(row, col)) { this.audio.play('buzzer'); return; }
     // 种植规则
@@ -317,8 +438,9 @@ const Game = {
       if (!target || !target.sleeping) { this.audio.play('buzzer'); return; }
       target.setSleep(false);
       this.audio.play('coffee');
-      board.sun -= def.cost;
-      card.cd = def.cd / 1000;
+      if (!conveyor) board.sun -= def.cost;
+      if (card) card.cd = def.cd / 1000;
+      if (conveyor && board.challenge) { board.challenge.heldType = null; }
       this.selectedCard = -1;
       return;
     }
@@ -326,8 +448,13 @@ const Game = {
     if (type === 'GRAVEBUSTER') {
       if (!board.graves.some(g => g.row === row && g.col === col)) { this.audio.play('buzzer'); return; }
     }
-    // 占位检查
-    if (GROUNDCOVER.has(type)) {
+    // 占位检查 (保龄球: 坚果直接滚动不占格)
+    if (bowling) {
+      // 无占位限制
+    } else if (board.graves && board.graves.some(g => g.row === row && g.col === col) && type !== 'GRAVEBUSTER') {
+      // #21 墓碑上不可种植 (墓碑吞噬者除外)
+      this.audio.play('buzzer'); return;
+    } else if (GROUNDCOVER.has(type)) {
       if (board.gridSpikes[row][col] || board.grid[row][col]) { this.audio.play('buzzer'); return; }
     } else if (type === 'PUMPKIN') {
       if (board.gridPumpkin[row][col]) { this.audio.play('buzzer'); return; }
@@ -341,14 +468,18 @@ const Game = {
     // 种植
     const p = new Plant(type, row, col, board);
     board.plants.push(p);
-    if (type === 'LILYPAD') board.gridLily[row][col] = p;
+    if (bowling) {
+      p.rolling = true;   // 坚果保龄球: 滚动 (plants.js WALLNUT case)
+    } else if (type === 'LILYPAD') board.gridLily[row][col] = p;
     else if (type === 'FLOWERPOT') board.gridPot[row][col] = p;
     else if (type === 'PUMPKIN') board.gridPumpkin[row][col] = p;
     else if (GROUNDCOVER.has(type)) board.gridSpikes[row][col] = p;
     else board.grid[row][col] = p;
-    // 音效
-    board.sun -= def.cost;
-    card.cd = def.cd / 1000;
+    // 音效 + 消耗
+    if (!conveyor) board.sun -= def.cost;
+    if (card) card.cd = def.cd / 1000;
+    if (conveyor && board.challenge) { board.challenge.heldType = null; }   // 传送带卡一次性
+    if (bowling) this.audio.play('throw');
     this.selectedCard = -1;
     this.audio.play(board.isWater(row, col) ? 'plant_water' : (Math.random() < 0.5 ? 'plant' : 'plant2'));
   },
@@ -398,26 +529,52 @@ const Game = {
 
   startLevel(lv) {
     this.levelId = lv;
+    this.modeKey = null;
     this.endless = false;
     this.levelDef = LEVELS[lv - 1];
     const level = this.levelDef;
-    // 铲子解锁 (原版 ShowShovel: 首次冒险 1-4 无铲子, 1-5 戴夫对话末尾赠送, 之后常驻; 重玩旧关直接有)
+    this._startCommon(level);
+  },
+
+  // 额外模式入口 (玩玩小游戏 / 解谜 / 生存)
+  startMode(key) {
+    const level = MODE_LEVELS[key];
+    if (!level) return;
+    this.levelId = level.id;
+    this.modeKey = key;
+    this.endless = !!level.endless;
+    this.levelDef = level;
+    this._startCommon(level);
+  },
+
+  _startCommon(level) {
+    const lv = this.levelId;
+    // 铲子解锁 (特殊玩法关卡无铲子)
+    const specialNoShovel = ['bowling', 'whack', 'vasebreaker', 'izombie'].includes(level.fixed);
     const firstTime = this.progress.unlocked <= lv;
-    if (lv === 5 && firstTime) this.shovelUnlocked = false;   // 1-5 首次: 由戴夫对话解锁
+    if (specialNoShovel) this.shovelUnlocked = false;
+    else if (lv === 5 && firstTime) this.shovelUnlocked = false;   // 1-5 首次: 由戴夫对话解锁
     else this.shovelUnlocked = lv >= 5 || !firstTime;
     const board = new Board(this, level);
     this.board = board;
     this.selectedCard = -1;
+    this.selectedZombieCard = -1;
     this.shovelMode = false;
+    this.menuDialog = null;
     Banners.clear();
-    // 选卡方式 (原版): 1-7 固定卡槽(全部解锁植物), 1-8+ 手动选卡
-    const pool = availablePlants(lv);
-    board.seedSlots = level.chooseSeeds ? Math.min(pool.length, level.bankSlots) : pool.length;
+    // 选卡方式 (原版): 1-7 固定卡槽(全部解锁植物), 1-8+ 手动选卡; 传送带/特殊玩法无选卡
+    const noChoose = !!level.fixed || level.rainingSeeds;
+    const pool = lv <= 50 ? availablePlants(lv, this.purchasedSet) : availablePlants(50, this.purchasedSet);
+    board.seedSlots = (level.chooseSeeds && !noChoose) ? Math.min(pool.length, this.bankSlotsFor(lv) || level.bankSlots || 9) : pool.length;
     board.chosenSeeds = [];
-    if (!level.chooseSeeds) {
+    if (!level.chooseSeeds && !noChoose) {
       board.chosenSeeds = pool.slice();           // 1-7: 固定全部
-    } else if (level.fixed) {
-      board.chosenSeeds = pool.slice(0, board.seedSlots); // 传送带关卡: 预填满, 后续随机替换
+    } else if (level.chooseSeeds && !noChoose) {
+      board.chosenSeeds = pool.slice(0, board.seedSlots);
+    }
+    // 生存模式: 用全部可用植物选卡
+    if (level.endless && level.chooseSeeds) {
+      board.seedSlots = Math.min(pool.length, this.bankSlotsFor(lv) || level.bankSlots || 9);
     }
     // 花盆预植 (屋顶)
     if (level.potColumns > 0) {
@@ -443,22 +600,81 @@ const Game = {
     board.state = 'intro';
     this.state = 'playing';
     this.audio.playBGM(level.bgm);
+    // 特殊玩法: 简短过场 (无选卡/无戴夫/无 RSP)
+    const quiet = ['whack', 'vasebreaker', 'izombie'].includes(level.fixed);
+    if (quiet) { level.noReadySet = true; }
     Cutscene.start(board);
+    if (quiet) { Cutscene.t = 4.5; }   // 跳过镜头平移直接就位
+  },
+
+  saveShop() {
+    try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked, debugUnlocked: this.debugUnlocked || undefined, coins: this.coins, purchased: this.purchased })); } catch (e) { }
+  },
+
+  // ---------- 戴夫商店 (#11: 通关 3-4 解锁) ----------
+  shopUnlocked() { return this.progress.unlocked > 24 || this.debugUnlocked; },
+  buyItem(key) {
+    const it = SHOP_ITEMS.find(s => s.key === key);
+    if (!it) return false;
+    const cost = this.itemCost(it);
+    if (cost == null) return false;
+    if (this.coins < cost) { this.audio.play('buzzer'); return false; }
+    // 耐久品判定
+    const consumable = it.type === 'rake' || it.type === 'zen' || it.type === 'marigold';
+    if (!consumable && (this.purchased[key] || 0) > 0) return false;   // 一次性售罄
+    // 耙子可重复购买 (3次使用)
+    if (this.purchased[key] && it.type !== 'rake' && !consumable) return false;
+    this.coins -= cost;
+    if (key === 'packetUpgrade') this.purchased[key] = (this.purchased[key] || 0) + 1;
+    else this.purchased[key] = (this.purchased[key] || 0) + 1;
+    this.purchasedSet = new Set(Object.keys(this.purchased));
+    this.saveShop();
+    this.audio.play('points');
+    return true;
+  },
+  itemCost(it) {
+    if (Array.isArray(it.cost)) {
+      const n = this.purchased['packetUpgrade'] || 0;
+      return n < it.cost.length ? it.cost[n] : null;   // 售罄
+    }
+    return it.cost;
+  },
+  addCoins(n) {
+    this.coins = Math.max(0, Math.min(99999, this.coins + n));
+    this.saveShop();
+  },
+
+  bankSlotsFor(lv) {
+    // 原版: mPurchases[PACKET_UPGRADE] + 6 (槽位升级逐次购买)
+    const base = Math.min(6 + Math.max(0, Math.floor((lv - 8) / 12)), 7);
+    const up = this.purchased['packetUpgrade'] || 0;
+    if (up > 0) return Math.max(base, 6 + up);
+    return base;
   },
 
   // 重新挑战当前关
   retryLevel() {
     this.audio.play('buttonclick');
-    this.startLevel(this.levelId);
+    if (this.modeKey) this.startMode(this.modeKey);
+    else this.startLevel(this.levelId);
   },
 
   onLevelWin() {
     this.justUnlocked = null;
+    const isMode = !!this.modeKey;
     const lv = this.levelId;
-    const level = LEVELS[lv - 1];
-    if (lv >= this.progress.unlocked) {
+    const level = this.levelDef;
+    if (!isMode && lv >= this.progress.unlocked) {
       this.progress.unlocked = Math.min(51, lv + 1);
       try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked, debugUnlocked: this.debugUnlocked || undefined })); } catch (e) { }
+    }
+    if (isMode) {
+      // 模式胜利 → 回模式选择屏
+      this.audio.playBGM(null);
+      this.audio.play('winmusic');
+      this.winStats = { waves: this.board.wave, score: this.board.whackScore || 0, mode: this.modeKey };
+      Transition.to(() => { this.state = 'modewin'; Screens.t = 0; }, 0.8);
+      return;
     }
     // 奖励判定 (原版): X-5/X-10 → 纸条; 其余有新植物 → 植物奖励; 5-10 → 通关
     this.justUnlocked = awardPlantForLevel(lv);
@@ -486,6 +702,38 @@ const Game = {
     this.startLevel(next);
   },
 
+  // ---------- 游戏内菜单对话框 (原版 DoNewOptions: 回到游戏/重新开始/主菜单) ----------
+  openMenuDialog() {
+    this.audio.play('pause');
+    this.menuDialog = { hover: null };
+    if (this.board) this.board.paused = true;
+  },
+  closeMenuDialog() {
+    this.menuDialog = null;
+    if (this.board) this.board.paused = false;
+  },
+  menuDialogButtons() {
+    return [
+      { k: 'resume', label: '回到游戏', x: 250, y: 200, w: 300, h: 52 },
+      { k: 'restart', label: '重新开始本关', x: 250, y: 268, w: 300, h: 52 },
+      { k: 'options', label: '选项设置', x: 250, y: 336, w: 300, h: 52 },
+      { k: 'mainmenu', label: '返回主菜单', x: 250, y: 420, w: 300, h: 52 },
+    ];
+  },
+  menuDialogClick(p) {
+    for (const b of this.menuDialogButtons()) {
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        this.audio.play('buttonclick');
+        if (b.k === 'resume') { this.closeMenuDialog(); }
+        else if (b.k === 'restart') { this.menuDialog = null; this.retryLevel(); }
+        else if (b.k === 'options') { this.closeMenuDialog(); this._optionsReturn = 'playing'; this.state = 'options'; }
+        else if (b.k === 'mainmenu') { this.menuDialog = null; this.abandonLevel(); }
+        return;
+      }
+    }
+    // 点击外部不关闭 (避免误触)
+  },
+
   onLevelLose(row) {
     this.audio.playBGM(null);
     this.audio.play('losemusic');
@@ -508,6 +756,13 @@ const Game = {
         Cutscene.update(sdt);
         // 卡片冷却
         for (const c of this.board.seedCards) c.cd = Math.max(0, c.cd - sdt);
+        // 雨天种子: 持有卡倒计时
+        if (this.board.mode === 'raining') {
+          if (this.board.challenge && this.board.challenge.heldCards) {
+            for (const h of this.board.challenge.heldCards) h.life -= sdt;
+            this.board.challenge.heldCards = this.board.challenge.heldCards.filter(h => h.life > 0);
+          }
+        }
       }
     }
   },
@@ -532,6 +787,9 @@ const Game = {
       case 'lose': Screens.lose.draw(ctx); break;
       case 'almanac': UI.drawAlmanac(ctx); break;
       case 'levelselect': Screens.levelSelect.draw(ctx); break;
+      case 'modeselect': Screens.modeSelect.draw(ctx); break;
+      case 'shop': Screens.shop.draw(ctx); break;
+      case 'modewin': Screens.modeWin.draw(ctx, this); break;
       case 'playing': {
         Renderer.drawBoard(ctx, this.board);
         UI.drawGameHUD(ctx, this.board);
@@ -541,7 +799,11 @@ const Game = {
         if (Cutscene.active && (Cutscene.seedChoosing || Cutscene.chooserY < 516)) {
           UI.drawSeedChooser(ctx, this.board);
         }
-        if (this.board.paused) UI.drawPause(ctx, this.board);
+        // 特殊模式叠加层 (罐子/我不是僵尸卡/雨天种子)
+        UI.drawModeOverlay(ctx, this.board);
+        if (this.board.paused && !this.menuDialog) UI.drawPause(ctx, this.board);
+        // 游戏内菜单对话框
+        if (this.menuDialog) UI.drawMenuDialog(ctx, this);
         // 种植预览
         this.drawPreview(ctx);
         break;
@@ -556,7 +818,14 @@ const Game = {
     if (!m) return;
     // 种植预览
     if (this.selectedCard >= 0) {
-      const type = board.seedCards[this.selectedCard].type;
+      let type = null;
+      if (board.mode === 'raining') {
+        const held = (board.challenge.heldCards || [])[this.selectedCard];
+        type = held ? held.type : null;
+      } else if (board.seedCards[this.selectedCard]) {
+        type = board.seedCards[this.selectedCard].type;
+      }
+      if (type) {
       const cell = this.pixelToCell(m.x, m.y);
       if (cell) {
         const [col, row] = cell;
@@ -570,12 +839,39 @@ const Game = {
         ctx.fillRect(board.gridX(col), board.cellY(row, col), 80, board.scene === 'pool' ? 85 : 100);
         ctx.restore();
       }
+      }
     }
+    // 打僵尸模式: 锤子光标 (原版 Hammer.reanim anim_whack_zombie @(-25,16))
+    if (board.mode === 'whack' && m) {
+      if (!this._whackCursor && RE.hasDef('Hammer')) {
+        this._whackCursor = Assets.reanim('Hammer');
+        this._whackCursor.play('anim_whack_zombie', RE.PLAY_ONCE_HOLD, 24);
+        this._whackCursor.animTime = 1.0;   // 待机停末帧
+      }
+      if (this._whackCursor) {
+        this._whackCursor.setPosition(m.x - 25, m.y + 16);
+        this._whackCursor.renderOrder = 10 ** 7;
+        this._whackCursor.draw(ctx);
+      }
+    }
+    // 铲子光标 + 挥动动画 (#19)
     if (this.shovelMode && this.shovelUnlocked) {
       ctx.save();
-      ctx.globalAlpha = 0.8;
+      ctx.globalAlpha = 0.9;
       const shovel = Assets.image('shovel_hi_res') || Assets.image('shovel');
-      if (shovel && m) ctx.drawImage(shovel, m.x - 20, m.y - 30, 40, 56);
+      if (shovel && m) {
+        // 挖掘挥动: 0.35s 内旋转下压
+        if (this._shovelAnim > 0) {
+          this._shovelAnim -= 1 / 60;
+          const p = 1 - this._shovelAnim / 0.35;
+          const ang = Math.sin(p * Math.PI) * 1.2;
+          ctx.translate(m.x, m.y - 10);
+          ctx.rotate(ang);
+          ctx.drawImage(shovel, -20, -34 - Math.sin(p * Math.PI) * 18, 40, 56);
+        } else {
+          ctx.drawImage(shovel, m.x - 20, m.y - 30, 40, 56);
+        }
+      }
       ctx.restore();
     }
   },

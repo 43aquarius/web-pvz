@@ -435,6 +435,18 @@ const RE = (function () {
       this.tracks[ti].attachments.push(att);
       return att;
     }
+    // 立即重算所有附件 overlay (供宿主位置变更后同步调用, 消除一帧滞后)
+    refreshAttachments() {
+      for (let ti = 0; ti < this.tracks.length; ti++) {
+        const t = this.tracks[ti];
+        if (!t.attachments.length) continue;
+        const om = this.getAttachmentOverlayMatrix(ti);
+        for (const att of t.attachments) {
+          if (att.dead || !att.reanim) continue;
+          att.reanim.overlay = MAT.mul(om, att.offset);
+        }
+      }
+    }
     attachToAnotherReanimation(host, trackName) {
       return host.attachToTrack(trackName, this, 0, 0);
     }

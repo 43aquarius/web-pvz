@@ -39,7 +39,8 @@ class Projectile {
     this.img = this.def.img ? Assets.image(this.def.img) : null;
     this.reanim = this.def.reanim && RE.hasDef(this.def.reanim) ? Assets.reanim(this.def.reanim) : null;
     if (this.reanim) {
-      const a = this.def.reanim === 'FirePea' ? 'anim_idle' : 'anim_idle';
+      // Puff 只有 anim_puff 区间; FirePea 用 anim_idle (兜底)
+      const a = this.reanim.animExists('anim_puff') ? 'anim_puff' : 'anim_idle';
       this.reanim.play(a, RE.LOOP, 24);
     }
     this.trail = [];

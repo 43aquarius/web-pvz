@@ -7,6 +7,8 @@
 const { CONST, PLANTS, MUSHROOMS, AQUATIC, GROUNDCOVER } = require('./data');
 const RE = require('./reanim');
 const { Projectile } = require('./projectiles');
+// Sun 类延迟获取 (board 在 plants 之后加载)
+const getSunClass = () => { const m = (window.__mods && window.__mods['board']) || require('./board'); return m && m.Sun; };
 
 // 高度偏移 (原版 PlantDrawHeightOffset)
 const H_OFFSET = {
@@ -90,9 +92,27 @@ class Plant {
   setup() {
     const d = this.def;
     switch (this.type) {
-      case 'POTATOMINE': this.state = 'arming'; this.timer = d.arm; for (const L of this.anims) L.r.play('anim_rise', RE.PLAY_ONCE_HOLD, 18); break;
+      case 'POTATOMINE':
+        // 原版: NOTREADY 15s 只显示土堆尖端 (anim_idle帧0), 到时 anim_rise → anim_armed
+        this.state = 'arming'; this.timer = d.arm;
+        for (const L of this.anims) {
+          if (L.r.animExists('anim_idle')) L.r.play('anim_idle', RE.LOOP, 0);
+        }
+        break;
       case 'CHERRYBOMB': case 'DOOMSHROOM': case 'JALAPENO': case 'ICESHROOM': case 'BLOVER':
-        this.state = 'fuse'; this.fuseT = d.fuse || 1; break;
+        this.state = 'fuse'; this.fuseT = d.fuse || 1;
+        // 引信动画 (原版: 樱桃膨胀/辣椒爆闪 anim_explode 播完→爆)
+        {
+          const anim = this.type === 'CHERRYBOMB' ? 'anim_explode' :
+            this.type === 'JALAPENO' ? 'anim_explode' :
+            this.type === 'DOOMSHROOM' ? 'anim_explode' : null;
+          if (anim) {
+            for (const L of this.anims) {
+              if (L.r.animExists(anim)) L.r.play(anim, RE.PLAY_ONCE_HOLD, L.r.def.fps * 0.9);
+            }
+          }
+        }
+        break;
       case 'SUNSHROOM':
         this.timer = 30; break;
       case 'COBCANNON':
@@ -109,9 +129,12 @@ class Plant {
     this.sleeping = asleep;
     for (const L of this.anims) {
       if (asleep) {
-        if (L.r.animExists('anim_sleep')) L.r.play('anim_sleep', RE.LOOP, 6);
+        // 阳光菇: 小睡 anim_sleep / 大睡 anim_bigsleep (原版)
+        if (this.type === 'SUNSHROOM' && this.grown && L.r.animExists('anim_bigsleep')) L.r.play('anim_bigsleep', RE.LOOP, 6);
+        else if (L.r.animExists('anim_sleep')) L.r.play('anim_sleep', RE.LOOP, 6);
       } else {
-        L.r.play(L.base, RE.LOOP, 12);
+        if (this.type === 'SUNSHROOM' && this.grown && L.r.animExists('anim_bigidle')) L.r.play('anim_bigidle', RE.LOOP, 12);
+        else L.r.play(L.base, RE.LOOP, 12);
       }
     }
     if (asleep) this.zzz = { t: Math.random() * 2 };
@@ -147,18 +170,41 @@ class Plant {
         break;
       }
       case 'POTATOMINE': {
+        // 原版 UpdatePotato 三态: NOTREADY(埋地15s) → RISING(破土动画) → ARMED(亮灯)
         if (this.state === 'arming') {
           this.timer -= dt;
           if (this.timer <= 0) {
-            this.state = 'armed';
-            for (const L of this.anims) L.r.play('anim_armed', RE.LOOP, 12);
-            board.addEffect('dust', this.x + 40, this.y + 40);
+            this.state = 'rising';
+            board.addEffect('dust', this.x + 40, this.y + 30);
+            for (const L of this.anims) L.r.play('anim_rise', RE.PLAY_ONCE_HOLD, 18);
             board.game.audio.play('dirt_rise');
+          }
+        } else if (this.state === 'rising') {
+          const body = this.anims[0].r;
+          if (body.loopCount > 0) {
+            this.state = 'armed';
+            for (const L of this.anims) L.r.play('anim_armed', RE.LOOP, 12 + Math.random() * 3);
+            // 原版: 附加 anim_glow 发光轨道 (挂在 anim_light)
+            if (body.animExists('anim_glow') && body.trackExists('anim_light')) {
+              try {
+                const glow = Assets.reanim(this.def.reanim);
+                glow.play('anim_glow', RE.LOOP, 10);
+                glow.frameCount = Math.max(1, glow.getAnimRange('anim_glow')[1]);
+                glow.showOnlyTrack('anim_glow');
+                glow.setTruncateDisappearingFrames('anim_glow', false);
+                body.attachToTrack('anim_light', glow);
+                this.glowAnim = glow;
+              } catch (e) { }
+            }
           }
         } else if (this.state === 'armed') {
           // 触发: 僵尸靠近
           for (const z of board.zombies) {
             if (!z.dead && z.row === this.row && !z.underwater && Math.abs(z.hitX() - (this.x + 40)) < 55 && !z.boss) {
+              // 原版: anim_mashed (土豆泥!) + SPUDOW 粒子
+              for (const L of this.anims) {
+                if (L.r.animExists('anim_mashed')) L.r.play('anim_mashed', RE.PLAY_ONCE_HOLD, 24);
+              }
               this.explode(board, d.radius, d.dmg);
               board.game.audio.play('spudow');
               return;
@@ -169,6 +215,8 @@ class Plant {
       }
       // ---- 生产植物 ----
       case 'SUNFLOWER': case 'SUNSHROOM': case 'TWINSUNFLOWER': case 'MARIGOLD': {
+        // 我不是僵尸/坚不可摧: 不产阳光 (原版 UpdateProductionPlant 直接return; LastStand仅非onslaught暂停)
+        if (board._izNoProduction || (board._noSunProduction && !(board.challenge && board.challenge.onslaught))) break;
         this.timer -= dt;
         if (this.timer <= 0) {
           const rate = d.sunRate + Math.random() * 2;
@@ -176,20 +224,45 @@ class Plant {
           if (this.type === 'MARIGOLD') {
             board.addCoin(this.x + 40, this.y + 20, CONST.COIN_VALUE);
             for (const L of this.anims) L.r.play(L.base, RE.LOOP, 12);
+          } else if (this.type === 'TWINSUNFLOWER') {
+            // 原版: 双子向日葵一次产出两颗普通阳光 (各25)
+            const SunC = getSunClass();
+            if (SunC) {
+              board.suns.push(new SunC(this.x + 28, this.y + 30, this.y + 55, 'flower'));
+              board.suns.push(new SunC(this.x + 52, this.y + 30, this.y + 55, 'flower'));
+            } else {
+              board.addSun(this.x + 28, this.y + 30, this.y + 55, 'flower', 25);
+              board.addSun(this.x + 52, this.y + 30, this.y + 55, 'flower', 25);
+            }
+            board.game.audio.play('throw');
           } else {
+            // 原版: 阳光菇小形态产 COIN_SMALLSUN(15), 大形态产 COIN_SUN(25)
             const val = this.type === 'SUNSHROOM' && !this.grown ? 15 : d.sunVal;
-            board.addSun(this.x + 40 + (Math.random() - 0.5) * 30, this.y + 30, this.y + 55, 'flower');
+            board.addSun(this.x + 40 + (Math.random() - 0.5) * 30, this.y + 30, this.y + 55, 'flower', val);
             board.game.audio.play('throw');
           }
         }
-        // 阳光菇成长
+        // 阳光菇成长 (原版 STATE_SUNSHROOM_SMALL countdown 12000 tick = 120秒)
         if (this.type === 'SUNSHROOM' && !this.grown) {
           this.growT = (this.growT || 0) + dt;
           if (this.growT > d.growTime) {
             this.grown = true;
+            this.growAnimDone = false;
             for (const L of this.anims) {
               if (L.r.animExists('anim_grow')) L.r.play('anim_grow', RE.PLAY_ONCE_HOLD, 12);
-              else if (L.r.animExists('anim_bigidle')) L.r.play('anim_bigidle', RE.LOOP, 10);
+            }
+            board.game.audio.play('plantgrow');
+          }
+        }
+        // 成长动画播完 → 大形态待机 (原版 STATE_SUNSHROOM_GROWING → BIG)
+        if (this.type === 'SUNSHROOM' && this.grown && !this.growAnimDone) {
+          const body = this.anims[0].r;
+          if (!body.animExists('anim_grow') || body.loopCount > 0) {
+            this.growAnimDone = true;
+            if (!this.sleeping) {
+              for (const L of this.anims) {
+                if (L.r.animExists('anim_bigidle')) L.r.play('anim_bigidle', RE.LOOP, 12 + Math.random() * 3);
+              }
             }
           }
         }
@@ -200,6 +273,92 @@ class Plant {
       case 'SCAREDYSHROOM': case 'SEASHROOM': case 'SPLITPEA': case 'THREEPEATER': case 'STARFRUIT':
       case 'CACTUS': case 'GLOOMSHROOM': case 'CATTAIL': case 'CABBAGEPULT': case 'KERNELPULT': case 'MELONPULT': case 'WINTERMELON': {
         this.updateShooter(dt, board);
+        break;
+      }
+      case 'WALLNUT': case 'EXPLODEONUT': case 'GIANTWALLNUT': {
+        // 坚果保龄球 (原版 Plant::UpdateBowling 2361-2511):
+        // 向右滚 (轨道速度驱动) | 斜向2px/tick | 上下反弹 | 命中1800/盔900/盾400 | >800消亡
+        if (this.rolling) {
+          const giant = this.type === 'GIANTWALLNUT';
+          const speed = giant ? 550 : 300;              // px/s (原版巨型×2)
+          this.x += speed * dt;
+          this.rollSpin = (this.rollSpin || 0) + dt * (giant ? 260 : 500);
+          // 斜向状态 (原版 STATE_BOWLING_UP/DOWN: 每tick 2px, 仅贴行中线时处理)
+          if (!giant && this.bowlDir) {
+            this.y += (this.bowlDir === 'up' ? -2 : 2) * 60 * dt;
+            const rowTop = board.gridToPixelY(this.row);
+            // 到达目标行中线 → 贴齐, 结束斜向
+            const near = this.bowlDir === 'up'
+              ? (this.y <= rowTop)
+              : (this.y >= rowTop);
+            if (near) { this.y = rowTop; this.bowlDir = null; }
+          } else if (!giant && !this.bowlDir) {
+            // 贴行中线时才转向 (原版 |GridToPixelY(0,row)-mY| <= 2)
+            const rowTop = board.gridToPixelY(this.row);
+            if (Math.abs(this.y - rowTop) <= 2.5) this.y = rowTop;
+          }
+          // 命中判定 (攻击矩形 x..x+w-20)
+          for (const z of board.zombies) {
+            if (z.dead || z.isDeadOrDying || z.boss) continue;
+            // 斜向滚动的坚果跨行命中 (原版按僵尸矩形)
+            const zr = z.getZombieRect ? z.getZombieRect() : { x: z.x, y: z.y, w: 80, h: 115 };
+            const myRect = { x: this.x, y: this.y + 10, w: 60, h: 70 };
+            const ovX = Math.min(myRect.x + myRect.w, zr.x + zr.w) - Math.max(myRect.x, zr.x);
+            const ovY = Math.min(myRect.y + myRect.h, zr.y + zr.h) - Math.max(myRect.y, zr.y);
+            if (ovX > 10 && ovY > 10) {
+              if (!z._bowlHitT || board.time - z._bowlHitT > 0.15) {
+                z._bowlHitT = board.time;
+                // 爆炸坚果: 半径90一行爆炸 + 自毁
+                if (this.type === 'EXPLODEONUT') {
+                  board.addEffect('powie', this.x + 40, this.y + 40);
+                  board.shake(3, -4);
+                  for (const z2 of board.zombies) {
+                    if (z2.dead || z2.boss) continue;
+                    if (Math.abs(z2.hitX() - (this.x + 40)) < 115 && Math.abs(z2.row - this.row) <= 1) {
+                      z2.takeDamage(1800, board, { exploded: true });
+                    }
+                  }
+                  board.game.audio.play('cherrybomb');
+                  this.dead = true;
+                  break;
+                }
+                // 原版伤害链: 铁门盾/已起跳撑杆→1800 | 其他盾→盾伤400 | 头盔→盔伤900 | 裸体→1800
+                let applied = false;
+                if (z.shieldType && z.shieldHealth > 0) {
+                  if (z.shieldType === 'door' || (z.phase !== undefined && z.phase === 7)) {
+                    z.takeDamage(1800, board, { bowling: true });
+                  } else {
+                    z.takeShieldDamage && z.takeShieldDamage(400);
+                    if (z.shieldHealth <= 0) applied = true;
+                  }
+                } else if (z.helmType && z.helmHealth > 0) {
+                  z.takeHelmDamage && z.takeHelmDamage(900);
+                  if (z.helmHealth <= 0) applied = true;
+                } else {
+                  z.takeDamage(1800, board, { bowling: true });
+                  applied = true;
+                }
+                // 命中后转向 (原版 2482-2496: 非巨型, 行4/向下→上, 行0/向上→下, 中间随机)
+                if (!giant && this.row === Math.round(this.row)) {
+                  if (this.row >= board.rows - 1) this.bowlDir = 'up';
+                  else if (this.row <= 0) this.bowlDir = 'down';
+                  else this.bowlDir = Math.random() < 0.5 ? 'up' : 'down';
+                  if (this.bowlDir) this.row = this.bowlDir === 'up' ? this.row - 1 : this.row + 1;
+                }
+                board.addEffect('squish', z.x + 40, z.y + 30);
+                board.game.audio.play('bowling');
+                // 连击金币 (原版 2453-2480: 2击1银 3击2银 4击3银 5击1金)
+                this.launchCounter = (this.launchCounter || 0) + 1;
+                if (this.launchCounter >= 2 && board.game.addCoins) {
+                  const n = Math.min(this.launchCounter - 1, 3);
+                  board.game.addCoins(n >= 3 ? 5 : n);
+                }
+              }
+            }
+          }
+          // 出屏消亡 (原版 mX > 800)
+          if (this.x > 800) this.dead = true;
+        }
         break;
       }
       case 'CHOMPER': {
@@ -343,11 +502,29 @@ class Plant {
       case 'PUFFSHROOM': case 'SCAREDYSHROOM': case 'SEASHROOM':
         hasTarget = inRow(this.row) && !(this.type === 'SCAREDYSHROOM' && this.isScared(board));
         if (this.type === 'SCAREDYSHROOM') {
-          // 胆小: 僵尸太近缩头
-          const near = board.zombiesInRow(this.row, this.x - 20, this.x + 130).length > 0;
+          // 胆小 (原版 UpdateScaredyShroom 1313-1345):
+          // 圆(mX, mY+20) r=120 与僵尸矩形相交, 行差±1, 非魅惑非濒死
+          let near = false;
+          for (const z of board.zombies) {
+            if (z.dead || z.mindControlled || z.isDeadOrDying) continue;
+            const dy = (z.type === 'BOSS') ? 0 : z.row - this.row;
+            if (dy > 1 || dy < -1) continue;
+            const zr = z.getZombieRect ? z.getZombieRect() : { x: z.x, y: z.y, w: 80, h: 115 };
+            const nx = Math.max(zr.x, Math.min(this.x, zr.x + zr.w));
+            const ny = Math.max(zr.y, Math.min(this.y + 20, zr.y + zr.h));
+            if ((nx - this.x) ** 2 + (ny - this.y - 20) ** 2 <= 120 * 120) { near = true; break; }
+          }
           if (near !== this._scared) {
             this._scared = near;
-            for (const L of this.anims) L.r.play(near ? 'anim_scaredidle' : L.base, RE.LOOP, near ? 6 : 12);
+            // 原版状态机: 缩下 anim_scared(once+hold) → scaredidle循环 / 抬起回idle
+            for (const L of this.anims) {
+              if (near) {
+                if (L.r.animExists('anim_scared')) L.r.play('anim_scared', RE.PLAY_ONCE_HOLD, 10);
+                else if (L.r.animExists('anim_scaredidle')) L.r.play('anim_scaredidle', RE.LOOP, 6);
+              } else {
+                L.r.play(L.base, RE.LOOP, 12);
+              }
+            }
           }
           if (near) hasTarget = false;
         }
@@ -415,13 +592,32 @@ class Plant {
         break;
       }
       case 'FUMESHROOM': {
-        board.projectiles.push(new Projectile('fume', this.x + 55, mouthY - 12, this.row, this, { maxDist: d.range * 80 }));
+        // 原版 Plant::Fire: FumeShroom 不发射子弹 — DoRowAreaDamage(20, 2U) + PARTICLE_FUMECLOUD
+        // 攻击矩形: Rect(mX+60, mY, 340, mHeight)
+        board.addEffect('fumecloud', this.x + 85, this.y + 31, { dir: 1 });
+        for (const z of board.zombies) {
+          if (z.dead || z.row !== this.row || z.hittable === false || z.boss) continue;
+          const zx = z.hitX();
+          if (zx > this.x + 60 && zx < this.x + 60 + 340) z.takeDamage(20, board, { noFlash: true });
+        }
         playShoot('anim_shooting');
         game.audio.play('fume');
         break;
       }
       case 'GLOOMSHROOM': {
-        board.projectiles.push(new Projectile('gloom', this.x + 40, this.y + 40, this.row, this, { maxDist: 320 }));
+        // 原版: 4 相位 GLOOMCLOUD 环 + DoRowAreaDamage; 攻击矩形 Rect(mX-80, mY-80, 240, 240)
+        for (let k = 0; k < 4; k++) {
+          const ang = k * Math.PI / 2 + Math.PI / 4;
+          board.addEffect('fumecloud', this.x + 40 + Math.cos(ang) * 55, this.y + 40 + Math.sin(ang) * 40, { dir: 0, scale: 1.4 });
+        }
+        for (const z of board.zombies) {
+          if (z.dead || z.boss || z.hittable === false) continue;
+          if (Math.abs(z.row - this.row) > 1) continue;
+          const zx = z.hitX(), zy = board.gridY(z.row) + 42;
+          if (zx > this.x - 80 && zx < this.x + 160 && zy > this.y - 80 && zy < this.y + 160) {
+            z.takeDamage(20, board, { noFlash: true });
+          }
+        }
         playShoot('anim_shooting');
         game.audio.play('fume');
         break;
@@ -477,7 +673,7 @@ class Plant {
     }
   }
 
-  isScared(board) { return false; }
+  isScared(board) { return !!this._scared; }
 
   // ---------- 瞬发引爆 ----------
   detonate(board) {
@@ -511,6 +707,8 @@ class Plant {
         board.game.audio.play('iceshroom');
         break;
       case 'BLOVER':
+        // 原版: 吹走浓雾 (mFogBlownCountDown=2000 tick=20s) + 气球/被抛小鬼
+        if (board.blowFog) board.blowFog(20);
         board.fogClearUntil = board.time + 25;
         for (const z of board.zombies) {
           if (!z.dead && z.flyingHigh) z.popBalloon(board, false);
@@ -589,6 +787,10 @@ class Plant {
     if (this.dead) return;
     this.hp = 0;
     this.dead = true;
+    // 我不是僵尸: 僵尸吃掉植物 → 掉落剩余阳光 (原版 IZombiePlantDropRemainingSun)
+    if (this.board && this.board.mode === 'izombie' && this.board.challenge) {
+      this.board.challenge.plantDropSun(this);
+    }
     // 从网格移除
     try {
       if (this.board.grid[this.row][this.col] === this) this.board.grid[this.row][this.col] = null;
@@ -626,11 +828,26 @@ class Plant {
       const sh = Assets.image('plantshadow');
       if (sh) { ctx.globalAlpha = 0.35; ctx.drawImage(sh, this.x + 40 - sh.width / 2, dy + 72 - sh.height / 2); ctx.globalAlpha = 1; }
     }
-    const sc = this.buildT < 0.25 ? Math.min(1, 0.6 + this.buildT * 1.6) : 1;
+    const sc = (this.def.scale || 1) * (this.buildT < 0.25 ? Math.min(1, 0.6 + this.buildT * 1.6) : 1);
+    // 爆炸坚果: 红色色调 (原版 tint)
+    if (this.type === 'EXPLODEONUT') {
+      for (const L of this.anims) { if (L.r.colorOverride[0] === 255 && !L._redTint) { L.r.colorOverride = [255, 96, 80, 255]; L._redTint = true; } }
+    }
     for (const L of this.anims) {
       if (L.attached) continue;   // 已由身体轨道挂载绘制 (完整矩阵跟随: 旋转/缩放/位移)
       L.r.setPosition(this.x, dy);
       L.r.overrideScale(sc, sc);
+      // 坚果保龄球滚动旋转 (绕格心)
+      if (this.rolling && this.rollSpin !== undefined) {
+        const th = this.rollSpin * Math.PI / 180;
+        const cx = this.x + 40, cy = dy + 40;
+        const a = Math.cos(th), b = Math.sin(th);
+        const ov = L.r.overlay;
+        ov[0] = a; ov[1] = b; ov[2] = -b; ov[3] = a;
+        ov[4] = cx - (a * cx - b * cy);
+        ov[5] = cy - (b * cx + a * cy);
+      }
+      L.r.refreshAttachments();   // 头部等附件立即同步 (消除一帧滞后)
       if (this.eatFlash > 0) {
         ctx.save();
         ctx.filter = 'brightness(2.2)';

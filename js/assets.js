@@ -28,7 +28,8 @@ const Assets = (function () {
 
   // ---- pack.bin 单请求加载 (网络部署首选: 1479张图合并为1次下载) ----
   async function loadPack(progress) {
-    const res = await fetch('assets/pack.bin');
+    const v = window.__BUILD__ || '7';
+    const res = await fetch('assets/pack.bin?v=' + v);
     if (!res.ok) throw new Error('pack HTTP ' + res.status);
     const buf = await res.arrayBuffer();
     if (buf.byteLength < 8) throw new Error('pack too small');
@@ -95,7 +96,7 @@ const Assets = (function () {
       let gotReanim = false;
       if (!window.__NO_PACK__) {
         try {
-          const r = await fetch('assets/reanim.json');
+          const r = await fetch('assets/reanim.json?v=' + (window.__BUILD__ || Date.now()));
           if (r.ok) {
             const all = await r.json();
             for (const [name, json] of Object.entries(all)) state.reanimJson[name] = json;
@@ -151,10 +152,36 @@ const Assets = (function () {
       if (progress && n % 20 === 0) progress(0.95 + 0.05 * n / Object.keys(state.reanimJson).length, '动画定义');
     }
     RE.setImages(state.images);
+    // challenge.js 需要图片/reanim访问
+    try {
+      const CHM = require('./challenge');
+      if (CHM && CHM.setAssets) CHM.setAssets({
+        image: (k) => image(k),
+        reanim: (n) => RE.hasDef(n) ? new RE.Reanimation(n) : null,
+      });
+    } catch (e) { console.warn('challenge assets 注入失败', e); }
     state.loaded = true;
   }
 
-  function image(key) { return state.images.get(key); }
+  // 扩展名容错查找: 'pea' → 'pea.png'/'pea.jpg'; '.jpg' 优先回退同名 .png (原版jpg透明度被拍平)
+  function image(key) {
+    if (!key) return null;
+    const k = String(key).toLowerCase();
+    let im = state.images.get(k);
+    if (im) return im;
+    if (k.endsWith('.jpg')) {
+      im = state.images.get(k.slice(0, -4) + '.png');
+      if (im) return im;
+    } else if (!k.includes('.')) {
+      im = state.images.get(k + '.png');
+      if (im) return im;
+      im = state.images.get(k + '.jpg');
+      if (im) return im;
+    } else if (k.endsWith('.png')) {
+      im = state.images.get(k.slice(0, -4) + '.jpg');
+    }
+    return im || null;
+  }
   function reanim(name) { return new RE.Reanimation(name); }
 
   return { load, image, reanim, state };

@@ -977,6 +977,10 @@ class Zombie {
       const pt = this.findPlantTarget('chew');
       if (pt) { this.eatPlant(pt); return; }
     }
+    // 我不是僵尸: 吃脑子 (原版 IZombieEatBrain — 找不到植物时)
+    if (this.board.mode === 'izombie' && this.board.challenge) {
+      if (this.board.challenge.zombieEatBrain(this, ticksBetweenEats)) return;
+    }
     if (this.isEating) this.stopEating();
   }
 
@@ -1053,6 +1057,19 @@ class Zombie {
       return;
     }
     this.startEating();
+    // 魅惑菇: 咬到立即被魅惑 (原版 4831-4843: FLOOP+死亡+StartMindControlled+右移)
+    if (p.type === 'HYPNOSHROOM' && !p.isAsleep) {
+      this.board.game.audio.play('floop');
+      p.die();
+      this.mindControlled = true;
+      this.board.addEffect('mindcontrol', this.x + 60, this.y + 40);
+      this.velX = 0.17;
+      this.isEating = false;
+      this.startWalkAnim && this.startWalkAnim(0);
+      this.playZombieReanim('anim_walk', RE.LOOP, 0, 18);
+      this.updateAnimSpeed && this.updateAnimSpeed();
+      return;
+    }
     // 免啃植物
     if (p.type === 'JALAPENO' || p.type === 'CHERRYBOMB' || p.type === 'DOOMSHROOM' || p.type === 'ICESHROOM' || p.type === 'HYPNOSHROOM' ||
       p.state === 'flowerpot_inv' || p.state === 'lilypad_inv' || p.state === 'squash_look' || p.state === 'squash_pre') {
@@ -1208,6 +1225,11 @@ class Zombie {
     else if (this.type === 'CATAPULT' || this.type === 'FOOTBALL' || this.type === 'ZAMBONI') edgeX = -175;
     else if (this.type === 'BACKUP' || this.type === 'DANCER' || this.type === 'SNORKEL') edgeX = -130;
     if (this.x <= edgeX && this.hasHead) {
+      // 我不是僵尸: 出界静默死亡 (原版 DieNoLoot)
+      if (this.board.mode === 'izombie') {
+        this.dieNoLoot();
+        return;
+      }
       this.board.zombiesWon(this);
     }
     if (this.x <= edgeX + 70 && !this.hasHead) {
@@ -1216,10 +1238,51 @@ class Zombie {
   }
 
   // ---------------- 专项更新 ----------------
+  // 原版 Zombie::RiseFromGrave — 从墓碑/水面爬出 (phaseCounter 150tick, altitude -200→0)
+  riseFromGrave(col, row, inPool = false) {
+    this.posX = this.board.gridToPixelX(col) - 25;
+    this.posY = this.getPosYBasedOnRow(row);
+    this.row = row;
+    this.x = Math.floor(this.posX);
+    this.y = Math.floor(this.posY);
+    this.renderOrder = row * 10000 + 303000;   // RENDER_LAYER_ZOMBIE (原版 MakeRenderOrder)
+    this.phase = PH.RISING_FROM_GRAVE;
+    this.phaseCounter = 150;
+    this.velX = 0;
+    this.altitude = inPool ? -150 : -200;
+    this.inPool = !!inPool;
+    if (inPool) {
+      this.phaseCounter = 50;
+      this.zombieHeight = H.NORMAL;
+      this.startWalkAnim(0);
+      try { this.reanimShowPrefix('Zombie_duckytube', RG.NORMAL); } catch (e) { }
+      this.setupWaterTrack('Zombie_whitewater');
+      this.setupWaterTrack('Zombie_whitewater2');
+      this.splash();
+    } else {
+      // 泥土粒子 + 音效 (原版 PARTICLE_DIRT_RISE / FOLEY_DIRT_RISE)
+      this.board.addEffect('dust', this.posX + 50, this.posY + 100);
+      this.board.game.audio.play('dirt_rise');
+      try { this.playZombieReanim('anim_idle', RE.LOOP, 8); } catch (e) { }
+    }
+    this.updateReanim();
+  }
+
+  splash() {
+    if (!this.board) return;
+    this.board.addReanimEffect('Splash', this.x + 23, this.y + 78, 0).overrideScale(0.8, 0.8);
+    this.board.game.audio.play('zombiesplash');
+  }
+
   updateZombieRiseFromGrave() {
-    this.altitude -= 2;
-    if (this.altitude <= 0) {
-      this.altitude = 0;
+    // 原版 UpdateZombieRiseFromGrave: phaseCounter 150→0; 后50tick 内 altitude -200→0 (线性)
+    if (this.inPool) {
+      this.altitude = lerp(-40, -150, Math.min(1, Math.max(0, this.phaseCounter / 50))) * this.scaleZombie;
+    } else {
+      this.altitude = lerp(0, -200, Math.min(1, Math.max(0, this.phaseCounter / 50)));
+    }
+    if (this.phaseCounter <= 0) {
+      this.altitude = this.isOnHighGround ? HIGH_GROUND_HEIGHT : 0;
       this.phase = PH.NORMAL;
       this.startWalkAnim(0);
     }
@@ -2481,10 +2544,38 @@ class Zombie {
     return this.bodyReanim.getTrackPosition(name);
   }
 
+    get lootValue() {
+    // 原版 mZombieValue 掉落因子
+    const V = { NORMAL: 1, FLAG: 1, BACKUP: 1, DUCKY: 1, CONE: 2, POLEVAULTER: 2, NEWSPAPER: 2, BALLOON: 2,
+      BUCKET: 4, SCREEN_DOOR: 4, DIGGER: 3, POGO: 3, YETI: 3, LADDER: 3, SNORKLE: 3, BOBSLED: 3,
+      JACKBOX: 3, BUNGEE: 3, FOOTBALL: 7, DANCER: 5, DOLPHIN: 3, ZAMBONI: 5, CATAPULT: 5, IMP: 10, GARGANTUAR: 10, REDEYE: 10 };
+    return V[this.type] || 1;
+  }
   dropLoot() {
     if (this.droppedLoot) return;
     this.droppedLoot = true;
-    // 原版: 普通掉落由掉落表决定; 调试默认不掉
+    // 原版 Board::DropLootPiece (Board.cpp 9036-9152):
+    // aDropHit = Rand(30000); 阈值 = 僵尸价值×概率带
+    // 普僵(价值1): 钻0.047% 金0.79% 银7.5% ≈ 8.3%总掉率
+    if (this.fromWave !== -2 && this.board && this.board.canDropLoot()) {
+      const value = this.lootValue || 1;
+      const roll = Math.random() * 30000;
+      // 僵尸价值因子 (原版 mZombieValue: 普1/路2/桶4/橄榄7/巨10)
+      const chocoBase = 0;   // 巧克力(未实装蜗牛) — 预留
+      const potted = chocoBase + 12;                  // 盆栽 12/30000
+      const diamondT = potted + 14;                   // 钻石 14/30000
+      const goldT = potted + 250;                     // 金币 250/30000
+      const silverT = potted + 2500;                  // 银币 2500/30000
+      if (roll < potted * value) {
+        this.board.addCoin(this.posX + 30, this.posY + 30, 100, 'diamond');
+      } else if (roll < diamondT * value) {
+        this.board.addCoin(this.posX + 30, this.posY + 30, 100, 'diamond');
+      } else if (roll < goldT * value) {
+        this.board.addCoin(this.posX + 30, this.posY + 30, 5, 'gold');
+      } else if (roll < silverT * value) {
+        this.board.addCoin(this.posX + 30, this.posY + 30, 1, 'silver');
+      }
+    }
   }
 
   // ---------------- 冰冻/黄油 ----------------
@@ -2864,12 +2955,15 @@ class Zombie {
     if (!r) return;
     const dp = this.getDrawPos();
 
-    // 剪裁 (泳池/地道遮挡)
+    // 原版 GameObject::BeginDraw: g->Translate(mX, mY) — reanim overlay 为相对偏移
+    ctx.save();
+    ctx.translate(this.x, this.y);
+
+    // 剪裁 (泳池/地道遮挡, 原版相对坐标)
     let clipSave = null;
     if (dp.clipHeight > CLIP_HEIGHT_LIMIT) {
-      clipSave = { x: 0, y: 0, w: ctx.canvas.width, h: ctx.canvas.height };
+      clipSave = true;
       const drawHeight = 120 - dp.clipHeight + 71;
-      ctx.save();
       ctx.beginPath();
       ctx.rect(dp.imageOffsetX - 200, dp.imageOffsetY + dp.bodyY - 78, 520, drawHeight);
       ctx.clip();
@@ -2950,7 +3044,8 @@ class Zombie {
       r.drawRenderGroup(ctx, RG.OVER_SHIELD);
     }
 
-    if (clipSave) ctx.restore();
+    if (clipSave) { /* clip 在外层 restore 中一并释放 */ }
+    ctx.restore();   // BeginDraw/EndDraw
   }
 
   drawBobsledReanim(ctx, dp, before) {
@@ -2970,23 +3065,26 @@ class Zombie {
   drawBungeeReanim(ctx) {
     const r = this.bodyReanim;
     if (!r) return;
-    // 绳子
+    // 绳子 (相对坐标: ctx 已 translate(this.x, this.y))
     if (this.phase !== PH.BUNGEE_CUTSCENE) {
       ctx.save();
       ctx.strokeStyle = '#8b7355';
       ctx.lineWidth = 3;
       ctx.beginPath();
-      const ropeX = this.x + 60;
+      const ropeX = 60;
       ctx.moveTo(ropeX, -60);
-      ctx.lineTo(ropeX, this.y + 30);
+      ctx.lineTo(ropeX, 30);
       ctx.stroke();
       ctx.restore();
     }
     r.drawRenderGroup(ctx, RG.NORMAL);
-    // 抓住植物上提
+    // 抓住植物上提 (drawAt 内部自行处理绝对坐标 — 需先抵消外层平移)
     if (this.stolenPlant && !this.stolenPlant.dead) {
+      ctx.save();
+      ctx.translate(-this.x, -this.y);
       const p = this.stolenPlant;
       p.drawAt(ctx, this.x, this.y + 20 - (3000 - this.altitude) * 0.02);
+      ctx.restore();
     }
   }
 
