@@ -5,7 +5,7 @@
 // ============================================================
 'use strict';
 
-const { CONST, PLANTS, ZOMBIES, LEVELS, availablePlants, MUSHROOMS, AQUATIC, GROUNDCOVER, awardPlantForLevel } = require('./data');
+const { CONST, PLANTS, ZOMBIES, LEVELS, MODE_LEVELS, availablePlants, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, UPGRADE_ORDER, SHOP_ITEMS, awardPlantForLevel, awardForLevel } = require('./data');
 const { Board } = require('./board');
 const { Plant } = require('./plants');
 const { Zombie } = require('./zombie');
@@ -23,13 +23,18 @@ const Game = {
   levelId: 1,
   board: null,
   progress: { unlocked: 1 },
-  almanac: { tab: 'plants', page: 0, selected: null },
+  almanac: { tab: 'index', page: 0, selected: null },
   selectedCard: -1,
   shovelMode: false,
   shovelUnlocked: false,   // 铲子解锁 (原版: 1-5 戴夫赠送)
   debugUnlocked: false,    // 调试模式: 选项屏一键解锁后置位
   justUnlocked: null,
   endless: false,
+  selectedZombieCard: -1,   // 我不是僵尸: 选中的僵尸卡
+  menuDialog: null,         // 游戏内菜单对话框 (#14: 菜单按钮 → 菜单页而非直接回主菜单)
+  coins: 0,                 // 金币 (戴夫商店货币, 原版 $)
+  purchased: {},            // 商店已购物 { key: true }
+  shopTab: 'items',         // 商店页签
 
   async boot() {
     if (this._booted) return; this._booted = true;
@@ -55,7 +60,12 @@ const Game = {
       const save = JSON.parse(localStorage.getItem('webpvz_save') || '{}');
       if (save.unlocked) this.progress.unlocked = save.unlocked;
       if (save.debugUnlocked) this.debugUnlocked = true;
+      if (save.coins) this.coins = save.coins;
+      if (save.purchased) this.purchased = save.purchased;
+      this.daveSeen = JSON.parse(localStorage.getItem('webpvz_dave') || '{}');
     } catch (e) { }
+    this.daveSeen = this.daveSeen || {};
+    this.purchasedSet = new Set(Object.keys(this.purchased));
     // 输入
     this.bindInput();
     // 开始
@@ -94,13 +104,32 @@ const Game = {
       if (e.touches[0]) { this.onClick(pos(e)); this.audio.resume(); e.preventDefault(); }
     }, { passive: false });
     // 移动端: 长按/双击不弹菜单/缩放
-    this.canvas.addEventListener('contextmenu', e => e.preventDefault());
+    this.canvas.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      // 右键取消: 铲子/免费植物/选中卡 (原版 RefreshSeedPacketFromCursor)
+      if (this.state === 'playing') {
+        if (this.shovelMode) { this.shovelMode = false; this.audio.play('shovel'); }
+        else if (this.freePlant) {
+          // 原版 DroppedUsableSeed: 种子包放回原地
+          const b = this.board;
+          if (b && b.vasePackets && this._freePlantPos) {
+            b.vasePackets.push({ plant: this.freePlant, x: this._freePlantPos.x, y: this._freePlantPos.y, vx: 0, vy: 0, ground: this._freePlantPos.y, life: 15, t: 0, taken: false });
+          }
+          this.freePlant = null;
+          this.audio.play('shovel');
+        } else if (this.selectedCard >= 0) { this.selectedCard = -1; this.audio.play('tap'); }
+        else if (this.selectedZombieCard >= 0) { this.selectedZombieCard = -1; }
+      }
+    });
     document.addEventListener('gesturestart', e => e.preventDefault());
     window.addEventListener('keydown', e => {
       if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
-        if (this.state === 'playing' && this.board) { this.board.paused = !this.board.paused; this.audio.play('pause'); }
+        if (this.state === 'playing' && this.board) {
+          if (this.menuDialog) this.closeMenuDialog();
+          else this.openMenuDialog();
+        }
       }
-      if (e.key === ' ' && this.state === 'playing' && this.board) {
+      if (e.key === ' ' && this.state === 'playing' && this.board && !this.menuDialog) {
         this.board.speed = this.board.speed === 1 ? 2 : this.board.speed === 2 ? 4 : 1;
       }
     });
@@ -116,6 +145,10 @@ const Game = {
       case 'note': Screens.note.click(p, this); break;
       case 'lose': Screens.lose.click(p, this); break;
       case 'levelselect': Screens.levelSelect.click(p, this); break;
+      case 'modeselect': Screens.modeSelect.click(p, this); break;
+      case 'shop': Screens.shop.click(p, this); break;
+      case 'zengarden': Screens.zengarden.click(p, this); break;
+      case 'modewin': Screens.modeWin.click(p, this); break;
       case 'playing': this.gameClick(p); break;
       case 'almanac': this.almanacClick(p); break;
     }
@@ -137,7 +170,7 @@ const Game = {
     }
     // 随机 (原版 (332,546,100,30))
     if (q.x >= 332 && q.x <= 432 && q.y >= 546 && q.y <= 576) {
-      const pool = availablePlants(this.levelId);
+      const pool = availablePlants(this.levelId, this.purchasedSet);
       const n = Math.min(board.seedSlots, pool.length);
       board.chosenSeeds = shuffle(pool.slice()).slice(0, n);
       board.seedCards = board.chosenSeeds.map(t => ({ type: t, cd: 0 }));
@@ -145,7 +178,7 @@ const Game = {
       return;
     }
     // 卡片切换 (原版网格: col*53+22, row*73+128)
-    const pool = availablePlants(this.levelId);
+    const pool = availablePlants(this.levelId, this.purchasedSet);
     let changed = false;
     pool.forEach((type, i) => {
       const gx = (i % 8) * 53 + 22;
@@ -164,19 +197,30 @@ const Game = {
 
   almanacClick(p) {
     const a = this.almanac;
-    if (UI.backButton && hit(p, UI.backButton)) {
-      this.state = 'menu'; this.audio.play('buttonclick'); return;
-    }
-    for (const t of (UI.almanacTabs || [])) {
-      if (hit(p, t)) {
-        a.tab = t.x < 400 ? 'plants' : 'zombies';
-        a.selected = null;
-        this.audio.play('tap');
-        return;
+    const UI = require('./ui').UI;
+    const hit = (b) => b && p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+    // 关闭按钮 → 主菜单
+    if (hit(UI._almClose)) { this.audio.play('gravebutton'); this.state = 'menu'; return; }
+    // 索引页: 两个大按钮
+    if (a.tab === 'index') {
+      for (const b of (UI._almIndexBtns || [])) {
+        if (hit(b)) {
+          a.tab = b.k; a.selected = null;
+          this.audio.play('tap');
+          return;
+        }
       }
+      return;
     }
+    // 内容页: 返回索引
+    if (hit(UI._almBack)) {
+      a.tab = 'index'; a.selected = null;
+      this.audio.play('tap');
+      return;
+    }
+    // 网格卡片
     for (const c of (UI.almanacCells || [])) {
-      if (hit(p, c)) {
+      if (hit(c)) {
         a.selected = a.selected === c.key ? null : c.key;
         this.audio.play('tap');
         return;
@@ -184,9 +228,37 @@ const Game = {
     }
   },
 
+  markDaveSeen(lv) {
+    this.daveSeen[lv] = true;
+    try { localStorage.setItem('webpvz_dave', JSON.stringify(this.daveSeen)); } catch (e) { }
+  },
+
   gameClick(p) {
     const board = this.board;
+    // ---- 游戏内菜单对话框 (打开时仅响应对话框) ----
+    if (this.menuDialog) { this.menuDialogClick(p); return; }
     if (board.paused) { board.paused = false; return; }
+    // ---- 菜单按钮 (原版: 打开选项菜单 = 暂停; 选卡期间同样可用 #15) ----
+    if (p.x > 681 && p.x < 798 && p.y > 0 && p.y < 36) { this.openMenuDialog(); return; }
+    // ---- 特殊模式点击路由 (打僵尸/罐子/我不是僵尸/雨天种子) ----
+    if (board.modeClick && board.modeClick(this, p)) return;
+    // 传送带: 点击带上卡片 → 取卡 (原版 MouseHitTest: x = 91+i*50+offset)
+    if (board.mode === 'conveyor' && board.belt) {
+      for (let i = 0; i < board.belt.items.length; i++) {
+        const it = board.belt.items[i];
+        const x = 91 + i * 50 + it.offset;
+        if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
+          board.belt.items.splice(i, 1);
+          // 原版 RemoveSeed: 后续卡 offsetX += 51 (视觉不动, 再滑入新槽位)
+          for (let j = i; j < board.belt.items.length; j++) board.belt.items[j].offset += 51;
+          board.seedCards = [{ type: it.type, cd: 0 }];
+          this.selectedCard = 0;
+          this.shovelMode = false;
+          this.audio.play('seedlift');
+          return;
+        }
+      }
+    }
     // 选卡期间: 选卡界面交互
     if (Cutscene.active && Cutscene.seedChoosing) { this.seedChooseClick(p); return; }
     // 戴夫对话 (1-5 赠铲子): 点击推进
@@ -196,8 +268,6 @@ const Game = {
       if (!Cutscene.board.level.chooseSeeds) Cutscene.t = Math.max(Cutscene.t, 5.9);
       return;
     }
-    // 菜单按钮 (原版石质按钮 681,-10,117,46)
-    if (p.x > 681 && p.x < 798 && p.y > 0 && p.y < 36) { this.abandonLevel(); return; }
     // 铲子 (原版: (extra+456, 0) 70x72; 1-4 关无铲子, 1-5 戴夫赠送后解锁)
     if (this.shovelUnlocked) {
       const cards0 = board.seedCards;
@@ -221,7 +291,9 @@ const Game = {
     for (const c of board.coins) {
       if (!c.collected && Math.abs(p.x - c.x) < 30 && Math.abs(p.y - c.y) < 30) {
         c.collected = true;
-        board.sun += c.value;
+        this.coins += c.value;
+        this.coinsEarned = (this.coinsEarned || 0) + c.value;
+        this.saveShop();
         this.audio.play('points');
         return;
       }
@@ -232,7 +304,8 @@ const Game = {
       const x = this.packetX(i, cards.length);
       if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
         const c = cards[i];
-        if (c.cd <= 0 && board.sun >= PLANTS[c.type].cost) {
+        const free = board.mode === 'conveyor';   // 传送带关卡无阳光花费
+        if (c.cd <= 0 && (free || board.sun >= PLANTS[c.type].cost)) {
           this.selectedCard = this.selectedCard === i ? -1 : i;
           this.shovelMode = false;
           this.audio.play('seedlift');
@@ -245,19 +318,50 @@ const Game = {
     if (cell) {
       const [col, row] = cell;
       if (this.shovelMode) {
-        // 铲除(花盆/睡莲/南瓜/植物)
-        const removed = board.gridPumpkin[row][col] || board.grid[row][col] || board.gridPot[row][col] || board.gridLily[row][col] ||
-          board.gridSpikes[row][col];
+        // 铲除: 多层植物选择 (原版 SpecialPlantHitTest + 三分区)
+        // 原版: 下1/3格 = 南瓜壳; 中部 = 普通植物; 上部 = 浮水植物
+        const cellY0 = board.cellY(row, col);
+        const cellH = (board.scene === 'pool' || board.scene === 'fog') ? 85 : 100;
+        const relY = (p.y - cellY0) / cellH;
+        let removed = null;
+        const inner = board.grid[row][col] || board.gridSpikes[row][col];
+        const pumpkin = board.gridPumpkin[row][col];
+        if (pumpkin && inner) {
+          // 两层都有: 按鼠标纵向位置选择 (原版: 点下半格铲南瓜, 点中心铲内部植物)
+          removed = relY >= 0.55 ? pumpkin : inner;
+        } else {
+          removed = pumpkin || board.grid[row][col] || board.gridPot[row][col] || board.gridLily[row][col] || board.gridSpikes[row][col];
+        }
         if (removed) {
           this.removePlant(removed, board);
           this.audio.play('shovel');
-          this.shovelMode = false;
+          this.audio.play('plant2');
+          this.shovelMode = false;   // 原版: 一次点击即完成并回位 (ClearCursor)
           return;
         }
+        this.shovelMode = false;   // 点空地: 放回铲子
+        this.audio.play('shovel');
         return;
       }
       if (this.selectedCard >= 0) {
+        // 雨天种子: 持有卡
+        if (board.mode === 'raining') {
+          const held = board.heldCards[this.selectedCard];
+          if (held) {
+            this.tryPlant(held.type, row, col, board);
+            if (board.plants[board.plants.length - 1] && board.plants[board.plants.length - 1].row === row && board.plants[board.plants.length - 1].col === col) {
+              board.heldCards.splice(this.selectedCard, 1);
+              this.selectedCard = -1;
+            }
+          }
+          return;
+        }
         this.tryPlant(cards[this.selectedCard].type, row, col, board);
+        return;
+      }
+      // 罐子解谜: 免费植物种植 (原版 CURSOR_TYPE_PLANT_FROM_USABLE_COIN, 不扣阳光)
+      if (this.freePlant) {
+        this.tryPlant(this.freePlant, row, col, board, { free: true });
         return;
       }
       // 玉米加农炮发射
@@ -291,10 +395,14 @@ const Game = {
     clear(board.grid); clear(board.gridLily); clear(board.gridPot); clear(board.gridPumpkin); clear(board.gridSpikes);
   },
 
-  tryPlant(type, row, col, board) {
+  tryPlant(type, row, col, board, opts = {}) {
     const def = PLANTS[type];
+    const conveyor = board.mode === 'conveyor';
+    const free = !!opts.free || !!this.freePlant;
     const card = board.seedCards[this.selectedCard];
-    if (!card || card.cd > 0 || board.sun < def.cost) { this.audio.play('buzzer'); return; }
+    if (!conveyor && !free && !card) { this.audio.play('buzzer'); return; }
+    if (!conveyor && !free && (card.cd > 0 || board.sun < def.cost)) { this.audio.play('buzzer'); return; }
+    const bowling = board.level.fixed === 'bowling';
     // 只能种在草地行或水行 (1-1~1-3 单/三行关的泥地不可种植)
     if (!board.grassRows.includes(row) && !board.isWater(row, col)) { this.audio.play('buzzer'); return; }
     // 种植规则
@@ -317,8 +425,9 @@ const Game = {
       if (!target || !target.sleeping) { this.audio.play('buzzer'); return; }
       target.setSleep(false);
       this.audio.play('coffee');
-      board.sun -= def.cost;
-      card.cd = def.cd / 1000;
+      if (!conveyor) board.sun -= def.cost;
+      if (card) card.cd = def.cd / 1000;
+      if (conveyor) board.seedCards = [];
       this.selectedCard = -1;
       return;
     }
@@ -326,8 +435,10 @@ const Game = {
     if (type === 'GRAVEBUSTER') {
       if (!board.graves.some(g => g.row === row && g.col === col)) { this.audio.play('buzzer'); return; }
     }
-    // 占位检查
-    if (GROUNDCOVER.has(type)) {
+    // 占位检查 (保龄球: 坚果直接滚动不占格)
+    if (bowling) {
+      // 无占位限制
+    } else if (GROUNDCOVER.has(type)) {
       if (board.gridSpikes[row][col] || board.grid[row][col]) { this.audio.play('buzzer'); return; }
     } else if (type === 'PUMPKIN') {
       if (board.gridPumpkin[row][col]) { this.audio.play('buzzer'); return; }
@@ -341,14 +452,18 @@ const Game = {
     // 种植
     const p = new Plant(type, row, col, board);
     board.plants.push(p);
-    if (type === 'LILYPAD') board.gridLily[row][col] = p;
+    if (bowling) {
+      p.rolling = true;   // 坚果保龄球: 滚动 (plants.js WALLNUT case)
+    } else if (type === 'LILYPAD') board.gridLily[row][col] = p;
     else if (type === 'FLOWERPOT') board.gridPot[row][col] = p;
     else if (type === 'PUMPKIN') board.gridPumpkin[row][col] = p;
     else if (GROUNDCOVER.has(type)) board.gridSpikes[row][col] = p;
     else board.grid[row][col] = p;
-    // 音效
-    board.sun -= def.cost;
-    card.cd = def.cd / 1000;
+    // 音效 + 消耗
+    if (!conveyor && !free) board.sun -= def.cost;
+    if (!conveyor && !free && card) card.cd = def.cd / 1000;
+    if (conveyor) board.seedCards = [];   // 传送带卡一次性
+    if (free) this.freePlant = null;      // 免费植物用后清空
     this.selectedCard = -1;
     this.audio.play(board.isWater(row, col) ? 'plant_water' : (Math.random() < 0.5 ? 'plant' : 'plant2'));
   },
@@ -398,26 +513,52 @@ const Game = {
 
   startLevel(lv) {
     this.levelId = lv;
+    this.modeKey = null;
     this.endless = false;
     this.levelDef = LEVELS[lv - 1];
     const level = this.levelDef;
-    // 铲子解锁 (原版 ShowShovel: 首次冒险 1-4 无铲子, 1-5 戴夫对话末尾赠送, 之后常驻; 重玩旧关直接有)
+    this._startCommon(level);
+  },
+
+  // 额外模式入口 (玩玩小游戏 / 解谜 / 生存)
+  startMode(key) {
+    const level = MODE_LEVELS[key];
+    if (!level) return;
+    this.levelId = level.id;
+    this.modeKey = key;
+    this.endless = !!level.endless;
+    this.levelDef = level;
+    this._startCommon(level);
+  },
+
+  _startCommon(level) {
+    const lv = this.levelId;
+    // 铲子解锁 (特殊玩法关卡无铲子)
+    const specialNoShovel = ['bowling', 'whack', 'vasebreaker', 'izombie'].includes(level.fixed);
     const firstTime = this.progress.unlocked <= lv;
-    if (lv === 5 && firstTime) this.shovelUnlocked = false;   // 1-5 首次: 由戴夫对话解锁
+    if (specialNoShovel) this.shovelUnlocked = false;
+    else if (lv === 5 && firstTime) this.shovelUnlocked = false;   // 1-5 首次: 由戴夫对话解锁
     else this.shovelUnlocked = lv >= 5 || !firstTime;
     const board = new Board(this, level);
     this.board = board;
     this.selectedCard = -1;
+    this.selectedZombieCard = -1;
     this.shovelMode = false;
+    this.menuDialog = null;
     Banners.clear();
-    // 选卡方式 (原版): 1-7 固定卡槽(全部解锁植物), 1-8+ 手动选卡
-    const pool = availablePlants(lv);
-    board.seedSlots = level.chooseSeeds ? Math.min(pool.length, level.bankSlots) : pool.length;
+    // 选卡方式 (原版): 1-7 固定卡槽(全部解锁植物), 1-8+ 手动选卡; 传送带/特殊玩法无选卡
+    const noChoose = !!level.fixed || level.rainingSeeds;
+    const pool = lv <= 50 ? availablePlants(lv, this.purchasedSet) : availablePlants(50, this.purchasedSet);
+    board.seedSlots = (level.chooseSeeds && !noChoose) ? Math.min(pool.length, this.bankSlotsFor(lv) || level.bankSlots || 9) : pool.length;
     board.chosenSeeds = [];
-    if (!level.chooseSeeds) {
+    if (!level.chooseSeeds && !noChoose) {
       board.chosenSeeds = pool.slice();           // 1-7: 固定全部
-    } else if (level.fixed) {
-      board.chosenSeeds = pool.slice(0, board.seedSlots); // 传送带关卡: 预填满, 后续随机替换
+    } else if (level.chooseSeeds && !noChoose) {
+      board.chosenSeeds = pool.slice(0, board.seedSlots);
+    }
+    // 生存模式: 用全部可用植物选卡
+    if (level.endless && level.chooseSeeds) {
+      board.seedSlots = Math.min(pool.length, this.bankSlotsFor(lv) || level.bankSlots || 9);
     }
     // 花盆预植 (屋顶)
     if (level.potColumns > 0) {
@@ -443,33 +584,85 @@ const Game = {
     board.state = 'intro';
     this.state = 'playing';
     this.audio.playBGM(level.bgm);
+    // 特殊玩法: 简短过场 (无选卡/无戴夫/无 RSP)
+    const quiet = ['whack', 'vasebreaker', 'izombie'].includes(level.fixed);
+    if (quiet) { level.noReadySet = true; }
     Cutscene.start(board);
+    if (quiet) { Cutscene.t = 4.5; }   // 跳过镜头平移直接就位
+  },
+
+  saveShop() {
+    try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked, debugUnlocked: this.debugUnlocked || undefined, coins: this.coins, purchased: this.purchased })); } catch (e) { }
+  },
+
+  // ---------- 戴夫商店 (#11: 通关 3-4 解锁) ----------
+  shopUnlocked() { return this.progress.unlocked > 24 || this.debugUnlocked; },
+  // ---------- 禅镜花园 (通关 5-4 解锁) ----------
+  zenGardenUnlocked() { return this.progress.unlocked > 44 || this.debugUnlocked; },
+  buyItem(key) {
+    const it = SHOP_ITEMS.find(s => s.key === key);
+    if (!it || this.purchased[key]) return false;
+    if (this.coins < it.cost) { this.audio.play('buzzer'); return false; }
+    // 种子槽须按顺序购买
+    if (key === 'slot9' && !this.purchased['slot8']) return false;
+    if (key === 'slot10' && !this.purchased['slot9']) return false;
+    this.coins -= it.cost;
+    // 消耗品 (肥料/杀虫剂): 加库存可重复购买
+    if (it.consumable) {
+      const zeng = require('./screens').Screens.zengarden;
+      if (!zeng.data) zeng.load();
+      zeng.data[key === 'fertilizer' ? 'fertilizer' : 'bugspray'] =
+        (zeng.data[key === 'fertilizer' ? 'fertilizer' : 'bugspray'] || 0) + it.consumable;
+      zeng.save();
+    } else {
+      this.purchased[key] = true;
+      this.purchasedSet = new Set(Object.keys(this.purchased));
+    }
+    this.saveShop();
+    this.audio.play('points');
+    return true;
+  },
+  bankSlotsFor(lv) {
+    // 原版: 基础槽位数 + 商店扩容
+    const base = Math.min(6 + Math.max(0, Math.floor((lv - 8) / 12)), 7);
+    if (this.purchased['slot10']) return 10;
+    if (this.purchased['slot9']) return 9;
+    if (this.purchased['slot8']) return Math.max(8, base);
+    return base;
   },
 
   // 重新挑战当前关
   retryLevel() {
     this.audio.play('buttonclick');
-    this.startLevel(this.levelId);
+    if (this.modeKey) this.startMode(this.modeKey);
+    else this.startLevel(this.levelId);
   },
 
   onLevelWin() {
     this.justUnlocked = null;
+    const isMode = !!this.modeKey;
     const lv = this.levelId;
-    const level = LEVELS[lv - 1];
-    if (lv >= this.progress.unlocked) {
+    const level = this.levelDef;
+    if (!isMode && lv >= this.progress.unlocked) {
       this.progress.unlocked = Math.min(51, lv + 1);
-      try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked, debugUnlocked: this.debugUnlocked || undefined })); } catch (e) { }
+      try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked, debugUnlocked: this.debugUnlocked || undefined, coins: this.coins, purchased: this.purchased })); } catch (e) { }
     }
-    // 奖励判定 (原版): X-5/X-10 → 纸条; 其余有新植物 → 植物奖励; 5-10 → 通关
-    this.justUnlocked = awardPlantForLevel(lv);
-    const isNoteLevel = level.sub === 5 || level.sub === 10;
+    if (isMode) {
+      // 模式胜利 → 回模式选择屏
+      this.audio.playBGM(null);
+      this.audio.play('winmusic');
+      this.winStats = { waves: this.board.wave, score: this.board.whackScore || 0, mode: this.modeKey };
+      Transition.to(() => { this.state = 'modewin'; Screens.t = 0; }, 0.8);
+      return;
+    }
+    // 奖励判定 (原版 TrySpawnLevelAward 奖励表: X-4道具/X-9纸条/5-10奖杯/其余新植物)
+    this.levelAward = awardForLevel(lv);
+    this.justUnlocked = this.levelAward && this.levelAward.type === 'seed' ? this.levelAward.plant : null;
     this.audio.playBGM(null);
     this.audio.play('winmusic');
     Transition.to(() => {
-      if (lv >= 50) { this.state = 'award'; }               // 通关: 奖杯
-      else if (this.justUnlocked) { this.state = 'award'; }  // 新植物
-      else if (isNoteLevel) { this.state = 'note'; }         // 纸条关
-      else { this.state = 'note'; }                          // 其他: 简短纸条/奖励过场
+      if (this.levelAward && this.levelAward.type !== 'note') { this.state = 'award'; }
+      else { this.state = 'note'; }         // 纸条关 / 无奖励
     }, 0.8);
   },
 
@@ -484,6 +677,38 @@ const Game = {
       return;
     }
     this.startLevel(next);
+  },
+
+  // ---------- 游戏内菜单对话框 (原版 DoNewOptions: 回到游戏/重新开始/主菜单) ----------
+  openMenuDialog() {
+    this.audio.play('pause');
+    this.menuDialog = { hover: null };
+    if (this.board) this.board.paused = true;
+  },
+  closeMenuDialog() {
+    this.menuDialog = null;
+    if (this.board) this.board.paused = false;
+  },
+  menuDialogButtons() {
+    return [
+      { k: 'resume', label: '回到游戏', x: 240, y: 186, w: 320, h: 50 },
+      { k: 'restart', label: '重新开始本关', x: 240, y: 252, w: 320, h: 50 },
+      { k: 'options', label: '选项设置', x: 240, y: 318, w: 320, h: 50 },
+      { k: 'mainmenu', label: '返回主菜单', x: 240, y: 408, w: 320, h: 50 },
+    ];
+  },
+  menuDialogClick(p) {
+    for (const b of this.menuDialogButtons()) {
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        this.audio.play('buttonclick');
+        if (b.k === 'resume') { this.closeMenuDialog(); }
+        else if (b.k === 'restart') { this.menuDialog = null; this.retryLevel(); }
+        else if (b.k === 'options') { this.closeMenuDialog(); this._optionsReturn = 'playing'; this.state = 'options'; }
+        else if (b.k === 'mainmenu') { this.menuDialog = null; this.abandonLevel(); }
+        return;
+      }
+    }
+    // 点击外部不关闭 (避免误触)
   },
 
   onLevelLose(row) {
@@ -501,6 +726,9 @@ const Game = {
     Screens.updateHover(this.mouse);
     Banners.update(dt);
     Transition.update(dt);
+    if (this.state === 'zengarden') {
+      Screens.zengarden.update(dt);
+    }
     if (this.state === 'playing' && this.board) {
       if (!this.board.paused) {
         const sdt = dt * this.board.speed;
@@ -508,6 +736,11 @@ const Game = {
         Cutscene.update(sdt);
         // 卡片冷却
         for (const c of this.board.seedCards) c.cd = Math.max(0, c.cd - sdt);
+        // 雨天种子: 持有卡倒计时
+        if (this.board.mode === 'raining') {
+          for (const h of this.board.heldCards) h.life -= sdt;
+          this.board.heldCards = this.board.heldCards.filter(h => h.life > 0);
+        }
       }
     }
   },
@@ -532,6 +765,10 @@ const Game = {
       case 'lose': Screens.lose.draw(ctx); break;
       case 'almanac': UI.drawAlmanac(ctx); break;
       case 'levelselect': Screens.levelSelect.draw(ctx); break;
+      case 'modeselect': Screens.modeSelect.draw(ctx); break;
+      case 'shop': Screens.shop.draw(ctx); break;
+      case 'zengarden': Screens.zengarden.draw(ctx); break;
+      case 'modewin': Screens.modeWin.draw(ctx, this); break;
       case 'playing': {
         Renderer.drawBoard(ctx, this.board);
         UI.drawGameHUD(ctx, this.board);
@@ -541,7 +778,11 @@ const Game = {
         if (Cutscene.active && (Cutscene.seedChoosing || Cutscene.chooserY < 516)) {
           UI.drawSeedChooser(ctx, this.board);
         }
-        if (this.board.paused) UI.drawPause(ctx, this.board);
+        // 特殊模式叠加层 (罐子/我不是僵尸卡/雨天种子)
+        UI.drawModeOverlay(ctx, this.board);
+        if (this.board.paused && !this.menuDialog) UI.drawPause(ctx, this.board);
+        // 游戏内菜单对话框
+        if (this.menuDialog) UI.drawMenuDialog(ctx, this);
         // 种植预览
         this.drawPreview(ctx);
         break;
@@ -555,15 +796,24 @@ const Game = {
     const m = this.mouse;
     if (!m) return;
     // 种植预览
+    let selType = null;
     if (this.selectedCard >= 0) {
-      const type = board.seedCards[this.selectedCard].type;
+      if (board.mode === 'raining') {
+        const held = board.heldCards[this.selectedCard];
+        selType = held ? held.type : null;
+      } else if (board.seedCards[this.selectedCard]) {
+        selType = board.seedCards[this.selectedCard].type;
+      }
+    }
+    if (!selType && this.freePlant) selType = this.freePlant;
+    if (selType) {
       const cell = this.pixelToCell(m.x, m.y);
       if (cell) {
         const [col, row] = cell;
-        const ok = this.canPlacePreview(type, row, col, board);
+        const ok = this.canPlacePreview(selType, row, col, board);
         ctx.save();
         ctx.globalAlpha = 0.55;
-        const thumb = UI.getThumb(type);
+        const thumb = UI.getThumb(selType);
         if (thumb) ctx.drawImage(thumb, board.gridX(col) - 5, board.cellY(row, col) - 30, 90, 100);
         ctx.globalAlpha = 0.35;
         ctx.fillStyle = ok ? '#7cff5a' : '#ff5a5a';
@@ -571,12 +821,65 @@ const Game = {
         ctx.restore();
       }
     }
+    // 打僵尸模式: 锤子光标 (原版 Hammer.reanim anim_whack_zombie)
+    if (board.mode === 'whack' && m) {
+      const RE = require('./reanim');
+      if (!this._whackMallet && RE.hasDef('Hammer')) {
+        this._whackMallet = Assets.reanim('Hammer');
+        this._whackMallet.play('anim_whack_zombie', RE.LOOP, 0);
+      }
+      if (this._whackMallet) {
+        this._whackMallet.setPosition(m.x - 20, m.y - 30);
+        this._whackMallet.draw(ctx);
+      } else {
+        ctx.save();
+        ctx.globalAlpha = 0.9;
+        ctx.translate(m.x, m.y);
+        ctx.rotate(-0.5);
+        ctx.fillStyle = '#8a6642';
+        ctx.fillRect(-4, -6, 8, 34);
+        ctx.fillStyle = '#a8926a';
+        ctx.fillRect(-16, -22, 32, 20);
+        ctx.restore();
+      }
+    }
+    // 罐子解谜: 拿着免费植物时的种子包光标
+    if (this.freePlant && m) {
+      ctx.save();
+      ctx.globalAlpha = 0.95;
+      const thumb = UI.getThumb(this.freePlant);
+      if (thumb) ctx.drawImage(thumb, m.x - 25, m.y - 35, 50, 70);
+      ctx.restore();
+    }
+    // 铲子 + 悬停目标高亮 (原版: 被铲植物变亮)
     if (this.shovelMode && this.shovelUnlocked) {
       ctx.save();
       ctx.globalAlpha = 0.8;
       const shovel = Assets.image('shovel_hi_res') || Assets.image('shovel');
       if (shovel && m) ctx.drawImage(shovel, m.x - 20, m.y - 30, 40, 56);
       ctx.restore();
+      // 高亮被铲目标 (原版 be_shovel_look: 变亮 Color(2,2,2))
+      const cell = this.pixelToCell(m.x, m.y);
+      if (cell) {
+        const [col, row] = cell;
+        const cellY0 = board.cellY(row, col);
+        const cellH = (board.scene === 'pool' || board.scene === 'fog') ? 85 : 100;
+        const relY = (m.y - cellY0) / cellH;
+        const inner = board.grid[row][col] || board.gridSpikes[row][col];
+        const pumpkin = board.gridPumpkin[row][col];
+        let target = null;
+        if (pumpkin && inner) target = relY >= 0.55 ? pumpkin : inner;
+        else target = pumpkin || board.grid[row][col] || board.gridPot[row][col] || board.gridLily[row][col] || board.gridSpikes[row][col];
+        if (target && target.anim) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = 0.35 + Math.sin(board.time * 6) * 0.08;
+          for (const L of target.anims) {
+            if (L && L.r) { L.r.draw(ctx); }
+          }
+          ctx.restore();
+        }
+      }
     }
   },
 

@@ -8,7 +8,7 @@
 // ============================================================
 'use strict';
 
-const { CONST, PLANTS, ZOMBIES, LEVELS, SEED_ORDER, availablePlants, awardPlantForLevel } = require('./data');
+const { CONST, PLANTS, ZOMBIES, LEVELS, SEED_ORDER, SHOP_ITEMS, availablePlants, awardPlantForLevel } = require('./data');
 const RE = require('./reanim');
 const __getUI = () => { const m = (window.__mods && window.__mods['ui']) || require('./ui'); return m && m.UI; };
 
@@ -205,13 +205,13 @@ Screens.menu = {
     // 冒险模式大按钮
     const [ax, ay] = trackPos('SelectorScreen_StartAdventure_button');
     B.push({ k: 'adventure', x: ax, y: ay, w: 331, h: 146, track: 'SelectorScreen_StartAdventure_button', hl: 'selectorscreen_startadventure_highlight.png' });
-    // 小游戏/解谜/生存 (锁定)
+    // 小游戏/解谜 (解锁: 玩玩小游戏+解谜模式) / 生存
     const [mx, my] = trackPos('SelectorScreen_Survival_button');
-    B.push({ k: 'locked', x: mx, y: my, w: 313, h: 133 });
+    B.push({ k: 'survival', x: mx, y: my, w: 313, h: 133 });
     const [px, py] = trackPos('SelectorScreen_Challenges_button');
-    B.push({ k: 'locked', x: px, y: py, w: 286, h: 122 });
+    B.push({ k: 'challenges', x: px, y: py, w: 286, h: 122 });
     const [vx, vy] = trackPos('SelectorScreen_ZenGarden_button');
-    B.push({ k: 'locked', x: vx, y: vy, w: 266, h: 123 });
+    B.push({ k: 'zengarden', x: vx, y: vy, w: 266, h: 123 });
     // 图鉴 (原版: BG_Right + (256,387))
     B.push({ k: 'almanac', x: bgR[0] + 256, y: bgR[1] + 387, w: 99, h: 99, hl: 'selectorscreen_almanachighlight.png' });
     // 选项/帮助/退出 (原版: BG_Right 偏移)
@@ -226,12 +226,18 @@ Screens.menu = {
 
   // ---- 兜底菜单 (弱网素材缺失时也能进入游戏) ----
   fallbackButtons() {
-    return [
-      { k: 'adventure', x: 234, y: 210, w: 332, h: 92, label: '冒 险 模 式' },
-      { k: 'almanac', x: 300, y: 330, w: 200, h: 60, label: '植 物 图 鉴' },
-      { k: 'options', x: 300, y: 410, w: 200, h: 60, label: '选　　项' },
-      { k: 'help', x: 300, y: 490, w: 200, h: 60, label: '帮　　助' },
+    const game = Screens.game;
+    const btns = [
+      { k: 'adventure', x: 234, y: 170, w: 332, h: 82, label: '冒 险 模 式' },
+      { k: 'challenges', x: 234, y: 262, w: 332, h: 66, label: '玩玩小游戏 · 解谜' },
+      { k: 'survival', x: 234, y: 338, w: 332, h: 66, label: '生 存 模 式' },
+      { k: 'almanac', x: 234, y: 414, w: 155, h: 60, label: '图 鉴' },
+      { k: 'options', x: 411, y: 414, w: 155, h: 60, label: '选　项' },
     ];
+    if (game && game.shopUnlocked && game.shopUnlocked()) {
+      btns.push({ k: 'shop', x: 411, y: 330, w: 155, h: 60, label: '戴夫商店' });
+    }
+    return btns;
   },
 
   drawFallback(ctx) {
@@ -307,32 +313,40 @@ Screens.menu = {
       const aimg = img(isH ? 'selectorscreen_almanachighlight.png' : 'selectorscreen_almanac.png');
       if (aimg) ctx.drawImage(aimg, alm.x, alm.y);
     }
-    // 冒险按钮高亮 (轨道 override)
+    // 冒险按钮高亮 (轨道 override) + 开始/继续状态切换 (原版 mShowStartButton)
     const adv = this.buttons.find(b => b.k === 'adventure');
     if (adv) {
-      if (hover === 'adventure') inst.setImageOverride('SelectorScreen_StartAdventure_button', 'selectorscreen_startadventure_highlight.png');
-      else inst.setImageOverride('SelectorScreen_StartAdventure_button', null);
-      // 等级数字 (原版 LevelNumbers cel: BG_Right+(486,47) 主关, (509,50) 子关)
       const game = Screens.game;
-      if (game) {
+      const showStart = !game || game.progress.unlocked < 2;   // 原版: 无存档/level<2 → 开始冒险吧!
+      if (hover === 'adventure') {
+        inst.setImageOverride('SelectorScreen_StartAdventure_button',
+          showStart ? 'selectorscreen_startadventure_highlight.png' : 'selectorscreen_adventure_highlight.png');
+      } else {
+        inst.setImageOverride('SelectorScreen_StartAdventure_button',
+          showStart ? null : 'selectorscreen_adventure_button.png');
+      }
+      // 等级数字 (原版 LevelNumbers cel: BG_Right+(486,47) 主关, (509,50) 子关) — 仅继续状态显示
+      if (game && !showStart) {
         const lv = Math.min(game.progress.unlocked, 50);
-        const stage = Math.min(6, Math.floor((lv - 1) / 10) + 1);
-        const sub = lv - (stage - 1) * 10;
-        const nums = img('selectorscreen_levelnumbers.png');
-        if (nums) {
-          const ti = inst.trackIndex('SelectorScreen_BG_Right');
-          const tr = inst.curTransform(ti);
-          const colorize = hover === 'adventure' ? 1 : 0;
-          ctx.save();
-          if (colorize) { ctx.filter = 'brightness(1.35)'; }
-          ctx.drawImage(nums, stage * 12, 0, 12, 17, tr.x + 486, tr.y + 47, 12, 17);
-          if (sub < 10) {
-            ctx.drawImage(nums, sub * 12, 0, 12, 17, tr.x + 509, tr.y + 50, 12, 17);
-          } else {
-            ctx.drawImage(nums, 1 * 12, 0, 12, 17, tr.x + 509, tr.y + 50, 12, 17);
-            ctx.drawImage(nums, 0 * 12, 0, 12, 17, tr.x + 518, tr.y + 51, 12, 17);
+        if (lv <= 50) {
+          const stage = Math.min(6, Math.floor((lv - 1) / 10) + 1);
+          const sub = lv - (stage - 1) * 10;
+          const nums = img('selectorscreen_levelnumbers.png');
+          if (nums) {
+            const ti = inst.trackIndex('SelectorScreen_BG_Right');
+            const tr = inst.curTransform(ti);
+            const colorize = hover === 'adventure' ? 1 : 0;
+            ctx.save();
+            if (colorize) { ctx.filter = 'brightness(1.35)'; }
+            ctx.drawImage(nums, stage * 12, 0, 12, 17, tr.x + 486, tr.y + 47, 12, 17);
+            if (sub < 10) {
+              ctx.drawImage(nums, sub * 12, 0, 12, 17, tr.x + 509, tr.y + 50, 12, 17);
+            } else {
+              ctx.drawImage(nums, 1 * 12, 0, 12, 17, tr.x + 509, tr.y + 50, 12, 17);
+              ctx.drawImage(nums, 0 * 12, 0, 12, 17, tr.x + 518, tr.y + 51, 12, 17);
+            }
+            ctx.restore();
           }
-          ctx.restore();
         }
       }
     }
@@ -356,27 +370,87 @@ Screens.menu = {
       ctx.textAlign = 'left';
       ctx.fillText(name + '!', tr.x + 170.5 - w / 2, tr.y + 102.5);
       ctx.restore();
-      // 冒险进度提示 (中文化增强)
-      const lv = Math.min(game.progress.unlocked, 50);
-      const label = lv > 50 ? '冒险模式已通关' : `冒险进度 ${LEVELS[lv - 1].label}`;
-      pvzText(ctx, label, 232, 232, 17, '#ffe9a8');
     }
     // 锁定按钮提示 (悬停)
     if (hover === 'locked') {
       pvzText(ctx, '尚未开放', 400, 240, 18, '#cfcfcf');
     }
+    // ---- 戴夫的车 → 商店 (原版素材 Store_HatchbackOpen; 通关 3-4 后解锁) ----
+    if (game && game.shopUnlocked && game.shopUnlocked()) {
+      const cx = 60, cy = 330, cw2 = 200, ch2 = 110;
+      this.shopRect = { x: cx, y: cy, w: cw2, h: ch2 };
+      const hov2 = inRect(Screens.mouse || { x: -1, y: -1 }, cx, cy, cw2, ch2);
+      const carImg = img('store_hatchbackopen.png');
+      if (carImg) {
+        ctx.save();
+        const bob = Math.sin(Screens.t * 2.2) * 2;
+        ctx.translate(cx + cw2 / 2, cy + ch2 / 2 + bob * 0.3);
+        const sc = hov2 ? 1.04 : 1;
+        ctx.scale(sc, sc);
+        ctx.drawImage(carImg, -carImg.width / 2, -carImg.height / 2);
+        ctx.restore();
+      } else {
+        // 兜底: 程序化车
+        ctx.save();
+        ctx.translate(cx + cw2 / 2, cy + ch2 / 2);
+        const bump = Math.sin(Screens.t * 2.2) * 2;
+        ctx.translate(0, bump * 0.4);
+        ctx.fillStyle = hov2 ? '#d94f3a' : '#b23a28';
+        ctx.beginPath(); ctx.roundRect(-cw2 / 2 + 8, -18, cw2 - 22, 34, 7); ctx.fill();
+        ctx.fillStyle = hov2 ? '#e88a70' : '#c86a52';
+        ctx.beginPath(); ctx.roundRect(-cw2 / 2 + 26, -38, 44, 24, 6); ctx.fill();
+        ctx.fillStyle = '#222';
+        ctx.beginPath(); ctx.arc(-cw2 / 2 + 24, 20, 11, 0, Math.PI * 2); ctx.arc(cw2 / 2 - 22, 20, 11, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#888';
+        ctx.beginPath(); ctx.arc(-cw2 / 2 + 24, 20, 5, 0, Math.PI * 2); ctx.arc(cw2 / 2 - 22, 20, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+      // 金币余额角标 (悬停时显示)
+      if (hov2) {
+        pvzText(ctx, '◆ ' + (game.coins || 0), cx + cw2 / 2, cy - 12, 15, '#ffd34d');
+      }
+    } else {
+      this.shopRect = null;
+    }
   },
 
   click(p, game) {
+    // 戴夫商店入口
+    if (this.shopRect && inRect(p, this.shopRect.x, this.shopRect.y, this.shopRect.w, this.shopRect.h)) {
+      game.audio.play('gravebutton');
+      game.state = 'shop'; Screens.shop.enter();
+      return;
+    }
     for (const b of (this.buttons || [])) {
       if (!inRect(p, b.x, b.y, b.w, b.h)) continue;
       if (b.k === 'adventure') {
         game.audio.play('gravebutton');
         this.inst && this.inst.setImageOverride('SelectorScreen_StartAdventure_button', null);
         game.startAdventure();
+      } else if (b.k === 'challenges') {
+        game.audio.play('gravebutton');
+        game.state = 'modeselect';
+        Screens.modeSelect.enter('challenge');
+      } else if (b.k === 'survival') {
+        game.audio.play('gravebutton');
+        game.state = 'modeselect';
+        Screens.modeSelect.enter('survival');
+      } else if (b.k === 'zengarden') {
+        // 禅镜花园: 通关 5-4 解锁 (原版 level 44 送洒水壶)
+        if (game.zenGardenUnlocked && game.zenGardenUnlocked()) {
+          game.audio.play('gravebutton');
+          game.state = 'zengarden';
+          Screens.zengarden.enter();
+          Screens.zengarden.refreshNeeds && Screens.zengarden.refreshNeeds();
+        } else {
+          game.audio.play('buzzer');
+        }
+      } else if (b.k === 'shop') {
+        game.audio.play('gravebutton');
+        game.state = 'shop'; Screens.shop.enter();
       } else if (b.k === 'almanac') {
         game.audio.play('gravebutton');
-        game.state = 'almanac'; game.almanac.selected = null;
+        game.state = 'almanac'; game.almanac.selected = null; game.almanac.tab = 'index';
       } else if (b.k === 'options') {
         game.audio.play('buttonclick');
         game.state = 'options';
@@ -507,64 +581,169 @@ Screens.options = {
 // 帮助
 // ================================================================
 Screens.help = {
+  page: 0,
+  PAGES() {
+    return [
+      {
+        title: '怎 么 玩',
+        lines: [
+          ['· 收集阳光, 种植植物防守草坪', '#4a2f10'],
+          ['· 点击种子卡再点击草坪即可种植', '#4a2f10'],
+          ['· 铲子可以移除植物 (南瓜内植物: 点上半格铲)', '#4a2f10'],
+          ['· 收集阳光: 天上掉的 + 向日葵产出', '#4a2f10'],
+          ['', ''],
+          ['· 僵尸走到最左侧会触发割草机', '#4a2f10'],
+          ['· 割草机只能用一次, 失守即输', '#4a2f10'],
+          ['', ''],
+          ['· 冒险模式按原版顺序 1-1 → 5-10', '#6b1c04'],
+          ['· X-4 关给道具, X-9 关有僵尸纸条', '#6b1c04'],
+          ['· 通关 3-4 获得车钥匙 → 戴夫商店开业', '#6b1c04'],
+          ['· 通关 5-4 获得洒水壶 → 禅镜花园开启', '#6b1c04'],
+        ],
+      },
+      {
+        title: '玩玩小游戏 · 解谜',
+        lines: [
+          ['【坚果保龄球】传送带送坚果, 种在左三列', '#4a2f10'],
+          ['  滚动的坚果会撞飞一排僵尸, 红线后不许种', '#6a4a20'],
+          ['【打僵尸】墓碑里冒头就点击锤击, 敲够数量过关', '#4a2f10'],
+          ['【雨天种子】种子包从天而降, 点击拾取种植', '#4a2f10'],
+          ['', ''],
+          ['【花瓶终结者】砸罐子放出植物或僵尸', '#4a2f10'],
+          ['  绿罐=植物, 灰罐=僵尸, 打完所有罐子且', '#6a4a20'],
+          ['  清场即胜; 砸出的植物卡免费种植', '#6a4a20'],
+          ['', ''],
+          ['【我是僵尸】指挥僵尸吃掉每行的脑子', '#4a2f10'],
+          ['  僵尸卡种在红线右侧; 吃向日葵掉阳光,', '#6a4a20'],
+          ['  吃满5个脑子获胜, 没僵尸没阳光就输了', '#6a4a20'],
+        ],
+      },
+      {
+        title: '生存模式 · 戴夫商店',
+        lines: [
+          ['【生存】5种场景各一关, 无尽波次挑战', '#4a2f10'],
+          ['  每波僵尸越来越强, 看你能撑多少波', '#6a4a20'],
+          ['', ''],
+          ['【戴夫商店】通关3-4后从主菜单的汽车进入', '#4a2f10'],
+          ['  击杀僵尸掉金币, 商店共4页:', '#6a4a20'],
+          ['  页1: 耙子/种子槽/清洁车/升级植物', '#6a4a20'],
+          ['  页2: 地刺王/吸金磁/冰西瓜/加农炮等', '#6a4a20'],
+          ['  页3: 花园用品(金水壶/肥料/杀虫剂…)', '#6a4a20'],
+          ['  页4: 蘑菇园/水族馆/手推车/臭臭蜗牛', '#6a4a20'],
+          ['', ''],
+          ['【禅镜花园】通关5-4后从主菜单进入', '#4a2f10'],
+          ['  浇水施肥养植物, 成熟后掉金币可出售', '#6a4a20'],
+        ],
+      },
+    ];
+  },
   draw(ctx) {
     ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, 800, 600);
     const dlg = img('option_dialog.png');
     if (dlg) ctx.drawImage(dlg, 130, 70, 540, 470);
-    pvzText(ctx, '怎 么 玩', 400, 120, 30, '#4a2f10');
-    const lines = [
-      ['· 收集阳光, 种植植物防守草坪', '#4a2f10'],
-      ['· 点击种子卡再点击草坪即可种植', '#4a2f10'],
-      ['· 铲子可以移除植物', '#4a2f10'],
-      ['· 收集阳光: 天上掉的 + 向日葵产出', '#4a2f10'],
-      ['', ''],
-      ['· 僵尸走到最左侧会触发割草机', '#4a2f10'],
-      ['· 割草机只能用一次, 失守即输', '#4a2f10'],
-      ['', ''],
-      ['· 冒险模式按原版顺序 1-1 → 5-10', '#6b1c04'],
-      ['· 每关解锁新植物, X-5/X-10 有惊喜', '#6b1c04'],
-    ];
+    const pages = this.PAGES();
+    const pg = pages[this.page] || pages[0];
+    pvzText(ctx, pg.title, 400, 120, 30, '#4a2f10');
     ctx.save();
     ctx.textAlign = 'left';
-    ctx.font = '17px "Noto Sans SC", sans-serif';
+    ctx.font = '15px "Noto Sans SC", sans-serif';
     let y = 165;
-    for (const [txt, col] of lines) { if (txt) { ctx.fillStyle = col; ctx.fillText(txt, 175, y); } y += 30; }
+    for (const [txt, col] of pg.lines) { if (txt) { ctx.fillStyle = col; ctx.fillText(txt, 165, y); } y += 28; }
     ctx.restore();
-    pvzText(ctx, '点击返回', 400, 505, 20, '#6b1c04');
+    // 翻页
+    pvzText(ctx, `(${this.page + 1}/${pages.length})  点击翻页 · 点击右侧返回`, 400, 540, 15, '#8a6a3a');
+    this._nextPage = { x: 470, y: 515, w: 200, h: 40 };
+    this._back = { x: 160, y: 515, w: 140, h: 40 };
   },
-  click(p, game) { game.audio.play('buttonclick'); game.state = 'menu'; },
+  click(p, game) {
+    if (this._nextPage && inRect(p, this._nextPage.x, this._nextPage.y, this._nextPage.w, this._nextPage.h)) {
+      this.page = (this.page + 1) % this.PAGES().length;
+      game.audio.play('tap');
+      return;
+    }
+    game.audio.play('buttonclick');
+    this.page = 0;
+    game.state = 'menu';
+  },
 };
-
-// ================================================================
-// 奖励屏 — 通关后展示新植物 (原版 AwardScreen 风格)
-// ================================================================
 Screens.award = {
+  // 原版 AwardScreen: 按奖励类型展示 (种子包/铲子/图鉴/车钥匙/玉米卷/洒水壶/奖杯)
+  AWARD_IMG: {
+    seed: null,          // 种子包 (动态 thumb)
+    shovel: 'shovel_hi_res.png',
+    almanac: 'selectorscreen_almanac.png',
+    carkeys: 'carkeys.png',
+    taco: 'taco.png',
+    wateringcan: 'wateringcan.png',
+    trophy: 'sunflower_trophy.png',
+    moneybag: 'moneybag.png',
+  },
+  AWARD_TITLE: {
+    seed: '你获得了新植物!',
+    shovel: '你得到一把铁铲!',
+    almanac: '你发现了大图鉴!',
+    carkeys: '你发现了疯子戴夫的车钥匙!',
+    taco: '你发现了一个玉米卷!',
+    wateringcan: '你发现了一个洒水壶!',
+    trophy: '你击败了所有僵尸!',
+    moneybag: '你得到了一大袋金币!',
+  },
   draw(ctx, game) {
-    ctx.fillStyle = 'rgba(6,20,4,0.92)'; ctx.fillRect(0, 0, 800, 600);
     const t = Screens.t;
+    ctx.fillStyle = 'rgba(6,20,4,0.92)'; ctx.fillRect(0, 0, 800, 600);
+    // 光芒旋转 (原版 awardrays)
     ctx.save();
     ctx.translate(400, 250);
     ctx.rotate(t * 0.3);
     const rays = img('awardrays.png') || img('awardrays1.png');
     if (rays) { ctx.globalAlpha = 0.5; ctx.drawImage(rays, -260, -260, 520, 520); }
     ctx.restore();
-    const type = game.justUnlocked;
+    const award = game.levelAward || { type: 'seed', plant: game.justUnlocked };
+    const type = award.type || 'seed';
+    // 标题
     pvzText(ctx, '通 关 奖 励 !', 400, 120, 42, '#ffe36a');
-    if (type) {
+    // 奖励图 (居中浮动)
+    ctx.save();
+    const bob = Math.sin(t * 2) * 5;
+    ctx.translate(400, 265 + bob);
+    let drawn = false;
+    if (type === 'seed' && award.plant) {
       const packet = img('seedpacket_larger.png');
-      ctx.save();
-      const bob = Math.sin(t * 2) * 5;
-      ctx.translate(400, 265 + bob);
-      if (packet) ctx.drawImage(packet, -80, -100, 160, 200);
-      const thumb = __getUI() ? __getUI().getThumb(type) : null;
+      if (packet) {
+        ctx.drawImage(packet, -80, -100, 160, 200);
+        drawn = true;
+      }
+      const thumb = __getUI() ? __getUI().getThumb(award.plant) : null;
       if (thumb) ctx.drawImage(thumb, -50, -78, 100, 140);
-      ctx.restore();
-      pvzText(ctx, '你获得了新植物!', 400, 420, 26, '#b8ff7a');
-      pvzText(ctx, PLANTS[type] ? PLANTS[type].cn : type, 400, 458, 34, '#ffffff');
     } else {
-      pvzText(ctx, '你击败了所有僵尸!', 400, 300, 30, '#b8ff7a');
-      const trophy = img('trophy_hi_res.png');
-      if (trophy) ctx.drawImage(trophy, 400 - 83, 200, 166, 136);
+      const im = img(this.AWARD_IMG[type]);
+      if (im) {
+        const s = Math.min(220 / im.width, 220 / im.height);
+        ctx.drawImage(im, -im.width * s / 2, -im.height * s / 2, im.width * s, im.height * s);
+        drawn = true;
+      }
+    }
+    if (!drawn && type !== 'seed') {
+      // 兜底: 金色问号
+      ctx.font = 'bold 90px sans-serif';
+      ctx.textAlign = 'center'; ctx.fillStyle = '#ffe36a';
+      ctx.fillText('?', 0, 30);
+    }
+    ctx.restore();
+    // 底部文案 (原版 DrawBottom: 标题行 + 名称行 + 描述行)
+    pvzText(ctx, this.AWARD_TITLE[type] || '你获得了奖励!', 400, 420, 26, '#b8ff7a');
+    if (type === 'seed' && award.plant && PLANTS[award.plant]) {
+      pvzText(ctx, PLANTS[award.plant].cn, 400, 462, 34, '#ffffff');
+      pvzText(ctx, PLANTS[award.plant].desc || '', 400, 496, 14, '#c8e8a8');
+    } else if (type === 'trophy') {
+      pvzText(ctx, '向日葵奖杯', 400, 462, 30, '#ffffff');
+      pvzText(ctx, '你完成了整个冒险模式!', 400, 496, 16, '#c8e8a8');
+    } else if (type === 'carkeys') {
+      pvzText(ctx, '车钥匙', 400, 462, 30, '#ffffff');
+      pvzText(ctx, '商店将会在下一关之后开业……', 400, 496, 16, '#c8e8a8');
+    } else if (type === 'wateringcan') {
+      pvzText(ctx, '洒水壶', 400, 462, 30, '#ffffff');
+      pvzText(ctx, '禅镜花园即将开启……', 400, 496, 16, '#c8e8a8');
     }
     const a = 0.5 + 0.5 * Math.sin(t * 3);
     ctx.save(); ctx.globalAlpha = a;
@@ -573,27 +752,52 @@ Screens.award = {
   },
   click(p, game) { game.afterAward(); },
 };
-
-// ================================================================
-// 纸条屏 — X-5 / X-10 僵尸纸条
-// ================================================================
 Screens.note = {
   draw(ctx) {
-    ctx.fillStyle = '#0a0805'; ctx.fillRect(0, 0, 800, 600);
+    // 原版 AwardScreen 纸条页: 背景 + 纸张 + 字迹 + [FOUND_NOTE] 标题
+    const game = Screens.game;
     const t = Screens.t;
-    const note = img('zombienote.jpg');
-    if (note) {
-      const w = 560, h = w * 427 / 654;
+    const award = game && game.levelAward;
+    // 背景 (原版 BACKGROUND1 放大 2800x1200 @ -700,-300)
+    const bg1 = img('background1.jpg');
+    if (bg1) {
       ctx.save();
-      ctx.translate(400, 300);
-      ctx.rotate(Math.sin(t * 0.8) * 0.012);
-      ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 30;
-      ctx.drawImage(note, -w / 2, -h / 2, w, h);
+      ctx.filter = 'brightness(0.35)';
+      ctx.drawImage(bg1, -700, -300, 2800, 1200);
       ctx.restore();
     } else {
-      ctx.fillStyle = '#d8cfa0'; ctx.fillRect(200, 140, 400, 300);
+      ctx.fillStyle = '#0a0805'; ctx.fillRect(0, 0, 800, 600);
     }
-    pvzText(ctx, '僵尸留下了奇怪的纸条…', 400, 60, 24, '#c8b28a');
+    // 纸条 (原版 IMAGE_ZOMBIE_NOTE @ (80,80) + 内容图 @ (131,132))
+    const note = img('zombienote.jpg');
+    if (note) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 24;
+      ctx.drawImage(note, 80, 80);
+      ctx.restore();
+    }
+    // 字迹内容 (烘焙的手写纸条: 1-4号 + 最终纸条)
+    const noteIdx = award && award.note ? award.note : 1;
+    const content = noteIdx >= 5 ? img('notefinal.png') : img('note' + noteIdx + '.png');
+    if (content) {
+      ctx.save();
+      // 原版位置: note1 @ (131,132); note2 @ (133,127); note3 @ (120,117); note4 @ (102,117); final @ (114,138)
+      const pos = { 1: [131, 132], 2: [133, 127], 3: [120, 117], 4: [102, 117], 5: [114, 138] }[noteIdx] || [131, 132];
+      ctx.translate(pos[0], pos[1]);
+      ctx.rotate((Math.sin(noteIdx * 2.7) * 0.012));
+      ctx.drawImage(content, 0, 0);
+      ctx.restore();
+    }
+    // 标题 (原版 [FOUND_NOTE] 黄色居中 y=70)
+    ctx.save();
+    ctx.font = 'bold 26px "Noto Sans SC", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(40,26,4,0.9)'; ctx.lineJoin = 'round';
+    ctx.strokeText('你发现了张纸条', 400, 68);
+    ctx.fillStyle = 'rgb(255,200,0)';
+    ctx.fillText('你发现了张纸条', 400, 68);
+    ctx.restore();
+    // 继续提示
     const a = 0.5 + 0.5 * Math.sin(t * 3);
     ctx.save(); ctx.globalAlpha = a;
     pvzText(ctx, '点 击 继 续', 400, 560, 22, '#ffe9a8');
@@ -601,10 +805,6 @@ Screens.note = {
   },
   click(p, game) { game.afterAward(); },
 };
-
-// ================================================================
-// 失败屏 — 原版 ZombiesWon 大图
-// ================================================================
 Screens.lose = {
   draw(ctx) {
     ctx.fillStyle = '#050604'; ctx.fillRect(0, 0, 800, 600);
@@ -716,6 +916,454 @@ Screens.levelSelect = {
   },
 };
 
+// ================================================================
+// 模式选择屏 (玩玩小游戏 / 解谜 / 生存) — 原版 ChallengeScreen 风格
+// ================================================================
+const MODE_GROUPS = {
+  challenge: {
+    title: '玩玩小游戏',
+    items: [
+      { key: 'bowling', label: '坚果保龄球', desc: '传送带上滚出坚果，把僵尸撞飞！' },
+      { key: 'whack', label: '打僵尸', desc: '僵尸冒头就敲！考验手速。' },
+      { key: 'raining', label: '雨天种子', desc: '天上掉种子包，接住就能种。' },
+      { key: 'vasebreaker', label: '花瓶终结者', desc: '打碎神秘罐子，小心僵尸。' },
+      { key: 'izombie', label: '我是僵尸', desc: '这一次，你来指挥僵尸。' },
+    ],
+  },
+  survival: {
+    title: '生存模式',
+    items: [
+      { key: 'survival_day', label: '白天生存', desc: '白天草坪，波次无尽增强。' },
+      { key: 'survival_night', label: '黑夜生存', desc: '黑夜墓园，蘑菇的战场。' },
+      { key: 'survival_pool', label: '泳池生存', desc: '六行泳池，水陆两线作战。' },
+      { key: 'survival_fog', label: '浓雾生存', desc: '浓雾弥漫，视野受限。' },
+      { key: 'survival_roof', label: '屋顶生存', desc: '屋顶花盆，投手的主场。' },
+    ],
+  },
+};
+
+Screens.modeSelect = {
+  group: 'challenge',
+  hover: null,
+  _cells: null,
+  enter(group) { this.group = group || 'challenge'; },
+  // 原版 ChallengeScreen 按钮布局: (38+col*155, 93+row*119) 104x115
+  cells() {
+    const g = MODE_GROUPS[this.group];
+    const cells = [];
+    g.items.forEach((it, i) => {
+      cells.push({ ...it, x: 38 + (i % 5) * 155, y: 93 + Math.floor(i / 5) * 119, w: 104, h: 115 });
+    });
+    return cells;
+  },
+  draw(ctx) {
+    const g = MODE_GROUPS[this.group];
+    // 背景 (原版 Challenge_Background)
+    const bg = img('challenge_background.jpg');
+    if (bg) {
+      ctx.drawImage(bg, 0, 0, 800, 600);
+    } else {
+      ctx.fillStyle = '#1a1206'; ctx.fillRect(0, 0, 800, 600);
+      const bg1 = img('background1.jpg');
+      if (bg1) { ctx.globalAlpha = 0.25; ctx.drawImage(bg1, -220, 0); ctx.globalAlpha = 1; }
+      ctx.fillStyle = 'rgba(10,6,2,0.6)'; ctx.fillRect(0, 0, 800, 600);
+    }
+    // 标题 (原版挑战页标题木牌)
+    pvzText(ctx, g.title, 400, 52, 36, '#ffe36a');
+    pvzText(ctx, '点击选择一个玩法', 400, 86, 14, '#e8d9b5');
+    const cells = this.cells();
+    this._cells = cells;
+    const hover = Screens.hover;
+    cells.forEach((c, i) => {
+      const hov = hover === 'mode' + i;
+      ctx.save();
+      // 按钮 (原版风格: 悬停亮框)
+      ctx.fillStyle = hov ? 'rgba(120,90,40,0.55)' : 'rgba(60,44,20,0.55)';
+      ctx.strokeStyle = hov ? '#ffe9a8' : 'rgba(90,70,40,0.8)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.roundRect(c.x, c.y, c.w, c.h, 10);
+      ctx.fill(); ctx.stroke();
+      // 图标 (植物缩略/僵尸头)
+      const UIm = __getUI();
+      const iconKey = {
+        bowling: 'WALLNUT', whack: 'NORMAL', raining: 'PEASHOOTER',
+        vasebreaker: 'PEASHOOTER', izombie: 'BUCKET',
+        survival_day: 'SUNFLOWER', survival_night: 'PUFFSHROOM', survival_pool: 'LILYPAD',
+        survival_fog: 'PLANTERN', survival_roof: 'CABBAGEPULT',
+      }[c.key];
+      let icon = null;
+      if (iconKey && UIm) {
+        icon = PLANTS[iconKey] ? UIm.getThumb(iconKey) : UIm.getZombieThumb(iconKey);
+      }
+      if (icon) ctx.drawImage(icon, c.x + (c.w - 56) / 2, c.y + 10, 56, 56);
+      // 名称 + 简述
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#fff4d0';
+      ctx.fillText(c.label, c.x + c.w / 2, c.y + 84);
+      ctx.font = '11px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#c8b28a';
+      ctx.fillText(c.desc.slice(0, 9), c.x + c.w / 2, c.y + 102);
+      ctx.restore();
+    });
+    // 返回按钮 (原版 BACK_TO_MENU @ (18,568))
+    this._back = { x: 18, y: 560, w: 120, h: 34 };
+    ctx.save();
+    ctx.fillStyle = '#a03a3a';
+    ctx.beginPath(); ctx.roundRect(18, 560, 120, 34, 6); ctx.fill();
+    ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+    ctx.fillText('返回主菜单', 78, 582);
+    ctx.restore();
+    // 切换 小游戏⇆生存 (右下)
+    const other = this.group === 'challenge' ? 'survival' : 'challenge';
+    const otherLabel = other === 'challenge' ? '← 小游戏/解谜' : '生存模式 →';
+    ctx.save();
+    ctx.fillStyle = '#3a6a8a';
+    ctx.beginPath(); ctx.roundRect(660, 560, 130, 34, 6); ctx.fill();
+    ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+    ctx.fillText(otherLabel, 725, 582);
+    ctx.restore();
+    this._swap = { x: 660, y: 560, w: 130, h: 34, group: other };
+  },
+  click(p, game) {
+    if (this._back && inRect(p, this._back.x, this._back.y, this._back.w, this._back.h)) {
+      game.audio.play('buttonclick');
+      game.state = 'menu';
+      return;
+    }
+    if (this._swap && inRect(p, this._swap.x, this._swap.y, this._swap.w, this._swap.h)) {
+      game.audio.play('buttonclick');
+      this.group = this._swap.group;
+      return;
+    }
+    for (const c of (this._cells || [])) {
+      if (inRect(p, c.x, c.y, c.w, c.h)) {
+        game.audio.play('gravebutton');
+        game.startMode(c.key);
+        return;
+      }
+    }
+  },
+};
+
+// ================================================================
+// 戴夫商店 (#11: 原版 StoreScreen — 通关 3-4 后从主菜单的车进入)
+// ================================================================
+Screens.shop = {
+  page: 0,
+  hoverItem: null,
+  bubble: null,          // 戴夫商品介绍气泡
+  daveAnim: null,
+  firstVisitDone: false,
+  // 页定义 (原版 gStoreItemSpots: 每页 8 格, 上下两排)
+  PAGES() {
+    const all = SHOP_ITEMS;
+    return [
+      all.filter(i => ['slot8', 'poolcleaner', 'rake', 'roofcleaner', 'GATLINGPEA', 'TWINSUNFLOWER', 'GLOOMSHROOM', 'CATTAIL'].includes(i.key)),
+      all.filter(i => ['SPIKEROCK', 'GOLDMAGNET', 'WINTERMELON', 'COBCANNON', 'IMITATER', 'slot9', 'slot10'].includes(i.key)),
+      all.filter(i => ['goldwatering', 'fertilizer', 'bugspray', 'phonograph', 'glove'].includes(i.key)),
+      all.filter(i => ['mushroomgarden', 'aquarium', 'wheelbarrow', 'stinky'].includes(i.key)),
+    ];
+  },
+  // 原版 GetStorePosition: 前4格上排 (422+74i, 206), 后4格下排 (372+74(i-4), 310)
+  itemPos(i) {
+    return i <= 3
+      ? { x: 422 + 74 * i, y: 206 }
+      : { x: 372 + 74 * (i - 4), y: 310 };
+  },
+  enter() {
+    this.page = 0;
+    this.bubble = null;
+    // 首次进店 → 戴夫开业对话 (原版 301-304)
+    const game = Screens.game;
+    if (game && !this.firstVisitDone && !game.daveSeen.shop) {
+      const dialogs = Assets.data('dave_dialogs');
+      const lines = [301, 302, 303, 304].map(id => (dialogs['CRAZY_DAVE_' + id] || '')).filter(t => t);
+      if (lines.length) {
+        this.bubble = { lines, line: 0, clickToContinue: true };
+        game.markDaveSeen('shop');
+      }
+      this.firstVisitDone = true;
+    }
+    // 戴夫 reanim (原版 DrawCrazyDave @ (-42,+68))
+    if (!this.daveAnim && RE.hasDef('CrazyDave')) {
+      const d = Assets.reanim('CrazyDave');
+      d.x = 60; d.y = 230;
+      d.play('anim_idle', RE.LOOP, 18);
+      this.daveAnim = d;
+    }
+  },
+  draw(ctx) {
+    const game = Screens.game;
+    // ---- 背景 + 车 + 招牌 (原版 StoreScreen::Draw) ----
+    const bg = img('store_background.jpg');
+    if (bg) {
+      ctx.drawImage(bg, 0, 0, 800, 600);
+    } else {
+      ctx.fillStyle = '#2a2018'; ctx.fillRect(0, 0, 800, 600);
+    }
+    const car = img('store_car.png');            // 后备箱开启的车
+    if (car) ctx.drawImage(car, 196, 138);
+    const hatch = img('store_hatchbackopen.png');
+    if (hatch) ctx.drawImage(hatch, 299, 0);
+    // 招牌 (原版 285, signPosY 轻微上下浮动)
+    const sign = img('store_sign.png');
+    if (sign) {
+      const bob = Math.sin(Screens.t * 1.5) * 3;
+      ctx.drawImage(sign, 285, 20 + bob);
+    }
+    // ---- 戴夫 (左侧) ----
+    if (this.daveAnim) {
+      this.daveAnim.update(1 / 60);
+      this.daveAnim.draw(ctx);
+    }
+    // ---- 商品 (后备箱内两排) ----
+    const pageItems = this.PAGES()[this.page] || [];
+    this._cells = [];
+    const t = Screens.t;
+    pageItems.forEach((it, i) => {
+      const pos = this.itemPos(i);
+      const bought = game && game.purchased[it.key];
+      const hov = this.hoverItem === i && !bought;
+      const can = game && game.coins >= it.cost;
+      const pop = bought ? 0 : (hov ? Math.sin(t * 6) * 2 : 0);
+      this._cells.push({ x: pos.x, y: pos.y, w: 50, h: 87, item: it, i });
+      ctx.save();
+      ctx.translate(pos.x + 25, pos.y + 44 + pop);
+      // 图标
+      if (it.icon === 'plant' && PLANTS[it.key]) {
+        const UIm = __getUI();
+        const th = (UIm && UIm.getThumb) ? UIm.getThumb(it.key) : null;
+        if (th) ctx.drawImage(th, -25, -34, 50, 68);
+      } else {
+        const ico = img(it.icon + '.png');
+        if (ico) {
+          const s = Math.min(64 / ico.width, 80 / ico.height, 1);
+          ctx.drawImage(ico, -ico.width * s / 2, -ico.height * s / 2 - 10, ico.width * s, ico.height * s);
+        } else {
+          ctx.fillStyle = '#c9a86b';
+          ctx.fillRect(-25, -34, 50, 68);
+        }
+      }
+      // 价格牌 (原版 PriceTag 样式)
+      if (!bought) {
+        ctx.save();
+        ctx.translate(0, 36);
+        const pw = 46, ph = 18;
+        ctx.fillStyle = '#f4e6b0';
+        ctx.strokeStyle = '#8a6a2a'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.roundRect(-pw / 2, -ph / 2, pw, ph, 3); ctx.fill(); ctx.stroke();
+        ctx.font = 'bold 12px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = can ? '#2a4a10' : '#a03030';
+        ctx.fillText('$' + it.cost, 0, 1);
+        ctx.restore();
+      } else {
+        // 售罄标签
+        const sold = img('store_soldoutlabel.png');
+        ctx.save();
+        ctx.globalAlpha = 0.85;
+        if (sold) ctx.drawImage(sold, -25, 10);
+        else {
+          ctx.fillStyle = 'rgba(120,110,90,0.8)';
+          ctx.fillRect(-25, 20, 50, 16);
+          ctx.font = 'bold 11px "Noto Sans SC", sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillStyle = '#fff';
+          ctx.fillText('已售出', 0, 32);
+        }
+        ctx.restore();
+      }
+      ctx.restore();
+    });
+    // ---- 金币栏 (原版 COINBANK @ 650,559, 金额 (766-w, 583) 绿色) ----
+    const bank = img('coinbank.png');
+    if (bank) ctx.drawImage(bank, 650, 559);
+    else { ctx.fillStyle = '#3a2f1a'; ctx.beginPath(); ctx.roundRect(650, 559, 146, 36, 6); ctx.fill(); }
+    ctx.save();
+    ctx.font = 'bold 16px "Noto Sans SC", sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgb(180,255,90)';
+    ctx.fillText('$' + (game ? game.coins : 0), 762, 584);
+    ctx.restore();
+    // ---- 翻页按钮 (原版 Prev/Next) ----
+    const prev = img('store_prevbutton.png');
+    const next = img('store_nextbutton.png');
+    const prevHov = img('store_prevbuttonhighlight.png');
+    const nextHov = img('store_nextbuttonhighlight.png');
+    this._prev = { x: 380, y: 425, w: 48, h: 44 };
+    this._next = { x: 560, y: 425, w: 48, h: 44 };
+    const pages = this.PAGES();
+    const hasPrev = this.page > 0;
+    const hasNext = this.page < pages.length - 1;
+    const hovPrev = this._hoverBtn === 'prev', hovNext = this._hoverBtn === 'next';
+    if (hasPrev) {
+      const p = (hovPrev && prevHov) ? prevHov : prev;
+      if (p) ctx.drawImage(p, this._prev.x, this._prev.y, 48, 44);
+    }
+    if (hasNext) {
+      const p = (hovNext && nextHov) ? nextHov : next;
+      if (p) ctx.drawImage(p, this._next.x, this._next.y, 48, 44);
+    }
+    // 页码 (原版 [STORE_PAGE] @ 470,500)
+    ctx.save();
+    ctx.font = '13px "Noto Sans SC", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgb(80,80,80)';
+    ctx.fillText(`第 ${this.page + 1} 页 / 共 ${pages.length} 页`, 470, 512);
+    ctx.restore();
+    // ---- 主菜单按钮 (原版 Store_MainMenuButton) ----
+    const mmb = img(this._hoverBtn === 'mainmenu' ? 'store_mainmenubuttonhighlight.png' : 'store_mainmenubutton.png');
+    this._mainmenu = { x: 40, y: 545, w: 150, h: 42 };
+    if (mmb) ctx.drawImage(mmb, this._mainmenu.x, this._mainmenu.y, 150, 42);
+    else {
+      ctx.fillStyle = '#5a4a2a';
+      ctx.beginPath(); ctx.roundRect(this._mainmenu.x, this._mainmenu.y, 150, 42, 8); ctx.fill();
+      ctx.font = 'bold 16px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center'; ctx.fillStyle = '#f4e6b0';
+      ctx.fillText('返回主菜单', 115, 572);
+    }
+    // ---- 戴夫气泡 (商品介绍 / 首次开店) ----
+    if (this.bubble) {
+      const bubbleImg = img('store_speechbubble2.png') || img('store_speechbubble.png');
+      const bx = 150, by = 90, bw = 320, bh = 110;
+      ctx.save();
+      if (bubbleImg) {
+        ctx.drawImage(bubbleImg, bx, by, bw, bh);
+      } else {
+        ctx.fillStyle = '#f8f4e0';
+        ctx.strokeStyle = '#8a8a7a'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.fill(); ctx.stroke();
+      }
+      const txt = this.bubble.lines[this.bubble.line] || '';
+      ctx.fillStyle = '#3a3222';
+      ctx.font = '15px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'left';
+      this._wrapText(ctx, txt, bx + 24, by + 32, bw - 48, 20);
+      // 继续指示
+      const a = 0.5 + 0.5 * Math.sin(Screens.t * 4);
+      ctx.globalAlpha = a;
+      ctx.font = 'bold 12px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#8a7a3a';
+      ctx.fillText(this.bubble.line < this.bubble.lines.length - 1 ? '点击继续 ▸' : '点击关闭 ✕', bx + bw - 90, by + bh - 14);
+      ctx.restore();
+    }
+  },
+  _wrapText(ctx, text, x, y, maxW, lineH) {
+    let line = '', yy = y;
+    for (const ch of text) {
+      if (ctx.measureText(line + ch).width > maxW) {
+        ctx.fillText(line, x, yy); line = ch; yy += lineH;
+      } else line += ch;
+    }
+    if (line) ctx.fillText(line, x, yy);
+  },
+  click(p, game) {
+    // 气泡优先 (点击推进/关闭)
+    if (this.bubble) {
+      this.bubble.line++;
+      if (this.bubble.line >= this.bubble.lines.length) this.bubble = null;
+      game.audio.play('tap');
+      return;
+    }
+    // 主菜单
+    if (this._mainmenu && inRect(p, this._mainmenu.x, this._mainmenu.y, this._mainmenu.w, this._mainmenu.h)) {
+      game.audio.play('gravebutton');
+      game.state = 'menu';
+      return;
+    }
+    // 翻页
+    if (this._prev && inRect(p, this._prev.x, this._prev.y, this._prev.w, this._prev.h) && this.page > 0) {
+      this.page--; game.audio.play('buttonclick'); return;
+    }
+    if (this._next && inRect(p, this._next.x, this._next.y, this._next.w, this._next.h) && this.page < this.PAGES().length - 1) {
+      this.page++; game.audio.play('buttonclick'); return;
+    }
+    // 商品购买
+    for (const c of (this._cells || [])) {
+      if (inRect(p, c.x, c.y, c.w, c.h)) {
+        const it = c.item;
+        if (game.purchased[it.key]) { game.audio.play('buzzer'); return; }
+        if (it.key === 'slot9' && !game.purchased['slot8']) { game.audio.play('buzzer'); return; }
+        if (it.key === 'slot10' && !game.purchased['slot9']) { game.audio.play('buzzer'); return; }
+        if (game.coins < it.cost) { game.audio.play('buzzer'); return; }
+        if (game.buyItem(it.key)) {
+          // 戴夫购买台词气泡
+          this.bubble = { lines: [`谢谢惠临! ${it.label}是你的了!`], line: 0, clickToContinue: true };
+          game.audio.play('points');
+        }
+        return;
+      }
+    }
+  },
+  updateHover(mouse) {
+    this.hoverItem = null;
+    this._hoverBtn = null;
+    if (!mouse) return;
+    for (const c of (this._cells || [])) {
+      if (inRect(mouse, c.x, c.y, c.w, c.h)) { this.hoverItem = c.i; break; }
+    }
+    if (this._mainmenu && inRect(mouse, this._mainmenu.x, this._mainmenu.y, this._mainmenu.w, this._mainmenu.h)) this._hoverBtn = 'mainmenu';
+    else if (this._prev && inRect(mouse, this._prev.x, this._prev.y, this._prev.w, this._prev.h) && this.page > 0) this._hoverBtn = 'prev';
+    else if (this._next && inRect(mouse, this._next.x, this._next.y, this._next.w, this._next.h) && this.page < this.PAGES().length - 1) this._hoverBtn = 'next';
+    // 悬停商品 → 戴夫介绍气泡 (原版 SetBubbleText)
+    if (this.hoverItem !== null && !this.bubble) {
+      const game = Screens.game;
+      const pages = this.PAGES();
+      const it = pages[this.page] && pages[this.page][this.hoverItem];
+      if (it && game && !game.purchased[it.key]) {
+        if (this._lastBubbleItem !== this.hoverItem + this.page * 100) {
+          this._lastBubbleItem = this.hoverItem + this.page * 100;
+          this.bubble = { lines: [it.label + ': ' + it.desc + (it.consumable ? ` (含${it.consumable}包, 用完可再买)` : '')], line: 0, auto: true, t: 0 };
+        }
+      }
+    } else if (!this.hoverItem && this.bubble && this.bubble.auto) {
+      this.bubble = null;
+      this._lastBubbleItem = null;
+    }
+    if (this.bubble && this.bubble.auto) {
+      this.bubble.t = (this.bubble.t || 0) + 1 / 60;
+      if (this.bubble.t > 6) { this.bubble = null; this._lastBubbleItem = null; }
+    }
+  },
+};
+
+// ================================================================
+// 模式胜利屏 (小游戏/解谜/生存通关结算)
+// ================================================================
+Screens.modeWin = {
+  draw(ctx, game) {
+    const t = Screens.t;
+    ctx.fillStyle = '#0a0f05'; ctx.fillRect(0, 0, 800, 600);
+    // 奖杯
+    const trophy = img('trophy_hi_res.png') || img('sunflower_trophy.png');
+    const sc = 0.9;
+    const y = 130 + Math.sin(t * 2) * 6;
+    if (trophy) ctx.drawImage(trophy, 400 - trophy.width * sc / 2, y, trophy.width * sc, trophy.height * sc);
+    pvzText(ctx, '挑战成功！', 400, 90, 46, '#ffe36a');
+    const st = game.winStats || {};
+    if (st.mode && st.mode.startsWith('survival')) {
+      pvzText(ctx, `坚持到了第 ${st.waves || 1} 波`, 400, 420, 26, '#ffe9a8');
+    } else if (st.mode === 'whack') {
+      pvzText(ctx, `击杀了 ${st.score || 0} 只僵尸`, 400, 420, 26, '#ffe9a8');
+    } else {
+      pvzText(ctx, '完成挑战！', 400, 420, 26, '#ffe9a8');
+    }
+    const a = 0.55 + 0.45 * Math.sin(t * 3);
+    ctx.save(); ctx.globalAlpha = a;
+    pvzText(ctx, '点 击 继 续', 400, 520, 24, '#c8f542');
+    ctx.restore();
+  },
+  click(p, game) {
+    game.audio.play('buttonclick');
+    game.state = 'modeselect';
+    Screens.modeSelect.enter(game.modeKey && game.modeKey.startsWith('survival') ? 'survival' : 'challenge');
+    game.audio.playBGM('start_menu');
+  },
+};
+
 // 悬停检测 (主循环调用)
 Screens.updateHover = function (mouse) {
   if (!mouse) return;
@@ -731,10 +1379,538 @@ Screens.updateHover = function (mouse) {
       if (inRect(mouse, c.x, c.y, c.w, c.h)) { this.hover = 'lv' + c.lv; break; }
     }
   }
+  if (g && g.state === 'modeselect' && this.modeSelect._cells) {
+    this.modeSelect._cells.forEach((c, i) => {
+      if (inRect(mouse, c.x, c.y, c.w, c.h)) this.hover = 'mode' + i;
+    });
+  }
+  if (g && g.state === 'shop') {
+    this.shop.updateHover(mouse);
+  }
+  // 图鉴悬停 (网格/按钮)
+  if (g && g.state === 'almanac') {
+    const UIm = (window.__mods && window.__mods['ui']) || require('./ui');
+    const UI = UIm && UIm.UI;
+    if (UI) {
+      if (UI._almClose && inRect(mouse, UI._almClose.x, UI._almClose.y, UI._almClose.w, UI._almClose.h)) this.hover = 'alm_close';
+      else if (g.almanac.tab === 'index') {
+        for (const b of (UI._almIndexBtns || [])) {
+          if (inRect(mouse, b.x, b.y, b.w, b.h)) { this.hover = 'alm_' + b.k; break; }
+        }
+      } else {
+        if (UI._almBack && inRect(mouse, UI._almBack.x, UI._almBack.y, UI._almBack.w, UI._almBack.h)) this.hover = 'alm_back';
+        (UI.almanacCells || []).forEach((c, i) => {
+          if (inRect(mouse, c.x, c.y, c.w, c.h)) this.hover = 'almcell' + i;
+        });
+      }
+    }
+  }
   if (g && g.state === 'options' && this.options.rects && this.options.rects.unlock) {
     const u = this.options.rects.unlock;
     if (inRect(mouse, u.x, u.y, u.w, u.h)) this.hover = 'unlock';
   }
+};
+
+// ================================================================
+// 禅镜花园 (原版 ZenGarden.cpp: 8x4花盆 + 浇水/施肥/除虫/留声机 + 卖植物)
+// 通关 5-4 (level 44) 解锁; 进度存 localStorage
+// ================================================================
+Screens.zengarden = {
+  CELLS: { cols: 8, rows: 4 },
+  // 花盆位置 (温室内居中网格)
+  cellPos(col, row) {
+    return { x: 172 + col * 70, y: 150 + row * 88 };
+  },
+  // ---------- 存档 ----------
+  load() {
+    try {
+      const d = JSON.parse(localStorage.getItem('webpvz_garden') || 'null');
+      if (d && d.plants) {
+        this.data = d;
+        return;
+      }
+    } catch (e) { }
+    // 初始: 3 株新芽 (原版 DEFAULT_CURR_NUM_NEW_GARDEN_PLANT = 3)
+    this.data = { plants: this.emptyCells(), fertilizer: 5, bugspray: 2, garden: 'greenhouse' };
+    let placed = 0;
+    for (let r = 0; r < 4 && placed < 3; r++) {
+      for (let c = 0; c < 8 && placed < 3; c++) {
+        if ((c + r) % 3 === 0 && !this.data.plants[r][c]) {
+          this.data.plants[r][c] = this.newPlant(null);
+          placed++;
+        }
+      }
+    }
+    this.save();
+  },
+  emptyCells() {
+    return Array.from({ length: 4 }, () => Array(8).fill(null));
+  },
+  newPlant(type) {
+    // 原版 PottedPlant: mFeedingsPerGrow 随机3-5
+    return {
+      type: type || null,          // null = 新芽
+      stage: 0,                    // 0新芽 1小 2中 3成熟
+      fed: 0, needMax: 3 + Math.floor(Math.random() * 3),
+      need: null,                  // null | 'water' | 'bugspray' | 'phonograph' (成熟后需求)
+      happy: 0,                    // 刚被满足的开心计时
+    };
+  },
+  save() {
+    try { localStorage.setItem('webpvz_garden', JSON.stringify(this.data)); } catch (e) { }
+  },
+  enter() {
+    if (!this.data) this.load();
+    this.tool = 'water';           // water|fertilizer|bugspray|phonograph|glove|sell
+    this.heldPlant = null;         // 手套移动中的植物
+    this.coins = [];
+    this._models = {};
+    // 蜗牛 (原版 Stinky: 已购买才出现)
+    const game = Screens.game;
+    this.stinky = game && game.purchased.stinky ? { x: 400, y: 520, dir: 1, t: 0 } : null;
+    // Dave 教程对话 (原版 2100, 首次)
+    if (game && !game.daveSeen.zengarden) {
+      const dialogs = Assets.data('dave_dialogs');
+      const lines = [2100, 2101, 2102].map(id => (dialogs['CRAZY_DAVE_' + id] || '')).filter(t => t);
+      if (!lines.length) lines.push('欢迎来到禅镜花园！', '给植物浇水施肥，它们会报答你的！');
+      this.bubble = { lines, line: 0 };
+      game.markDaveSeen('zengarden');
+    } else this.bubble = null;
+  },
+  // 植物模型 (reanim 缓存)
+  model(type, stage) {
+    const key = type + ':' + stage;
+    if (this._models[key]) return this._models[key];
+    let r = null;
+    try {
+      if (!type) {
+        // 新芽: 静态 anim_sprout 图 (由 draw 处理)
+        r = null;
+      } else {
+        const def = PLANTS[type];
+        if (def && RE.hasDef(def.reanim)) {
+          r = Assets.reanim(def.reanim);
+          const base = def.anim || 'anim_idle';
+          r.play(r.animExists(base) ? base : 'anim_idle', RE.LOOP, 10);
+        }
+      }
+    } catch (e) { r = null; }
+    this._models[key] = r;
+    return r;
+  },
+  // ---------- 更新 ----------
+  update(dt) {
+    if (!this.data) return;
+    // 掉落金币动画
+    for (const c of this.coins) {
+      c.t += dt;
+      c.y += 60 * dt;
+      if (c.y > c.ground) c.y = c.ground;
+      if (c.t > 0.8 && !c.collected) {
+        c.collected = true;
+        const game = Screens.game;
+        if (game) { game.coins += c.value; game.saveShop(); game.audio.play('points'); }
+      }
+    }
+    this.coins = this.coins.filter(c => c.t < 1.3);
+    // 蜗牛巡游
+    if (this.stinky) {
+      const s = this.stinky;
+      s.t += dt;
+      s.x += s.dir * 24 * dt;
+      if (s.x > 740) s.dir = -1;
+      if (s.x < 60) s.dir = 1;
+    }
+    // 模型动画推进
+    for (const k of Object.keys(this._models)) {
+      const m = this._models[k];
+      if (m && m.update) m.update(dt);
+    }
+    // 植物开心计时
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 8; c++) {
+      const p = this.data.plants[r][c];
+      if (p && p.happy > 0) p.happy -= dt;
+    }
+  },
+  // ---------- 绘制 ----------
+  draw(ctx) {
+    if (!this.data) this.load();
+    const game = Screens.game;
+    const t = Screens.t;
+    // 背景 (温室 / 蘑菇园 / 水族馆)
+    const bgName = {
+      greenhouse: 'background_greenhouse.jpg',
+      mushroomgarden: 'background_mushroomgarden.jpg',
+      aquarium: 'aquarium1.jpg',
+    }[this.data.garden] || 'background_greenhouse.jpg';
+    const bg = img(bgName);
+    if (bg) ctx.drawImage(bg, 0, 0, 800, 600);
+    else { ctx.fillStyle = '#2a3a1a'; ctx.fillRect(0, 0, 800, 600); }
+    // 标题
+    pvzText(ctx, '禅 镜 花 园', 400, 40, 30, '#ffe9a8');
+    // 花盆 + 植物
+    const potImg = img('pot_bottom.png');
+    const sproutImg = img('anim_sprout.png');
+    const mouse = Screens.mouse || { x: -1, y: -1 };
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 8; c++) {
+        const p = this.data.plants[r][c];
+        const pos = this.cellPos(c, r);
+        // 花盆
+        if (potImg) {
+          ctx.save();
+          ctx.globalAlpha = 0.95;
+          ctx.drawImage(potImg, pos.x + 8, pos.y + 26, 54, 40);
+          ctx.restore();
+        } else {
+          ctx.fillStyle = '#a05a28';
+          ctx.beginPath(); ctx.roundRect(pos.x + 10, pos.y + 34, 50, 30, 6); ctx.fill();
+        }
+        if (!p) continue;
+        // 悬停高亮
+        const hov = mouse.x > pos.x && mouse.x < pos.x + 66 && mouse.y > pos.y && mouse.y < pos.y + 80;
+        // 植物本体
+        if (!p.type) {
+          // 新芽
+          if (sproutImg) {
+            ctx.save();
+            const s = 2 + Math.sin(t * 3 + c) * 0.1;
+            ctx.translate(pos.x + 33, pos.y + 22);
+            ctx.scale(s, s);
+            ctx.drawImage(sproutImg, -9, -7);
+            ctx.restore();
+          }
+        } else {
+          const m = this.model(p.type, p.stage);
+          if (m) {
+            ctx.save();
+            ctx.translate(pos.x + 33, pos.y + 30);
+            const scale = [0, 0.45, 0.65, 0.85][p.stage] || 0.85;
+            ctx.scale(scale, scale);
+            m.setPosition(0, 0);
+            m.draw(ctx);
+            ctx.restore();
+          }
+        }
+        // 需求图标 (原版 zen_need_icons: 浇水/肥料/除虫)
+        if (p.need && !p.happy) {
+          const ni = img('zen_need_icons.png');
+          const bob = Math.sin(t * 4 + r + c) * 3;
+          if (ni) {
+            const idx = p.need === 'water' ? 0 : p.need === 'fertilizer' ? 1 : 2;
+            ctx.drawImage(ni, idx * 30, 0, 30, 30, pos.x + 18, pos.y - 6 + bob, 30, 30);
+          } else {
+            ctx.fillStyle = p.need === 'water' ? '#4a90d8' : '#8a6a2a';
+            ctx.beginPath(); ctx.arc(pos.x + 33, pos.y - 2 + bob, 7, 0, Math.PI * 2); ctx.fill();
+          }
+        } else if (p.stage < 3 && p.fed >= p.needMax) {
+          // 等待施肥: 金色肥料图标
+          const fImg = img('fertilizer.png');
+          const bob = Math.sin(t * 4 + r) * 3;
+          if (fImg) ctx.drawImage(fImg, pos.x + 20, pos.y - 8 + bob, 26, 26);
+        }
+        // 开心发光 (原版 ZEN_GLOW)
+        if (p.happy > 0) {
+          ctx.save();
+          ctx.globalAlpha = Math.min(0.5, p.happy);
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.fillStyle = 'rgba(180,255,120,0.5)';
+          ctx.beginPath(); ctx.ellipse(pos.x + 33, pos.y + 30, 34, 40, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+        }
+        // 悬停框
+        if (hov) {
+          ctx.strokeStyle = 'rgba(255,233,168,0.9)'; ctx.lineWidth = 2.5;
+          ctx.strokeRect(pos.x + 2, pos.y + 2, 62, 76);
+        }
+      }
+    }
+    // 掉落金币
+    for (const c of this.coins) {
+      const coinImg = img('coin.png');
+      ctx.save();
+      ctx.globalAlpha = c.t > 0.9 ? Math.max(0, 1 - (c.t - 0.9) / 0.4) : 1;
+      if (coinImg) {
+        ctx.translate(c.x, c.y - (1 - Math.min(1, c.t * 2)) * 60);
+        ctx.rotate(c.t * 4);
+        ctx.drawImage(coinImg, -14, -14, 28, 28);
+      } else {
+        ctx.fillStyle = '#ffd34d';
+        ctx.beginPath(); ctx.arc(c.x, c.y, 10, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
+    // 蜗牛
+    if (this.stinky) {
+      const s = this.stinky;
+      const shell = img('stinky_shell.png');
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.scale(s.dir, 1);
+      const bob = Math.sin(s.t * 6) * 2;
+      if (shell) ctx.drawImage(shell, -20, -16 + bob, 40, 38);
+      else {
+        ctx.fillStyle = '#a8885a';
+        ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
+    // ---------- 工具栏 (原版 GetZenButtonRect: 从 x=30 起每格一工具) ----------
+    this._tools = [];
+    const TOOLS = [
+      { k: 'water', label: '水壶', img: game && game.purchased.goldwatering ? 'wateringcangold.png' : 'wateringcan.png' },
+      { k: 'fertilizer', label: '肥料', img: 'fertilizer.png', count: this.data.fertilizer },
+      { k: 'bugspray', label: '除虫', img: 'zengarden_bugspray_bottle.png', count: this.data.bugspray },
+      { k: 'phonograph', label: '唱片', img: 'phonograph.png', needBuy: !game.purchased.phonograph },
+      { k: 'glove', label: '手套', img: 'zen_gardenglove.png', needBuy: !game.purchased.glove },
+      { k: 'sell', label: '出售', img: 'zen_moneysign.png' },
+    ];
+    TOOLS.forEach((tl, i) => {
+      const x = 30 + i * 66, y = 522;
+      this._tools.push({ ...tl, x, y, w: 60, h: 60 });
+      ctx.save();
+      const sel = this.tool === tl.k;
+      // 槽底
+      ctx.fillStyle = sel ? 'rgba(200,160,60,0.85)' : 'rgba(60,44,20,0.75)';
+      ctx.strokeStyle = sel ? '#ffe9a8' : 'rgba(90,70,40,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(x, y, 60, 60, 8); ctx.fill(); ctx.stroke();
+      const tim = img(tl.img);
+      if (tim) ctx.drawImage(tim, x + 8, y + 6, 44, 44);
+      // 数量角标
+      if (tl.count !== undefined) {
+        ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'right'; ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+        ctx.strokeText(String(tl.count), x + 54, y + 16);
+        ctx.fillText(String(tl.count), x + 54, y + 16);
+      }
+      if (tl.needBuy) {
+        ctx.globalAlpha = 0.45;
+        ctx.fillStyle = '#333';
+        ctx.fillRect(x, y, 60, 60);
+        ctx.globalAlpha = 1;
+        ctx.font = 'bold 11px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center'; ctx.fillStyle = '#ffd34d';
+        ctx.fillText('需购买', x + 30, y + 54);
+      }
+      ctx.restore();
+    });
+    // 返回主菜单 + 切换花园
+    ctx.save();
+    ctx.fillStyle = '#a03a3a';
+    ctx.beginPath(); ctx.roundRect(700, 552, 90, 38, 6); ctx.fill();
+    ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+    ctx.fillText('主菜单', 745, 576);
+    ctx.restore();
+    this._back = { x: 700, y: 552, w: 90, h: 38 };
+    // 下一花园 (原版 NEXT_GARDEN 固定 x=564)
+    const gardens = ['greenhouse'];
+    if (game.purchased.mushroomgarden) gardens.push('mushroomgarden');
+    if (game.purchased.aquarium) gardens.push('aquarium');
+    if (gardens.length > 1) {
+      const ng = img('zen_nextgarden.png');
+      this._nextGarden = { x: 560, y: 20, w: 60, h: 60 };
+      if (ng) ctx.drawImage(ng, 560, 20, 60, 60);
+      const gi = gardens.indexOf(this.data.garden);
+      pvzText(ctx, gardens[(gi + 1) % gardens.length] === 'greenhouse' ? '温室' : gardens[(gi + 1) % gardens.length] === 'mushroomgarden' ? '蘑菇园' : '水族馆', 590, 100, 13, '#e8d9b5');
+    } else this._nextGarden = null;
+    // 手套持有植物预览
+    if (this.heldPlant) {
+      const thumb = __getUI() && __getUI().getThumb(this.heldPlant.type);
+      if (thumb) ctx.drawImage(thumb, mouse.x - 25, mouse.y - 35, 50, 70);
+    }
+    // 选中工具光标
+    if (this.tool === 'water') {
+      const wimg = img(game && game.purchased.goldwatering ? 'wateringcangold.png' : 'wateringcan.png');
+      if (wimg) ctx.drawImage(wimg, mouse.x - 16, mouse.y - 30, 36, 36);
+    }
+    // 戴夫气泡
+    if (this.bubble) {
+      ctx.save();
+      const bx = 420, by = 430, bw = 320, bh = 96;
+      ctx.fillStyle = 'rgba(248,244,224,0.96)';
+      ctx.strokeStyle = '#8a8a7a'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#3a3222';
+      ctx.font = '15px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'left';
+      const txt = this.bubble.lines[this.bubble.line] || '';
+      // 简单换行
+      let line = '', yy = by + 30;
+      for (const ch of txt) {
+        if (ctx.measureText(line + ch).width > bw - 40) { ctx.fillText(line, bx + 20, yy); line = ch; yy += 20; }
+        else line += ch;
+      }
+      if (line) ctx.fillText(line, bx + 20, yy);
+      const a = 0.5 + 0.5 * Math.sin(Screens.t * 4);
+      ctx.globalAlpha = a;
+      ctx.font = 'bold 12px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#8a7a3a';
+      ctx.fillText('点击继续', bx + bw - 70, by + bh - 10);
+      ctx.restore();
+    }
+  },
+  // ---------- 交互 ----------
+  click(p, game) {
+    // 气泡优先
+    if (this.bubble) {
+      this.bubble.line++;
+      if (this.bubble.line >= this.bubble.lines.length) this.bubble = null;
+      game.audio.play('tap');
+      return;
+    }
+    // 返回
+    if (this._back && inRect(p, this._back.x, this._back.y, this._back.w, this._back.h)) {
+      game.audio.play('gravebutton');
+      game.state = 'menu';
+      return;
+    }
+    // 切换花园
+    if (this._nextGarden && inRect(p, this._nextGarden.x, this._nextGarden.y, this._nextGarden.w, this._nextGarden.h)) {
+      const gardens = ['greenhouse'];
+      if (game.purchased.mushroomgarden) gardens.push('mushroomgarden');
+      if (game.purchased.aquarium) gardens.push('aquarium');
+      const gi = gardens.indexOf(this.data.garden);
+      this.data.garden = gardens[(gi + 1) % gardens.length];
+      this.save();
+      game.audio.play('gravebutton');
+      return;
+    }
+    // 工具选择
+    for (const t of (this._tools || [])) {
+      if (inRect(p, t.x, t.y, t.w, t.h)) {
+        if (t.needBuy) { game.audio.play('buzzer'); return; }
+        this.tool = t.k;
+        game.audio.play('seedlift');
+        return;
+      }
+    }
+    // 植物点击
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 8; c++) {
+        const pos = this.cellPos(c, r);
+        if (!(p.x > pos.x && p.x < pos.x + 66 && p.y > pos.y && p.y < pos.y + 80)) continue;
+        this.useTool(r, c, game);
+        return;
+      }
+    }
+  },
+  useTool(r, c, game) {
+    const plant = this.data.plants[r][c];
+    const tool = this.tool;
+    // 手套: 移动植物 (拿起/放下)
+    if (tool === 'glove') {
+      if (this.heldPlant) {
+        if (!plant) {
+          this.data.plants[r][c] = this.heldPlant;
+          this.heldPlant = null;
+          this.save();
+          game.audio.play('plant');
+        } else game.audio.play('buzzer');
+      } else if (plant) {
+        this.heldPlant = plant;
+        this.data.plants[r][c] = null;
+        this.save();
+        game.audio.play('shovel');
+      }
+      return;
+    }
+    if (!plant) { game.audio.play('buzzer'); return; }
+    // 出售 (原版 GetPlantSellPrice: 芽1500 小3000 中5000 成8000)
+    if (tool === 'sell') {
+      if (!plant.type) { game.audio.play('buzzer'); return; }
+      const price = [0, 3000, 5000, 8000][plant.stage] || 8000;
+      game.coins += price;
+      game.saveShop();
+      this.data.plants[r][c] = null;
+      this.save();
+      game.audio.play('points');
+      this.coins.push({ x: this.cellPos(c, r).x + 33, y: this.cellPos(c, r).y, ground: this.cellPos(c, r).y + 40, value: Math.round(price / 100), t: 0, collected: false });
+      return;
+    }
+    // 浇水 (原版 PlantWatered: 掉1银币; 满足需求开心)
+    if (tool === 'water') {
+      if (plant.need === 'water') {
+        plant.need = null;
+        plant.happy = 3;
+        this.dropCoin(r, c, 25);
+      } else if (plant.stage < 3 && plant.fed < plant.needMax) {
+        plant.fed++;
+        this.dropCoin(r, c, 10);
+      } else {
+        game.audio.play('tap');
+        return;
+      }
+      game.audio.play('plant_water');
+      this.save();
+      return;
+    }
+    // 肥料 (原版 PlantFertilized: 升阶, 各阶段掉金币/钻石)
+    if (tool === 'fertilizer') {
+      if (this.data.fertilizer <= 0) { game.audio.play('buzzer'); return; }
+      if (plant.need === 'fertilizer') {
+        plant.need = null;
+        plant.happy = 3;
+        this.dropCoin(r, c, 25);
+      } else if (plant.stage < 3 && plant.fed >= plant.needMax) {
+        this.data.fertilizer--;
+        plant.stage++;
+        plant.fed = 0;
+        plant.needMax = 3 + Math.floor(Math.random() * 3);
+        // 新芽 → 小苗: 随机变成真植物 (原版 PickRandomSeedType)
+        if (plant.stage === 1 && !plant.type) {
+          const pool = require('./data').SEED_ORDER;
+          plant.type = pool[Math.floor(Math.random() * pool.length)];
+        }
+        // 升到成熟: 掉钻石 (原版 FULL → 2 钻石)
+        if (plant.stage === 3) this.dropCoin(r, c, 100);
+        else this.dropCoin(r, c, 25);
+      } else { game.audio.play('tap'); return; }
+      game.audio.play('plantgrow');
+      this.save();
+      return;
+    }
+    // 除虫 (原版 PlantFulfillNeed)
+    if (tool === 'bugspray') {
+      if (this.data.bugspray <= 0) { game.audio.play('buzzer'); return; }
+      if (plant.need === 'bugspray') {
+        this.data.bugspray--;
+        plant.need = null;
+        plant.happy = 3;
+        this.dropCoin(r, c, 25);
+        game.audio.play('plant2');
+        this.save();
+      } else game.audio.play('tap');
+      return;
+    }
+    // 留声机 (原版 PlantFulfillNeed)
+    if (tool === 'phonograph') {
+      if (plant.need === 'phonograph') {
+        plant.need = null;
+        plant.happy = 3;
+        this.dropCoin(r, c, 25);
+        game.audio.play('phonograph');
+        this.save();
+      } else game.audio.play('tap');
+      return;
+    }
+  },
+  dropCoin(r, c, value) {
+    const pos = this.cellPos(c, r);
+    this.coins.push({ x: pos.x + 33, y: pos.y, ground: pos.y + 44, value, t: 0, collected: false });
+  },
+  // 需求刷新 (进入花园时: 成熟植物随机产生需求)
+  refreshNeeds() {
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 8; c++) {
+      const p = this.data.plants[r][c];
+      if (p && p.stage === 3 && !p.need && Math.random() < 0.3) {
+        p.need = ['water', 'bugspray', 'phonograph'][Math.floor(Math.random() * 3)];
+      }
+    }
+    this.save();
+  },
 };
 
 if (typeof module !== 'undefined') module.exports = { Screens, pvzText, inRect };

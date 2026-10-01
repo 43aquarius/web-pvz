@@ -22,13 +22,18 @@ class Projectile {
     // 直线弹
     this.vx = (opts.vx !== undefined ? opts.vx : (this.def.speed || 0)) * (this.backward ? -1 : 1);
     this.vy = opts.vy || 0;
-    // 抛物线弹
+    // 抛物线弹 (原版 Plant::DoLaunch + Projectile::UpdateLobMotion)
+    // velX = rangeX/120tick, velZ初 = rangeY/120 - 7, accZ = +0.115/tick² (100Hz → px/s)
     if (this.def.lob) {
       const tx = opts.tx !== undefined ? opts.tx : x + 320;
+      const ty = opts.ty !== undefined ? opts.ty : y + 35;
       this.tx = tx;
-      const dur = Math.max(0.55, Math.abs(tx - x) / 300);
-      this.dur = dur;
       this.sx = x; this.sy = y;
+      this.baseY = y;
+      this.z = 0;
+      this.velX = (tx - x) / 1.2;              // 恒定水平速度 (120tick 到达)
+      this.velZ = (ty - y) / 1.2 - 700;        // 初速 -700px/s 向上
+      this.accZ = 1150;                        // 重力 (0.115/tick²)
       this.arcH = this.def.arcH || 180;
     }
     // 追踪弹
@@ -39,7 +44,8 @@ class Projectile {
     this.img = this.def.img ? Assets.image(this.def.img) : null;
     this.reanim = this.def.reanim && RE.hasDef(this.def.reanim) ? Assets.reanim(this.def.reanim) : null;
     if (this.reanim) {
-      const a = this.def.reanim === 'FirePea' ? 'anim_idle' : 'anim_idle';
+      // Puff 只有 anim_puff 区间; FirePea 用 anim_idle (兜底)
+      const a = this.reanim.animExists('anim_puff') ? 'anim_puff' : 'anim_idle';
       this.reanim.play(a, RE.LOOP, 24);
     }
     this.trail = [];
@@ -79,15 +85,38 @@ class Projectile {
       return;
     }
 
-    // ---- 抛物线弹 ----
+    // ---- 抛物线弹 (原版物理: 初速-700px/s + 重力1150px/s², ~1.2s飞行, 峰值213px) ----
     if (this.def.lob) {
-      const p = Math.min(1, this.t / this.dur);
-      this.x = this.sx + (this.tx - this.sx) * p;
-      this.y = this.sy - Math.sin(p * Math.PI) * this.arcH + (board.gridY(this.row) + 30 - this.sy) * p * 0.6;
-      if (p >= 1) {
-        this.land(board);
-        return;
+      this.z += this.velZ * dt;
+      this.velZ += this.accZ * dt;
+      this.x += this.velX * dt;
+      this.y = this.baseY + this.z;
+      // 原版: 上升中不判定碰撞, 下落中开始命中检测
+      if (this.velZ > 0) {
+        const groundZ = (board.gridY(this.row) + 30) - this.baseY;
+        // 落点行僵尸碰撞 (命中窗口: 距地面 30px 内)
+        if (this.z >= groundZ - 32) {
+          for (const z of board.zombies) {
+            if (z.dead || z.row !== this.row || z.hittable === false || z.boss || z.underground || z.underwater) continue;
+            if (Math.abs(z.hitX() - this.x) < 50) {
+              const flags = { chill: this.def.chill };
+              z.takeDamage(this.def.dmg, board, flags);
+              if (this.def.stun) z.butter = this.def.stun;
+              if (this.type === 'butter') board.game.audio.play('butterhit');
+              this.splat(board, this.x);
+              this.dead = true;
+              return;
+            }
+          }
+        }
+        // 落地 (z 回到行基准面)
+        if (this.z >= groundZ) {
+          this.land(board);
+          return;
+        }
       }
+      // 出界保险
+      if (this.x > 860 || this.x < -60) { this.dead = true; return; }
       return;
     }
 
@@ -244,17 +273,19 @@ class Projectile {
       if (this.x < -60) this.dead = true;
       return;
     }
-    // 篮球(抛物线)
-    const p = Math.min(1, this.t / this.dur);
-    this.x = this.sx + (this.tx - this.sx) * p;
-    this.y = this.sy - Math.sin(p * Math.PI) * this.arcH + (board.gridY(this.row) + 30 - this.sy) * p * 0.6;
-    if (p >= 1) {
+    // 篮球(抛物线, 原版物理)
+    this.z += this.velZ * dt;
+    this.velZ += this.accZ * dt;
+    this.x += this.velX * dt;
+    this.y = this.baseY + this.z;
+    const groundZ = (board.gridY(this.row) + 30) - this.baseY;
+    if (this.velZ > 0 && this.z >= groundZ) {
       // 砸植物
-      const col = Math.floor((this.tx - CONST.LAWN_XMIN) / 80);
+      const col = Math.floor((this.x - CONST.LAWN_XMIN) / 80);
       const plant = board.grid[this.row][col] || board.gridPot[this.row][col];
       if (plant && !plant.dead) {
         plant.takeDamage(30, board);
-        board.addEffect('basketballsplat', this.tx, board.gridY(this.row) + 30);
+        board.addEffect('basketballsplat', this.x, board.gridY(this.row) + 30);
         board.game.audio.play('basketballhit');
       }
       this.dead = true;

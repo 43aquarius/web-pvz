@@ -16,6 +16,7 @@ const Assets = (function () {
   const state = {
     reanimJson: {},
     images: new Map(),
+    data: {},          // 数据文件 (almanac_data / dave_dialogs)
     loaded: false,
   };
 
@@ -28,7 +29,8 @@ const Assets = (function () {
 
   // ---- pack.bin 单请求加载 (网络部署首选: 1479张图合并为1次下载) ----
   async function loadPack(progress) {
-    const res = await fetch('assets/pack.bin');
+    const v = window.__BUILD__ || '7';
+    const res = await fetch('assets/pack.bin?v=' + v);
     if (!res.ok) throw new Error('pack HTTP ' + res.status);
     const buf = await res.arrayBuffer();
     if (buf.byteLength < 8) throw new Error('pack too small');
@@ -143,6 +145,18 @@ const Assets = (function () {
         await loadImagesPerFile(keys, (k) => 'assets/images/' + k, progress);
       }
     }
+    // ---------- 数据文件 (图鉴文本 / 戴夫对话) ----------
+    const dataKeys = ['almanac_data', 'dave_dialogs'];
+    for (const dk of dataKeys) {
+      try {
+        if (E && E.data && E.data[dk]) {
+          state.data[dk] = JSON.parse(await new Response(b64ToBlob(E.data[dk], 'application/json')).text());
+        } else {
+          const r = await fetch('assets/' + dk + '.json');
+          if (r.ok) state.data[dk] = await r.json();
+        }
+      } catch (e) { console.warn('数据文件加载失败', dk); state.data[dk] = state.data[dk] || {}; }
+    }
     // ---------- 构建 reanim 定义 ----------
     let n = 0;
     for (const [name, json] of Object.entries(state.reanimJson)) {
@@ -154,10 +168,29 @@ const Assets = (function () {
     state.loaded = true;
   }
 
-  function image(key) { return state.images.get(key); }
+  // 扩展名容错查找: 'pea' → 'pea.png'/'pea.jpg'; '.jpg' 优先回退同名 .png (原版jpg透明度被拍平)
+  function image(key) {
+    if (!key) return null;
+    const k = String(key).toLowerCase();
+    let im = state.images.get(k);
+    if (im) return im;
+    if (k.endsWith('.jpg')) {
+      im = state.images.get(k.slice(0, -4) + '.png');
+      if (im) return im;
+    } else if (!k.includes('.')) {
+      im = state.images.get(k + '.png');
+      if (im) return im;
+      im = state.images.get(k + '.jpg');
+      if (im) return im;
+    } else if (k.endsWith('.png')) {
+      im = state.images.get(k.slice(0, -4) + '.jpg');
+    }
+    return im || null;
+  }
   function reanim(name) { return new RE.Reanimation(name); }
+  function data(name) { return state.data[name] || {}; }
 
-  return { load, image, reanim, state };
+  return { load, image, reanim, data, state };
 })();
 
 if (typeof module !== 'undefined') module.exports = Assets;
