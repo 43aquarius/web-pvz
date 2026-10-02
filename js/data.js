@@ -4,8 +4,6 @@
 // ============================================================
 'use strict';
 
-// 官方中文文案 (图鉴/对话, 由 screens.js/ui.js/cutscene.js 使用)
-const { STR } = require('./strings');
 // 常量
 const CONST = {
   BOARD_W: 800, BOARD_H: 600,

@@ -82,6 +82,15 @@ CORE_REANIM_PACK = {
     'Zombie_boss_fireball': 'zombie_boss', 'Zombie_boss_iceball': 'zombie_boss',
     'Zombie_Boss_driver': 'zombie_boss', 'Zombie_Jackson': 'misc', 'Zombie_disco': 'misc',
     'Zombie_credits_conehead': 'misc', 'Zombie_credits_dance': 'misc', 'Zombie_credits_screendoor': 'misc',
+    # 远端 v7 新增 reanim 归属 (目录文件名精确匹配)
+    'Hammer': 'fx',                    # 罐子锤击 (vasebreaker 加载 fx)
+    'fire': 'fx', 'splash': 'fx', 'Z': 'fx', 'TextFadeOn': 'ui',
+    'Rake': 'ui', 'ZombiesWon': 'ui', 'LoadBar_Zombiehead': 'ui', 'LoadBar_sprout': 'ui',
+    'ZenGarden_wateringcan': 'garden', 'ZenGarden_fertilizer': 'garden', 'ZenGarden_bugspray': 'garden',
+    'ZenGarden_phonograph': 'garden', 'ZenGarden_sprout': 'garden', 'Stinky': 'garden',
+    'treeofWisdom': 'garden', 'TreeOfWisdomClouds': 'garden',
+    'Digger_rising_dirt': 'zombie_digger',
+    'zombatar_zombie_head': 'misc',
 }
 
 UI_PREFIXES = (
@@ -160,7 +169,7 @@ EXTRA_IMG_PACK = {
 BOOT_IMAGES = (
     'titlescreen.jpg',
     # 菜单背景 PNG 双胞胎 (resolveImage 优先 png; jpg 透明区被压黑 → 必须随 boot 提供)
-    'selectorscreen_bg.png', 'selectorscreen_bg_left.png', 'selectorscreen_bg_center.png',
+    'selectorscreen_bg_left.png', 'selectorscreen_bg_center.png',
     'selectorscreen_bg_right.png', 'selectorscreen_bg_left_.png', 'selectorscreen_bg_center_.png',
     'selectorscreen_bg_right_.png',
     'selectorscreen_options1.png', 'selectorscreen_options2.png',

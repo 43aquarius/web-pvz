@@ -1441,7 +1441,9 @@ Screens.zengarden = {
   load() {
     try {
       const d = JSON.parse(localStorage.getItem('webpvz_garden') || 'null');
-      if (d && d.plants) {
+      // 格式校验: 必须是 4x8 网格 (旧版/异格式存档直接重置, 防崩溃)
+      if (d && d.plants && Array.isArray(d.plants) && d.plants.length === 4 &&
+          d.plants.every(row => Array.isArray(row) && row.length === 8)) {
         this.data = d;
         return;
       }

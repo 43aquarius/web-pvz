@@ -9,7 +9,7 @@
 'use strict';
 
 const { CONST } = require('./data');
-const { SCENE_BG, RENDER_LAYER } = require('./board');
+const { SCENE_BG, sceneBgName, RENDER_LAYER } = require('./board');
 const RE = require('./reanim');
 
 const BG_OFFSET_X = -220; // 原版 BOARD_OFFSET=220

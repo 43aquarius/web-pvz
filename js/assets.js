@@ -34,11 +34,14 @@ const Assets = (function () {
     return new Blob([u8], { type: mime });
   }
 
-  // ---- pack.bin 单请求加载 (网络部署首选: 1479张图合并为1次下载) ----
-  async function loadPack(progress) {
-    const v = window.__BUILD__ || '7';
-    const res = await fetch('assets/pack.bin?v=' + v);
-    if (!res.ok) throw new Error('pack HTTP ' + res.status);
+  // ---- 分包加载 (WPZ2: assets/packs/<name>.wpz) ----
+  function packURL(pack) {
+    return 'assets/packs/' + pack + '.wpz?v=' + (window.__BUILD__ || '1');
+  }
+
+  async function fetchPack(pack) {
+    const res = await fetch(packURL(pack));
+    if (!res.ok) throw new Error('pack ' + pack + ' HTTP ' + res.status);
     const buf = await res.arrayBuffer();
     if (buf.byteLength < 8) throw new Error('pack too small');
     const dv = new DataView(buf);
@@ -138,8 +141,8 @@ const Assets = (function () {
     // 植物: 本关可用卡池 (解锁顺序累积)
     const pool = availablePlants(lv, purchasedSet || new Set());
     for (const t of pool) packs.add('plant_' + t);
-    // 特殊玩法植物
-    if (level.fixed === 'bowling') { packs.add('plant_WALLNUT'); packs.add('plant_EXPLODEONUT'); packs.add('plant_GIANTWALLNUT'); }
+    // 特殊玩法植物 (EXPLODEONUT/GIANTWALLNUT 共享 Wallnut reanim → 归 plant_WALLNUT 包)
+    if (level.fixed === 'bowling') { packs.add('plant_WALLNUT'); }
     if (level.fixed === 'izombie') {
       for (const t of ['SUNFLOWER', 'PEASHOOTER', 'SNOWPEA', 'REPEATER', 'WALLNUT']) packs.add('plant_' + t);
       for (const t of ['NORMAL', 'CONE', 'POLEVAULTER', 'BUCKET']) for (const p of zombiePacksFor(t)) packs.add(p);
@@ -244,6 +247,20 @@ const Assets = (function () {
       if (progress && n % 20 === 0) progress(0.95 + 0.05 * n / total, '动画定义');
     }
     RE.setImages(state.images);
+    // ---------- 数据文件 (图鉴文案 / 戴夫对话, 小体积启动预取) ----------
+    const dataKeys = ['almanac_data', 'dave_dialogs'];
+    for (const dk of dataKeys) {
+      try {
+        if (E && E.data && E.data[dk]) {
+          state.data[dk] = typeof E.data[dk] === 'string'
+            ? JSON.parse(await new Response(b64ToBlob(E.data[dk], 'application/json')).text())
+            : E.data[dk];
+        } else if (!R) {
+          const r = await fetch('assets/' + dk + '.json?v=' + (window.__BUILD__ || '1'));
+          if (r.ok) state.data[dk] = await r.json();
+        }
+      } catch (e) { console.warn('数据文件加载失败', dk); state.data[dk] = state.data[dk] || {}; }
+    }
     state.loaded = true;
   }
 
@@ -271,55 +288,16 @@ const Assets = (function () {
     if (pack && !state.packLoaded.has(pack) && !state.pending.has(pack)) {
       ensurePacks([pack]);
     }
-    // ---------- 图片 ----------
-    if (E) {
-      // dist: base64 内嵌
-      const keys = Object.keys(E.images);
-      const getURL = (k) => {
-        const mime = k.endsWith('.jpg') ? 'image/jpeg' : 'image/png';
-        return URL.createObjectURL(b64ToBlob(E.images[k], mime));
-      };
-      await loadImagesPerFile(keys, getURL, progress);
-    } else if (window.__NO_PACK__) {
-      // dev.html: 本地服务器逐文件 (改图即时生效)
-      const keys = window.__IMAGE_LIST__ || [];
-      await loadImagesPerFile(keys, (k) => 'assets/images/' + k, progress);
-    } else {
-      // 网络部署: pack.bin 单请求优先, 失败回退逐文件
-      let packed = false;
-      try { packed = await loadPack(progress); } catch (e) { console.warn('pack.bin 加载失败, 回退逐文件', e); }
-      if (!packed) {
-        const keys = window.__IMAGE_LIST__ || [];
-        await loadImagesPerFile(keys, (k) => 'assets/images/' + k, progress);
-      }
-    }
-    // ---------- 数据文件 (图鉴文本 / 戴夫对话) ----------
-    const dataKeys = ['almanac_data', 'dave_dialogs'];
-    for (const dk of dataKeys) {
-      try {
-        if (E && E.data && E.data[dk]) {
-          state.data[dk] = JSON.parse(await new Response(b64ToBlob(E.data[dk], 'application/json')).text());
-        } else {
-          const r = await fetch('assets/' + dk + '.json');
-          if (r.ok) state.data[dk] = await r.json();
-        }
-      } catch (e) { console.warn('数据文件加载失败', dk); state.data[dk] = state.data[dk] || {}; }
-    }
-    // ---------- 构建 reanim 定义 ----------
-    let n = 0;
-    for (const [name, json] of Object.entries(state.reanimJson)) {
-      RE.buildDef(name, json);
-      n++;
-      if (progress && n % 20 === 0) progress(0.95 + 0.05 * n / Object.keys(state.reanimJson).length, '动画定义');
-    }
-    RE.setImages(state.images);
-    state.loaded = true;
   }
+
+  function packLoaded(pack) { return state.packLoaded.has(pack); }
+  function hasLazy() { return !!state.lazyIdx; }
 
   // 扩展名容错查找: 'pea' → 'pea.png'/'pea.jpg'; '.jpg' 优先回退同名 .png (原版jpg透明度被拍平)
   function image(key) {
     if (!key) return null;
-    const k = String(key).toLowerCase();
+    let k = String(key).toLowerCase();
+    if (k.startsWith('images/')) k = k.slice(7);   // 带目录前缀容错 (防具损伤贴图)
     let im = state.images.get(k);
     if (im) return im;
     if (k.endsWith('.jpg')) {
@@ -332,13 +310,32 @@ const Assets = (function () {
       if (im) return im;
     } else if (k.endsWith('.png')) {
       im = state.images.get(k.slice(0, -4) + '.jpg');
+      if (im) return im;
+    }
+    if (!im && state.lazyIdx && !state.embedMode) {
+      // 自愈: 该图所属分包后台补载
+      const pack = state.lazyIdx.img2pack[k];
+      if (pack && !state.packLoaded.has(pack)) selfHeal(pack);
     }
     return im || null;
   }
-  function reanim(name) { return new RE.Reanimation(name); }
+
+  function reanim(name) {
+    const nl = String(name).toLowerCase();
+    if (!RE.hasDef(nl) && state.lazyIdx && !state.embedMode) {
+      const pack = state.lazyIdx.reanim2pack[nl];
+      if (pack && !state.packLoaded.has(pack)) selfHeal(pack);
+    }
+    return new RE.Reanimation(name);
+  }
+
   function data(name) { return state.data[name] || {}; }
 
-  return { load, image, reanim, data, state };
+  return {
+    load, image, reanim, data, state,
+    ensurePacks, ensureLevel, ensureAlmanac, ensureShop, ensureGarden,
+    packsForLevel, zombiePacksFor, onPackLoaded, packLoaded, hasLazy,
+  };
 })();
 
 if (typeof module !== 'undefined') module.exports = Assets;

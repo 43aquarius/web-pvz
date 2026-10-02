@@ -14,7 +14,6 @@ const { Renderer } = require('./render');
 const { UI, roundRect } = require('./ui');
 const { Screens } = require('./screens');
 const { Cutscene, Banners, Transition, setZombieDefs } = require('./cutscene');
-const { Garden } = require('./garden');
 const RE = require('./reanim');
 
 setZombieDefs(ZOMBIES);
@@ -207,6 +206,7 @@ const Game = {
       for (const b of (UI._almIndexBtns || [])) {
         if (hit(b)) {
           a.tab = b.k; a.selected = null;
+          Assets.ensureAlmanac && Assets.ensureAlmanac(b.k === 'plants' ? 'plants' : 'zombies');
           this.audio.play('tap');
           return;
         }
@@ -532,7 +532,20 @@ const Game = {
     this._startCommon(level);
   },
 
-  _startCommon(level) {
+  // 按需加载关卡所需分包 (网络部署: 首次进入仅下载本关素材)
+  async _preloadLevel(level) {
+    if (!Assets.hasLazy || Assets.state.embedMode) return;
+    this.levelLoading = true;
+    try {
+      await Assets.ensureLevel(level, this.purchasedSet);
+    } finally {
+      this.levelLoading = false;
+    }
+  },
+
+  async _startCommon(level) {
+    if (this.levelLoading) return;   // 防双击
+    await this._preloadLevel(level);
     const lv = this.levelId;
     // 铲子解锁 (特殊玩法关卡无铲子)
     const specialNoShovel = ['bowling', 'whack', 'vasebreaker', 'izombie'].includes(level.fixed);
@@ -898,7 +911,6 @@ const Game = {
         ctx.fillStyle = ok ? '#7cff5a' : '#ff5a5a';
         ctx.fillRect(board.gridX(col), board.cellY(row, col), 80, board.scene === 'pool' ? 85 : 100);
         ctx.restore();
-      }
       }
     }
     // 打僵尸模式: 锤子光标

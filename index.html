@@ -84,7 +84,7 @@ window.require = function (name) {
     if (r.ok) window.__REANIM_LIST__ = await r.json();
   } catch (e) {}
   // 3. 模块 (依赖顺序: strings/data 先, garden 在 screens 后)
-  const files = ['reanim', 'strings', 'data', 'assets', 'audio', 'cutscene', 'projectiles', 'zombie', 'plants', 'board', 'render', 'ui', 'screens', 'garden', 'main'];
+  const files = ['reanim', 'data', 'assets', 'audio', 'cutscene', 'projectiles', 'zombie', 'plants', 'board', 'render', 'ui', 'screens', 'main'];
   for (const f of files) {
     try {
       const res = await fetch(`js/${f}.js?v=${window.__BUILD__ || Date.now()}`, { cache: 'no-store' });

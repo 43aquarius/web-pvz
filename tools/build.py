@@ -10,7 +10,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = ROOT
 MODE = sys.argv[1] if len(sys.argv) > 1 else 'dev'
 
-MODULES = ['reanim', 'strings', 'data', 'assets', 'audio', 'cutscene', 'projectiles', 'zombie', 'plants', 'board', 'render', 'ui', 'screens', 'garden', 'main']
+MODULES = ['reanim', 'data', 'assets', 'audio', 'cutscene', 'projectiles', 'zombie', 'plants', 'board', 'render', 'ui', 'screens', 'main']
 
 HTML_HEAD = '''<!DOCTYPE html>
 <html lang="zh-CN">

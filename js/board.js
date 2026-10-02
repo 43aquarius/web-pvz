@@ -1289,7 +1289,7 @@ class LimbParticle {
   }
 }
 
-if (typeof module !== 'undefined') module.exports = { Board, Sun, Coin, Effect, LimbParticle, SCENE_BG, RENDER_LAYER };
+if (typeof module !== 'undefined') module.exports = { Board, Sun, Coin, Effect, LimbParticle, SCENE_BG, sceneBgName, RENDER_LAYER };
 
 function easeOut01(p) { return 1 - (1 - p) * (1 - p); }
 function shuffleB(arr) {
