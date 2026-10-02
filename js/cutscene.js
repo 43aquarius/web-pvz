@@ -87,6 +87,7 @@ const Cutscene = {
     this.daveLine = 0;
     this.daveAnim = null;
     this.daveTalkT = 0;
+    this.daveGrab = false;        // 5-10: 被飞贼抓走演出
     // 房子文案 (原版 [PLAYERS_HOUSE])
     this.houseMsg = level.scene === 'day' || level.scene === 'night' ? '玩家之家'
       : level.scene === 'pool' || level.scene === 'fog' ? '玩家的后院' : '玩家的屋顶';
@@ -332,39 +333,53 @@ const Cutscene = {
   // ============================================================
   // 戴夫过场 (原版 CutScene.cpp 750-860: 各关卡 mCrazyDaveDialogStart)
   // 入场 t=1500 (冻结主时间轴) → 对话点击推进 → 离场 → 时间轴恢复
+  // 文本来自原版 LawnStrings [CRAZY_DAVE_xxxx] (assets/dave_dialogs.json)
   // ============================================================
-  daveDialogFor(level, firstTime) {
+  daveText(id) {
+    const dialogs = Assets.data('dave_dialogs');
+    let t = dialogs['CRAZY_DAVE_' + id] || '';
+    // 占位符替换 (原版 {PLAYER_NAME}/{MONEY}/{UPGRADE_COST})
+    const game = this.board.game;
+    t = t.replace('{PLAYER_NAME}', '邻居')
+      .replace('{MONEY}', String(game.coins || 0))
+      .replace('{UPGRADE_COST}', '$7500')
+      .replace(/\{[A-Z_0-9]+\}/g, '');   // 剩余表情标记清除
+    return t.trim();
+  },
+  daveIdsFor(level, firstTime) {
     const lv = level.id;
-    const D = STR.dave;
-    const isAdv = !level.mode;
-    // --- 特殊玩法关 (按原版 CutScene.cpp Is*Level 判定顺序) ---
-    if (isAdv && level.fixed === 'bowling') {
-      // 1-5 坚果保龄球: 首次 = 介绍 + 赠铲子 (原版 2400, 第6/7句为赠铲台词)
-      if (firstTime) {
-        const L = D.intro_1_5;
-        return { lines: L.slice(0, 5), gift: L.slice(5), giftShovel: true };
-      }
-      return { lines: D.replay_1_5, gift: null };
-    }
-    if (isAdv && level.fixed === 'whack') return { lines: D.whack_2_5, gift: null };          // 2-5 打僵尸
-    if (isAdv && level.fixed === 'vasebreaker') return { lines: D.vase_4_5, gift: null };    // 4-5 罐子
-    if (level.fixed === 'izombie') return { lines: D.izombie, gift: null };                  // 我不是僵尸
-    if (isAdv && lv === 25) return { lines: D.little_3_5, gift: null };                      // 3-5 小僵尸
-    if (isAdv && lv === 40) return { lines: D.storm_4_10, gift: null };                      // 4-10 暴风雨夜
-    if (isAdv && lv === 45) return firstTime ? { lines: D.bungee_5_5, gift: null } : { lines: D.bungee_5_5_replay, gift: null };  // 5-5 蹦极+禅园
-    if (isAdv && lv === 50) return { lines: D.boss_5_10, gift: null };                       // 5-10 僵王
+    // [原版 CutScene::StartLevel 场景→ID映射表]
+    if (lv === 5) return firstTime ? { ids: range(2400, 2406), giftAt: 2405 } : { ids: [2410, 2411], giftAt: null };
+    if (lv === 15) return { ids: range(401, 406), giftAt: null };                    // 2-5 打僵尸 (锤子)
+    if (lv === 25) return { ids: range(701, 703), giftAt: null };                    // 3-5 小僵尸
+    if (lv === 35) return firstTime ? { ids: range(2500, 2502), giftAt: null } : null; // 4-5 罐子
+    if (lv === 45) return firstTime ? { ids: range(1301, 1311), giftAt: null } : { ids: range(1304, 1311), giftAt: null }; // 5-5 蹦极
+    if (lv === 50) return { ids: range(2300, 2302), giftAt: null, boss: true };      // 5-10 僵王
+    // 我不是僵尸 / 花瓶终结者 首次
+    if (level.fixed === 'izombie' && firstTime) return { ids: range(2200, 2203), giftAt: null };
+    if (level.fixed === 'vasebreaker' && firstTime) return { ids: range(3000, 3002), giftAt: null };
     if (!firstTime) {
-      if (isAdv && lv === 1) return { lines: D.replay_1_1, gift: null };                     // 重玩 1-1
+      if (lv === 1) return { ids: range(1601, 1603), giftAt: null };
       return null;
     }
-    // --- 首次冒险的关卡引导 (原版编号) ---
-    if (lv === 11) return { lines: D.night_2_1, gift: null };                                 // 2-1 夜晚
-    if (lv === 12) return { lines: D.coins_2_2, gift: null };                                 // 2-2 金币/商店提示
-    if (lv >= 13 && lv <= 24 && lv !== 15 && lv !== 20 && lv !== 21) return { lines: D.slot7, gift: null };  // 第7卡槽
-    if (lv === 21) return { lines: D.pool_3_1, gift: null };                                  // 3-1 泳池
-    if (lv === 31) return { lines: D.fog_4_1, gift: null };                                   // 4-1 雾
-    if (lv === 41) return { lines: D.roof_5_1, gift: null };                                  // 5-1 屋顶
+    // 首次冒险的关卡引导 (原版 201/501/801/1201 等)
+    if (lv === 11) return { ids: range(201, 207), giftAt: null };
+    if (lv === 12) return { ids: range(1401, 1402), giftAt: null };
+    if (lv === 21) return { ids: range(501, 505), giftAt: null };
+    if (lv === 31) return { ids: range(801, 803), giftAt: null };
+    if (lv === 41) return { ids: range(1201, 1204), giftAt: null };
     return null;
+  },
+  daveDialogFor(level, firstTime) {
+    const spec = this.daveIdsFor(level, firstTime);
+    if (!spec || !spec.ids.length) return null;
+    const lines = spec.ids.map(id => this.daveText(id)).filter(t => t);
+    if (!lines.length) return null;
+    return {
+      lines,
+      gift: spec.giftAt ? lines.slice(lines.length - (spec.ids.length - spec.ids.indexOf(spec.giftAt))) : null,
+      boss: !!spec.boss,
+    };
   },
 
   daveLines() {
@@ -417,7 +432,11 @@ const Cutscene = {
     } else if (this.davePhase === 'leave') {
       this.daveT += dt;
       if (this.daveAnim) this.daveAnim.update(dt);
-      if (this.daveT >= 0.62) {
+      // 被飞贼抓走: 戴夫快速上升消失 (原版 CutScene.cpp 1562-1572)
+      if (this.daveGrab && this.daveAnim) {
+        this.daveAnim.y -= dt * 220;
+      }
+      if (this.daveT >= (this.daveGrab ? 1.2 : 0.62)) {
         // 离场完成 → 恢复主时间轴 + 标记已看过
         this.davePhase = null;
         this.daveAnim = null;
@@ -445,11 +464,20 @@ const Cutscene = {
         return true;
       }
       if (this.daveLine >= lines.length) {
-        // 无赠礼: 直接离场
-        if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
-        this.davePhase = 'leave';
-        this.daveT = 0;
-        game.audio.play('dave_short');
+        // 无赠礼: 离场 (5-10 僵王关: 被飞贼抓走 — 原版 anim_grab + BUNGEE_SCREAM)
+        if (this.daveDialog && this.daveDialog.boss && this.daveAnim && this.daveAnim.animExists && this.daveAnim.animExists('anim_grab')) {
+          this.daveAnim.play('anim_grab', RE.PLAY_ONCE_HOLD, 24);
+          this.davePhase = 'leave';
+          this.daveT = 0;
+          this.daveGrab = true;   // 抓走后快速上升消失
+          game.audio.play('bungee_scream');
+          game.audio.play('dave_scream');
+        } else {
+          if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
+          this.davePhase = 'leave';
+          this.daveT = 0;
+          game.audio.play('dave_short');
+        }
         return true;
       }
       game.audio.play(Math.random() < 0.5 ? 'dave_short' : 'dave_medium');
@@ -555,6 +583,7 @@ const Cutscene = {
 // 避免循环引用: 僵尸表延迟获取
 let ZOMBIES_DEF = {};
 function setZombieDefs(z) { ZOMBIES_DEF = z; }
+function range(a, b) { const r = []; for (let i = a; i <= b; i++) r.push(i); return r; }
 
 // ============================================================
 // 场内横幅系统 (一大波僵尸/最后一波 — 原版 FinalWave.reanim 动画 / APPROACHING 静图)

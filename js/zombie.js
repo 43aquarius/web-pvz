@@ -506,8 +506,10 @@ class Zombie {
     this.x = Math.floor(this.posX);
     this.y = Math.floor(this.posY);
     this.renderOrder = row * 10000 + renderLayer + renderOffset;
-    this.posY = this.getPosYBasedOnRow(row);
-    this.y = Math.floor(this.posY);
+    if (this.type !== 'BOSS') {   // 原版: Boss 固定 (0,0), 不按行定位
+      this.posY = this.getPosYBasedOnRow(row);
+      this.y = Math.floor(this.posY);
+    }
     this.updateReanim();
   }
 
@@ -614,7 +616,10 @@ class Zombie {
     const r = this.bodyReanim;
     if (!r) return;
     if (blendTime > 0) r.startBlend(blendTime);
-    if (rate !== 0) r.animRate = rate;
+    if (rate !== 0) {
+      r.animRate = rate;
+      this.originalAnimRate = rate;   // 原版: PlayZombieReanim 记录 mOriginalAnimRate
+    }
     r.loopType = loopType;
     r.loopCount = 0;
     r.setFramesForLayer(anim);
@@ -1063,6 +1068,15 @@ class Zombie {
     if (p.type === 'BLOVER') { p.doSpecial(); return; }
     if (p.type === 'ICESHROOM' && !p.isAsleep) { p.doSpecial(); return; }
     if (this.chilledCounter > 0 && this.zombieAge % 2 === 1) return;
+
+    // 我不是僵尸: 向日葵每降40血掉1阳光 (原版 Zombie::EatPlant IZombie 分支)
+    if (this.board.mode === 'izombie' && p.type === 'SUNFLOWER') {
+      const stageBefore = Math.floor(Math.max(0, p.plantHealth) / 40);
+      const stageAfter = Math.floor(Math.max(0, p.plantHealth - DAMAGE_PER_EAT) / 40);
+      if (stageAfter < stageBefore || p.plantHealth - DAMAGE_PER_EAT <= 0) {
+        this.board.addIZombieSun(p.x, p.y);
+      }
+    }
 
     p.plantHealth -= DAMAGE_PER_EAT;
     p.recentlyEatenCountdown = 50;
@@ -1769,6 +1783,205 @@ class Zombie {
     if (iceX < 800) this.board.setIceTrail(this.row, 3000);
   }
 
+  // ============================================================
+  // 僵王博士状态机 (原版 Zombie::UpdateBoss 10220-10473)
+  // ENTER → IDLE → 召唤/踩踏/飞贼/丢RV/吐球; 血量阶段切换触发特殊攻击
+  // ============================================================
+  updateBoss() {
+    const r = this.bodyReanim;
+    if (!r) return;
+    // 冰冻: 所有计数暂停 (原版 10235-10266)
+    if (this.iceTrapCounter > 0) return;
+    if (this.phase === PH.BOSS_ENTER) {
+      if (r.loopCount > 0) {
+        this.phase = PH.BOSS_IDLE;
+        this.playZombieReanim('anim_idle', RE.LOOP, 0, 12);
+        // 原版计数: summon=500, head=5000, stomp=5500-6500, bungee=6500+
+        this.summonCounter = 500;
+        this.bossHeadCounter = 5000;
+        this.bossStompCounter = 5500 + Math.floor(Math.random() * 1000);
+        this.bossBungeeCounter = 6500;
+        this.bossRVCounter = 9000 + Math.floor(Math.random() * 2000);
+        this.bossStage = 0;
+      }
+      return;
+    }
+    if (this.phase !== PH.BOSS_IDLE) {
+      // 各攻击相位: 动画播完 → 执行效果 → 回 IDLE
+      if (r.loopCount > 0) {
+        this.bossResolveAttack();
+      }
+      return;
+    }
+    // IDLE: 死亡判定 (原版 血量=1 → BossStartDeath)
+    if (this.bodyHealth <= 1) { this.bossStartDeath(); return; }
+    // 伤害阶段 (原版 GetBodyDamageIndex: Boss <50%→2, <80%→1)
+    const stage = this.bodyHealth < this.bodyMaxHealth * 0.5 ? 2 : this.bodyHealth < this.bodyMaxHealth * 0.8 ? 1 : 0;
+    if (stage > (this.bossStage || 0)) {
+      this.bossStage = stage;
+      if (stage === 1) { this.bossBungeeAttack(); return; }   // 原版: 段1立刻放飞贼
+      if (stage === 2) { this.bossRVAttack(); return; }       // 原版: 段2立刻丢RV
+    }
+    // 计时器 (原版 100Hz tick 计数)
+    this.summonCounter--;
+    if (this.summonCounter <= 0) { this.bossSpawnAttack(); return; }
+    this.bossStompCounter--;
+    if (this.bossStompCounter <= 0) { this.bossStompAttack(); return; }
+    this.bossBungeeCounter--;
+    if (this.bossBungeeCounter <= 0) { this.bossBungeeAttack(); return; }
+    this.bossRVCounter--;
+    if (this.bossRVCounter <= 0) { this.bossRVAttack(); return; }
+    this.bossHeadCounter--;
+    if (this.bossHeadCounter <= 0) { this.bossHeadAttack(); return; }
+  }
+
+  // 攻击动画播完 → 结算效果 (原版各 Boss*Contact)
+  bossResolveAttack() {
+    const b = this.board;
+    switch (this.phase) {
+      case PH.BOSS_SPAWNING: {
+        // 原版 BossSpawnContact: 按年龄表召唤
+        this.bossSummonZombies();
+        break;
+      }
+      case PH.BOSS_STOMPING: {
+        // 原版 BossStompContact: 目标行×2 第5列及以右植物压扁
+        const row = this.bossTargetRow;
+        for (let rr = row; rr <= row + 1 && rr < b.rows; rr++) {
+          for (let c = 5; c < 9; c++) {
+            const p = b.grid[rr][c] || b.gridPot[rr][c] || b.gridLily[rr][c];
+            if (p && !p.dead) p.squish();
+          }
+        }
+        b.game.audio.play('bossstomp');
+        break;
+      }
+      case PH.BOSS_BUNGEES_DROP: {
+        // 原版 BossBungeeAttack: 连续3列飞贼
+        const col0 = Math.floor(Math.random() * 3);
+        for (let i = 0; i < 3; i++) {
+          const rr = b.grassRows[Math.floor(Math.random() * b.grassRows.length)];
+          const z = b.spawnZombieForWave('BUNGEE', rr, b.wave - 1);
+          if (z) { z.bungeeTargetCol = col0 + i; }
+        }
+        break;
+      }
+      case PH.BOSS_DROP_RV: {
+        // 原版 BossRVLanding: 2行×3列植物压毁
+        const row = this.bossTargetRow;
+        const col = this.bossTargetCol;
+        for (let rr = row; rr <= row + 1 && rr < b.rows; rr++) {
+          for (let cc = col; cc <= col + 2 && cc < 9; cc++) {
+            const p = b.grid[rr][cc] || b.gridPot[rr][cc] || b.gridLily[rr][cc];
+            if (p && !p.dead) p.squish();
+          }
+        }
+        b.game.audio.play('RVthrow');
+        break;
+      }
+      case PH.BOSS_HEAD_SPIT: {
+        // 原版 BossHeadSpit: 50%火球/50%冰球
+        const isFire = Math.random() < 0.5;
+        const row = this.bossTargetRow;
+        const pr = b.addProjectile(isFire ? 'bossfire' : 'bossice', 455, b.gridY(row) + 45, row, this, { zProj: true });
+        b.game.audio.play(isFire ? 'bossfireball' : 'bossiceball');
+        break;
+      }
+    }
+    this.phase = PH.BOSS_IDLE;
+    this.playZombieReanim('anim_idle', RE.LOOP, 0, 12);
+  }
+
+  // 原版 BossSpawnAttack: 召唤节奏随段位 (段0 450-550 / 段1 350-450 / 段2 150-250 tick)
+  bossSpawnAttack() {
+    const r = this.bodyReanim;
+    const anim = 'anim_spawn_' + (1 + Math.floor(Math.random() * 5));
+    this.playZombieReanim(anim, RE.PLAY_ONCE_HOLD, 0, 24);
+    this.phase = PH.BOSS_SPAWNING;
+    const s = this.bossStage || 0;
+    this.summonCounter = s === 0 ? 450 + Math.floor(Math.random() * 100) : s === 1 ? 350 + Math.floor(Math.random() * 100) : 150 + Math.floor(Math.random() * 100);
+  }
+
+  // 原版 BossSpawnContact: 按 mZombieAge 召唤僵尸类型
+  bossSummonZombies() {
+    const b = this.board;
+    const age = this.zombieAge || 0;
+    let type;
+    if (age < 3500) type = 'NORMAL';
+    else if (age < 8000) type = 'CONE';
+    else if (age < 12500) type = 'BUCKET';
+    else {
+      // 原版 gBossZombieList 随机 (第0行不出巨人)
+      const pool = ['CONE', 'BUCKET', 'FOOTBALL', 'POLEVAULTER', 'JACK', 'LADDER', 'ZAMBONI', 'CATAPULT', 'POGO', 'NEWSPAPER', 'DOOR', 'GARGANTUAR'];
+      type = pool[Math.floor(Math.random() * pool.length)];
+    }
+    const rows = b.grassRows.filter(rr => !(type === 'GARGANTUAR' && rr === 0));
+    const row = rows[Math.floor(Math.random() * rows.length)];
+    const z = b.spawnZombieForWave(type, row, b.wave - 1);
+    if (z) { z.posX = 600; z.x = 600; }
+  }
+
+  bossStompAttack() {
+    // 原版 BossStompAttack: 随机行 (可压2行)
+    const r = this.bodyReanim;
+    const anim = 'anim_stomp_' + (1 + Math.floor(Math.random() * 4));
+    this.playZombieReanim(anim, RE.PLAY_ONCE_HOLD, 0, 24);
+    this.phase = PH.BOSS_STOMPING;
+    this.bossTargetRow = Math.floor(Math.random() * Math.max(1, this.board.rows - 1));
+    this.bossStompCounter = 5500 + Math.floor(Math.random() * 1000);
+  }
+
+  bossBungeeAttack() {
+    const r = this.bodyReanim;
+    this.playZombieReanim('anim_bungee_1_enter', RE.PLAY_ONCE_HOLD, 0, 24);
+    this.phase = PH.BOSS_BUNGEES_DROP;
+    this.bossBungeeCounter = 6500 + Math.floor(Math.random() * 2000);
+  }
+
+  bossRVAttack() {
+    const r = this.bodyReanim;
+    this.playZombieReanim('anim_RV_1', RE.PLAY_ONCE_HOLD, 0, 24);
+    this.phase = PH.BOSS_DROP_RV;
+    this.bossTargetRow = Math.floor(Math.random() * Math.max(1, this.board.rows - 1));
+    this.bossTargetCol = Math.floor(Math.random() * 3);
+    this.bossRVCounter = 12000 + Math.floor(Math.random() * 3000);
+    this.bossStompCounter = Math.min(this.bossStompCounter, 4000);
+  }
+
+  bossHeadAttack() {
+    const r = this.bodyReanim;
+    this.playZombieReanim('anim_head_attack_' + (1 + Math.floor(Math.random() * 5)), RE.PLAY_ONCE_HOLD, 0, 24);
+    this.phase = PH.BOSS_HEAD_SPIT;
+    this.bossTargetRow = this.board.grassRows[Math.floor(Math.random() * this.board.grassRows.length)];
+    this.bossHeadCounter = 5000 + Math.floor(Math.random() * 2000);
+  }
+
+  // 原版 BossStartDeath: 头缩回 + 爆炸
+  // 原版 ZamboniDeath/CatapultDeath: 载具僵尸死亡 (翻倒+消失)
+  zamboniDeath(flags) {
+    if (this.isDeadOrDying) return;
+    this.playZombieReanim('anim_death', RE.PLAY_ONCE_HOLD, 0, 18);
+    this.phase = PH.DYING;
+    this.velX = 0;
+    this.dropLoot();
+  }
+  catapultDeath(flags) {
+    if (this.isDeadOrDying) return;
+    this.playZombieReanim('anim_death', RE.PLAY_ONCE_HOLD, 0, 18);
+    this.phase = PH.DYING;
+    this.velX = 0;
+    this.dropLoot();
+  }
+
+  bossStartDeath() {
+    if (this.phase === PH.BOSS_HEAD_SPIT) return;
+    this.playZombieReanim('anim_death', RE.PLAY_ONCE_HOLD, 0, 12);
+    this.phase = PH.DYING;
+    this.velX = 0;   // 原地死亡 (BossDie: 不走动)
+    this.board.game.audio.play('bossdie');
+    this.board.addEffect('bossexplosion', 400, 300);
+  }
+
   updateLadder() {
     if (this.mindControlled || !this.hasHead || this.isDeadOrDying) return;
     // #21: 没梯子后只能普通行走 (原版: 放完梯变成慢速普通僵尸)
@@ -2003,7 +2216,7 @@ class Zombie {
     if (!p) return;
     const ox = this.posX + 113, oy = this.posY - 44;
     this.summonCounter--;
-    this.board.addProjectile('basketball', ox, oy, this.row, { targetX: p.x + 20, targetY: p.y });
+    this.board.addProjectile('basketball', ox, oy, this.row, { tx: p.x + 20, ty: p.y + 35 });
     this.board.game.audio.play('basketball');
     this.updateReanim();
   }
@@ -2224,9 +2437,10 @@ class Zombie {
   }
 
   // ---------------- 伤害 ----------------
-  // 兼容两种签名: takeDamage(dmg, flags) | takeDamage(dmg, board, {noFlash, chill, exploded, squashed})
+  // 兼容两种签名: takeDamage(dmg, flags) | takeDamage(dmg, board, {noFlash, chill, exploded, squashed, fire})
   takeDamage(dmg, flagsOrBoard = 0, opts = null) {
     let flags = 0;
+    let fire = false;
     if (typeof flagsOrBoard === 'number') {
       flags = flagsOrBoard;
     } else {
@@ -2234,6 +2448,7 @@ class Zombie {
       if (opts && (opts.noFlash || opts.exploded)) flags |= DMG.DOESNT_CAUSE_FLASH;
       if (opts && opts.chill) flags |= DMG.FREEZE;
       if (opts && opts.squashed) flags |= DMG.DOESNT_LEAVE_BODY;
+      if (opts && opts.fire) fire = true;
     }
     if (this.phase === PH.JACK_POPPING || this.isDeadOrDying) return;
     let remaining = dmg;
@@ -2245,7 +2460,14 @@ class Zombie {
     if (remaining > 0 && this.helmType) {
       remaining = this.takeHelmDamage(remaining, flags);
     }
-    if (remaining > 0) this.takeBodyDamage(remaining, flags);
+    if (remaining > 0) {
+      const wasAlive = this.bodyHealth > 0;
+      this.takeBodyDamage(remaining, flags);
+      // 火系致命伤害 → 烧焦僵尸 (原版 ApplyBurn: PHASE_ZOMBIE_BURNED + 焦黑reanim)
+      if (fire && wasAlive && this.bodyHealth <= 0 && !this.isDeadOrDying) {
+        this.becomeCharred();
+      }
+    }
   }
 
   // 旧API兼容: mowed(board)
@@ -2265,6 +2487,8 @@ class Zombie {
       this.shieldJustGotShotCounter = 25;
       if (this.justGotShotCounter < 0) this.justGotShotCounter = 0;
     }
+    // 原版: 防具受冰系攻击 → 整体减速 (TakeHelmDamage DAMAGE_FREEZE → ApplyChill)
+    if (flags & DMG.FREEZE) this.applyChill(false);
     if (!(flags & DMG.DOESNT_CAUSE_FLASH) && !(flags & DMG.HITS_SHIELD_AND_BODY)) {
       this.shieldRecoilCounter = 12;
       if (this.shieldType === 'door' || this.shieldType === 'ladder') {
@@ -2297,6 +2521,8 @@ class Zombie {
 
   takeHelmDamage(dmg, flags) {
     if (!(flags & DMG.DOESNT_CAUSE_FLASH)) this.justGotShotCounter = 25;
+    // 原版: 头盔受冰系攻击 → 整体减速 (路障/铁桶僵尸吃寒冰腕豆有效)
+    if (flags & DMG.FREEZE) this.applyChill(false);
     const before = this.getHelmDamageIndex();
     const actual = Math.min(this.helmHealth, dmg);
     const remaining = dmg - actual;
@@ -2519,8 +2745,16 @@ class Zombie {
   detachShield() {
     if (this.shieldType === 'ladder') {
       this.reanimShowPrefix('Zombie_ladder_1', RG.HIDDEN);
+      this.reanimShowPrefix('Zombie_outerarm', RG.NORMAL);   // 原版: 恢复双臂
       this.shieldType = null;
       this.shieldHealth = 0;
+      // 原版 DetachShield: 相位回 NORMAL + 重选速度 (0.79→0.23-0.37 普通速) — 修复"放梯后速度不减"
+      this.phase = PH.NORMAL;
+      if (this.isEating) {
+        this.playZombieReanim('anim_eat', RE.LOOP, 20, 0);
+      } else {
+        this.startWalkAnim(0);
+      }
     }
   }
 
@@ -2600,41 +2834,62 @@ class Zombie {
 
   applyBurn() {
     if (this.isDeadOrDying) return;
-    // #8: 原版烧焦 — 换 Zombie_charred reanim (黑灰僵尸站立即崩塌成灰)
-    const charredName = this.type === 'GARGANTUAR' || this.type === 'REDEYE' ? 'Zombie_charred_gargantuar'
-      : this.type === 'CATAPULT' ? 'Zombie_charred_catapult'
-        : this.type === 'ZAMBONI' ? 'Zombie_charred_zamboni'
-          : this.type === 'DIGGER' ? 'Zombie_charred_digger'
-            : this.type === 'IMP' ? 'Zombie_charred_imp'
-              : 'Zombie_charred';
-    if (RE.hasDef(charredName)) {
-      const old = this.bodyReanim;
-      try { old && old.reanimDie(); } catch (e) { }
-      const r = this.board.addReanimEffect(charredName, 0, 0, 0);
-      this.bodyReanim = r;
-      this._charredReanim = true;
-      r.isAttachment = true;
-      r.play('anim_crumble', RE.PLAY_ONCE_HOLD, 0, 18);
-      if (!r.animExists('anim_crumble')) r.play('anim_idle', RE.PLAY_ONCE_HOLD, 0, 18);
-      this.phase = PH.BURNED;
-      this.phaseCounter = 220;
-      this.updateReanim();
-    } else {
-      this.phase = PH.BURNED;
-      this.phaseCounter = 220;
-      this.bodyReanim.colorOverride = [0, 0, 0, 255];
-      this.playZombieReanim('anim_idle', RE.LOOP, 0, 24);
+    // 原版 Zombie::ApplyBurn: BOSS/高血量烧不死 → 只受 1800 伤害
+    if (this.type === 'BOSS' || this.type === 'GARGANTUAR' || this.type === 'REDEYE' || this.bodyHealth >= 1800) {
+      this.takeDamage(1800, DMG_SYS | DMG.DOESNT_CAUSE_FLASH);
+      return;
     }
+    this.becomeCharred();
+  }
+
+  // 焦黑僵尸替换 (原版: 生成 REANIM_ZOMBIE_CHARRED 播 crumble, 原僵尸 DieNoLoot)
+  becomeCharred() {
+    if (this.phase === PH.BURNED) return;
+    const map = {
+      CATAPULT: 'Zombie_charred_catapult', DIGGER: 'Zombie_charred_digger',
+      GARGANTUAR: 'Zombie_charred_gargantuar', REDEYE: 'Zombie_charred_gargantuar',
+      IMP: 'Zombie_charred_imp', ZAMBONI: 'Zombie_charred_zamboni',
+    };
+    const defName = map[this.type] || 'Zombie_charred';
+    if (!RE.hasDef(defName)) {
+      // 兜底: 无焦黑reanim → 定格烧黑 (色染)
+      this.phase = PH.BURNED;
+      this.phaseCounter = 200;
+      this.velX = 0;
+      this.stopEating();
+      if (this.bodyReanim) {
+        this.bodyReanim.colorOverride = [30, 24, 20, 255];
+        this.bodyReanim.animRate = 0;
+      }
+      this.board.game.audio.play('zombie_burnt');
+      return;
+    }
+    // 替换 reanim 实例 (保留位置/缩放)
+    const old = this.bodyReanim;
+    const r = Assets.reanim(defName);
+    if (old) {
+      r.x = old.x; r.y = old.y;
+      r.scaleX = old.scaleX; r.scaleY = old.scaleY;
+    }
+    // 原版: crumble 粉碎动画 速率×0.9-1.1 随机
+    r.play('anim_crumble', RE.PLAY_ONCE_HOLD, 24 * (0.9 + Math.random() * 0.2));
+    this.bodyReanim = r;
+    this.phase = PH.BURNED;
+    this.charredDef = defName;
     this.velX = 0;
+    this.stopEating();
     this.board.game.audio.play('zombie_burnt');
   }
 
   updateBurn() {
-    this.phaseCounter--;
-    if (this.phaseCounter <= 0) {
-      // 崩塌成灰堆 (原版 anim_crumble 末帧 = 灰烬)
-      this.dieWithLoot();
+    // 焦黑僵尸: crumble 播完消失 (原版 reanim 播完 DieNoLoot)
+    const r = this.bodyReanim;
+    if (this.charredDef && r && r.loopCount > 0) {
+      this.dieNoLoot();
+      return;
     }
+    this.phaseCounter--;
+    if (this.phaseCounter <= 0) this.dieNoLoot();
   }
 
   // ---------------- 死亡 ----------------

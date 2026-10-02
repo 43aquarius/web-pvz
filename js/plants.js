@@ -134,7 +134,11 @@ class Plant {
   setup() {
     const d = this.def;
     switch (this.type) {
-      case 'POTATOMINE': this.state = 'arming'; this.timer = d.arm; break;   // 原版: 15s 埋地 (anim_idle帧0), 到时 rise→armed
+      case 'POTATOMINE':
+        this.state = 'arming'; this.timer = d.arm;
+        // 原版: 埋地期只显示土堆+顶部 (anim_idle 帧0), 而非成熟贴图 (#11)
+        for (const L of this.anims) if (L.r.animExists('anim_idle')) L.r.play('anim_idle', RE.PLAY_ONCE_HOLD, 0);
+        break;
       case 'CHERRYBOMB': case 'DOOMSHROOM': case 'JALAPENO': case 'ICESHROOM': case 'BLOVER':
         this.state = 'fuse'; this.fuseT = d.fuse || 1; break;
       case 'SUNSHROOM':
@@ -167,7 +171,7 @@ class Plant {
 
   update(dt, board) {
     if (this.dead) return;
-    // 纸板植物: 原版 I Zombie 植物被冻结, 只会被啃掉
+    // 我不是僵尸: 植物定格 (原版 mAnimRate=0, 纸牌植物不动画不生产)
     if (board.mode === 'izombie') {
       this.eatFlash = Math.max(0, this.eatFlash - dt);
       return;
@@ -230,6 +234,7 @@ class Plant {
           // 触发: 僵尸靠近
           for (const z of board.zombies) {
             if (!z.dead && z.row === this.row && !z.underwater && Math.abs(z.hitX() - (this.x + 40)) < 55 && !z.boss) {
+              // 原版: 半径60行内0, burn=false → TakeDamage(1800,18U) 即死不掉肢体
               this.explode(board, d.radius, d.dmg);
               board.game.audio.play('spudow');
               return;
@@ -383,6 +388,7 @@ class Plant {
             board.addEffect('squashhit', this.x + 40, this.y + 40);
             board.game.audio.play('splat3');
             this.dead = true;
+            this.die();   // 清除网格 → 格子立即可复种
           }
         }
         break;
@@ -614,12 +620,13 @@ class Plant {
         break;
       }
       case 'CABBAGEPULT': case 'KERNELPULT': case 'MELONPULT': case 'WINTERMELON': {
-        // 抛射: 目标行内最前僵尸
+        // 抛射: 目标行内最前僵尸 (原版: 起点mX+10/mY+5, 前置量 ZombieTargetLeadX(50)-30)
         const z = board.firstZombieInRow(this.row, this.x + 80, this.x + 9 * 80);
-        const tx = z ? z.hitX() : this.x + 400;
+        const tx = z ? (z.hitX() + 20) : this.x + 400;
+        const ty = z ? (z.y + 35) : (board.gridY(this.row) + 40);
         const isButter = this.type === 'KERNELPULT' && Math.random() < d.butterChance;
         const projType = isButter ? 'butter' : d.proj;
-        board.projectiles.push(new Projectile(projType, this.x + 40, this.y + 5, this.row, this, { tx }));
+        board.projectiles.push(new Projectile(projType, this.x + 10, this.y + 5, this.row, this, { tx, ty }));
         playShoot('anim_shooting', 15);
         game.audio.play(isButter ? 'butter' : 'throw');
         break;
@@ -671,21 +678,26 @@ class Plant {
         board.game.audio.play('blover');
         break;
     }
-    // #18: 瞬发植物引爆后释放格子 (原版: 爆炸即消失, 格子立即可复种)
-    this.die();
+    this.dead = true;
+    this.die();   // 清除网格引用 → 格子立即可复种
   }
 
   explode(board, radius, dmg) {
     const cx = this.x + 40, cy = this.y + 40;
     board.addEffect('powie', cx, cy);
+    // 原版 KillAllZombiesInRadius: 圆-矩形相交 + 行范围 ≤1
     for (const z of board.zombies) {
       if (z.dead || z.boss) continue;
+      if (Math.abs(z.row - this.row) > 1) continue;
       const zy = board.gridY(z.row) + 42;
       if (Math.hypot(z.hitX() - cx, zy - cy) < radius + 30) {
-        z.takeDamage(dmg, board, { exploded: true, fire: true });
+        // 樱桃炸弹/末日菇 burn=true → 烧焦僵尸 (原版 ApplyBurn)
+        const fire = this.type === 'CHERRYBOMB' || this.type === 'DOOMSHROOM';
+        z.takeDamage(dmg, board, { exploded: true, noFlash: true, fire });
       }
     }
-    this.die();
+    this.dead = true;
+    this.die();   // 清除网格引用 → 格子立即可复种 (#18)
   }
 
   // ---------- 受伤 ----------
@@ -739,17 +751,24 @@ class Plant {
   getPlantRect() { return { x: this.x, y: this.y + 10, w: 80, h: 70 }; }
   spikeRockTakeDamage() { this.hp -= 20; if (this.hp <= 0) this.dead = true; }
   die() {
-    if (this.dead) return;
+    // 我不是僵尸: 向日葵死亡掉剩余阳光 (原版 IZombiePlantDropRemainingSun: remainingHP/40+1 个)
+    if (!this.dead && this.board && this.board.mode === 'izombie' && this.type === 'SUNFLOWER') {
+      const n = Math.min(Math.floor(Math.max(0, this.hp) / 40) + 1, 8);
+      for (let i = 0; i < n; i++) this.board.addIZombieSun(this.x + 5 * i, this.y);
+    }
     this.hp = 0;
     this.dead = true;
-    // 我不是僵尸: 僵尸吃掉植物 → 获得阳光
-    if (this.board && this.board.mode === 'izombie') this.board.sun += 25;
+    this._clearGrid();
+  }
+
+  _clearGrid() {
     // 从网格移除
     try {
       if (this.board.grid[this.row][this.col] === this) this.board.grid[this.row][this.col] = null;
       if (this.board.gridPumpkin[this.row][this.col] === this) this.board.gridPumpkin[this.row][this.col] = null;
       if (this.board.gridLily[this.row][this.col] === this) this.board.gridLily[this.row][this.col] = null;
       if (this.board.gridPot[this.row][this.col] === this) this.board.gridPot[this.row][this.col] = null;
+      if (this.board.gridSpikes && this.board.gridSpikes[this.row] && this.board.gridSpikes[this.row][this.col] === this) this.board.gridSpikes[this.row][this.col] = null;
     } catch (e) { }
   }
   squish() {

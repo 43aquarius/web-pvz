@@ -94,21 +94,34 @@ const UPGRADES = new Set(['GATLINGPEA', 'TWINSUNFLOWER', 'GLOOMSHROOM', 'CATTAIL
 // ---------- 戴夫商店 (原版 StoreScreen: 通关 3-4 后解锁, 僵尸掉金币购买) ----------
 // minLevel: 出现在货架上的最早进度; slot 依次购买
 const SHOP_ITEMS = [
-  { key: 'rake',        label: '戴夫的耙子',   cost: 200,   minLevel: 2,  desc: '自动消灭本关第一只僵尸', icon: 'rake' },
-  { key: 'slot8',       label: '种子槽 ×8',    cost: 750,   minLevel: 13, desc: '卡槽扩充到 8 格', icon: 'slot' },
-  { key: 'slot9',       label: '种子槽 ×9',    cost: 5000,  minLevel: 13, desc: '卡槽扩充到 9 格', icon: 'slot' },
-  { key: 'slot10',      label: '种子槽 ×10',   cost: 20000, minLevel: 13, desc: '卡槽扩充到 10 格', icon: 'slot' },
-  { key: 'poolcleaner', label: '泳池清洁车',   cost: 1000,  minLevel: 21, desc: '泳池关卡配备清洁车', icon: 'poolcleaner' },
-  { key: 'roofcleaner', label: '屋顶清洁车',   cost: 2000,  minLevel: 41, desc: '屋顶关卡配备清洁车', icon: 'roofcleaner' },
+  // ---- 页1: 道具与升级植物 (原版 gStoreItemSpots 页0) ----
+  { key: 'slot8',       label: '种子槽 ×8',    cost: 750,   minLevel: 13, desc: '卡槽扩充到 8 格', icon: 'store_packetupgrade' },
+  { key: 'poolcleaner', label: '泳池清洁车',   cost: 1000,  minLevel: 21, desc: '泳池关卡配备清洁车', icon: 'icon_poolcleaner' },
+  { key: 'rake',        label: '戴夫的耙子',   cost: 200,   minLevel: 2,  desc: '自动消灭本关第一只僵尸', icon: 'icon_rake' },
+  { key: 'roofcleaner', label: '屋顶清洁车',   cost: 2000,  minLevel: 41, desc: '屋顶关卡配备清洁车', icon: 'icon_roofcleaner' },
   { key: 'GATLINGPEA',  label: '机枪射手',     cost: 5000,  minLevel: 11, desc: '一次发射四颗豌豆', icon: 'plant' },
   { key: 'TWINSUNFLOWER', label: '双子向日葵', cost: 5000,  minLevel: 11, desc: '一次产出两颗阳光', icon: 'plant' },
-  { key: 'IMITATER',    label: '模仿者',       cost: 2500,  minLevel: 11, desc: '复制任意一张卡', icon: 'plant' },
   { key: 'GLOOMSHROOM', label: '忧郁蘑菇',     cost: 7500,  minLevel: 21, desc: '向四周喷射毒雾', icon: 'plant' },
   { key: 'CATTAIL',     label: '香蒲',         cost: 7500,  minLevel: 21, desc: '追踪导弹打气球', icon: 'plant' },
-  { key: 'GOLDMAGNET',  label: '吸金磁',       cost: 3000,  minLevel: 31, desc: '自动吸取金币', icon: 'plant' },
+  // ---- 页2: 更多升级植物 (原版页1) ----
   { key: 'SPIKEROCK',   label: '地刺王',       cost: 7500,  minLevel: 31, desc: '扎爆轮胎更耐久', icon: 'plant' },
-  { key: 'COBCANNON',   label: '玉米加农炮',   cost: 5000,  minLevel: 41, desc: '点选目标轰爆全场', icon: 'plant' },
+  { key: 'GOLDMAGNET',  label: '吸金磁',       cost: 3000,  minLevel: 31, desc: '自动吸取金币', icon: 'plant' },
   { key: 'WINTERMELON', label: '冰西瓜',       cost: 10000, minLevel: 41, desc: '群体减速的西瓜', icon: 'plant' },
+  { key: 'COBCANNON',   label: '玉米加农炮',   cost: 5000,  minLevel: 41, desc: '点选目标轰爆全场', icon: 'plant' },
+  { key: 'IMITATER',    label: '模仿者',       cost: 2500,  minLevel: 11, desc: '复制任意一张卡', icon: 'plant' },
+  { key: 'slot9',       label: '种子槽 ×9',    cost: 5000,  minLevel: 13, desc: '卡槽扩充到 9 格', icon: 'store_packetupgrade' },
+  { key: 'slot10',      label: '种子槽 ×10',   cost: 20000, minLevel: 13, desc: '卡槽扩充到 10 格', icon: 'store_packetupgrade' },
+  // ---- 页3: 禅镜花园用品 (原版页2) ----
+  { key: 'goldwatering', label: '金洒水壶',    cost: 1000,  minLevel: 45, desc: '一次浇灌 4 格植物', icon: 'wateringcangold' },
+  { key: 'fertilizer',  label: '肥料',         cost: 75,    minLevel: 45, desc: '让植物成长更快', icon: 'fertilizer', consumable: 5 },
+  { key: 'bugspray',    label: '杀虫剂',       cost: 100,   minLevel: 45, desc: '赶走植物上的虫子', icon: 'zengarden_bugspray_bottle', consumable: 5 },
+  { key: 'phonograph',  label: '留声机',       cost: 1500,  minLevel: 45, desc: '播放音乐让植物开心', icon: 'phonograph' },
+  { key: 'glove',       label: '园艺手套',     cost: 100,   minLevel: 45, desc: '移动植物位置', icon: 'zen_gardenglove' },
+  // ---- 页4: 花园场景 (原版页3) ----
+  { key: 'mushroomgarden', label: '蘑菇园',    cost: 3000,  minLevel: 45, desc: '培植夜习性植物', icon: 'store_mushroomgardenicon' },
+  { key: 'aquarium',    label: '水族馆',       cost: 3000,  minLevel: 45, desc: '培植水生植物', icon: 'store_aquariumgardenicon' },
+  { key: 'wheelbarrow', label: '手推车',       cost: 20,    minLevel: 45, desc: '在花园间搬运植物', icon: 'zen_wheelbarrow' },
+  { key: 'stinky',      label: '臭臭蜗牛',     cost: 300,   minLevel: 45, desc: '自动收集金币', icon: 'stinky_shell' },
 ];
 // 商店升级植物顺序 (availablePlants 追加顺序)
 const UPGRADE_ORDER = ['GATLINGPEA', 'TWINSUNFLOWER', 'GLOOMSHROOM', 'CATTAIL', 'WINTERMELON', 'GOLDMAGNET', 'SPIKEROCK', 'COBCANNON', 'IMITATER'];
@@ -243,12 +256,24 @@ function availablePlants(level, purchased) {
   }
   return base;
 }
-// 通关第 level 关后奖励的植物 (null=纸条/无植物)
-function awardPlantForLevel(level) {
+// 通关第 level 关后的奖励 (原版 Zombie::TrySpawnLevelAward 奖励表)
+// X-4 → 功能道具; X-9 → 纸条; 5-10 → 奖杯; 其余 → 新植物种子包
+function awardForLevel(level) {
+  if (level === 50) return { type: 'trophy' };
+  if ([9, 19, 29, 39, 49].includes(level)) return { type: 'note', note: (level - 1) / 10 + 1 };
+  if (level === 4) return { type: 'shovel' };
+  if (level === 14) return { type: 'almanac' };
+  if (level === 24) return { type: 'carkeys' };
+  if (level === 34) return { type: 'taco' };
+  if (level === 44) return { type: 'wateringcan' };
   const before = seedsAvailableCount(level);
   const after = seedsAvailableCount(level + 1);
-  if (after > before) return SEED_ORDER[after - 1];
+  if (after > before) return { type: 'seed', plant: SEED_ORDER[after - 1] };
   return null;
+}
+function awardPlantForLevel(level) {
+  const a = awardForLevel(level);
+  return a && a.type === 'seed' ? a.plant : null;
 }
 
 // 原版墓碑数量表 (夜晚关卡, 按列分布: 列号→数量)
@@ -286,7 +311,7 @@ const GARDEN_PLANTS = [
 function makeLevels() {
   const L = [];
   for (let lv = 1; lv <= 50; lv++) {
-    const scene = lv <= 10 ? 'day' : lv <= 20 ? 'night' : lv <= 30 ? 'pool' : lv <= 40 ? 'fog' : 'roof';
+    const scene = lv === 50 ? 'boss' : lv <= 10 ? 'day' : lv <= 20 ? 'night' : lv <= 30 ? 'pool' : lv <= 40 ? 'fog' : 'roof';
     const sub = ((lv - 1) % 10) + 1;
     const level = {
       id: lv, scene, sub,
@@ -294,15 +319,15 @@ function makeLevels() {
       label: `${Math.ceil(lv / 10)}-${sub}`,
       waves: WAVE_COUNTS[lv - 1],
       // 行配置: 1-1单行(中间), 1-2/1-3三行, 1-4起五行; 泳池六行
-      grassRows: scene === 'pool' || scene === 'fog' ? [0, 1, 4, 5] : (lv === 1 ? [2] : (lv === 2 || lv === 3) ? [1, 2, 3] : [0, 1, 2, 3, 4]),
-      rows: scene === 'pool' || scene === 'fog' ? 6 : 5,
+      grassRows: (scene === 'pool' || scene === 'fog') ? [0, 1, 4, 5] : (lv === 1 ? [2] : (lv === 2 || lv === 3) ? [1, 2, 3] : [0, 1, 2, 3, 4]),
+      rows: (scene === 'pool' || scene === 'fog') ? 6 : 5,
       startSun: lv === 1 ? 150 : 50,
       unlock: awardPlantForLevel(lv),
       fixed: null,
       graves: scene === 'night' ? gravesForLevel(lv) : [],
-      bgm: scene === 'day' ? 'front_day' : scene === 'night' ? 'front_night' : scene === 'pool' ? 'pool' : scene === 'fog' ? 'fog' : 'roof',
-      skySun: !(scene === 'night' || scene === 'fog'),
-      potColumns: lv === 41 ? 5 : lv === 42 ? 4 : lv >= 43 ? 3 : 0,
+      bgm: scene === 'day' ? 'front_day' : (scene === 'night' || scene === 'boss') ? 'front_night' : scene === 'pool' ? 'pool' : scene === 'fog' ? 'fog' : 'roof',
+      skySun: !(scene === 'night' || scene === 'fog' || scene === 'boss'),
+      potColumns: lv === 41 ? 5 : lv === 42 ? 4 : (lv >= 43 && lv !== 50) ? 3 : 0,
       sodRoll: lv === 1 || lv === 2 || lv === 4,       // 草皮扩展关: 开场铺草皮动画
       chooseSeeds: lv > 7,                              // 1-8 起需要选卡
       bankSlots: Math.min(6 + Math.max(0, Math.floor((lv - 8) / 12)), 10), // 6槽起步, 后期最多10
@@ -336,7 +361,7 @@ const MODE_LEVELS = {
   raining:   { id: 103, label: '雨天种子',     mode: 'minigame', fixed: 'raining', scene: 'day', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: false, bgm: 'front_day', rainingSeeds: true, desc: '天上掉下随机种子包' },
   // ---- 解谜模式 ----
   vasebreaker: { id: 201, label: '罐子僵尸',   mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '打碎罐子, 释放植物或僵尸' },
-  izombie:     { id: 202, label: '我不是僵尸', mode: 'puzzle', fixed: 'izombie', scene: 'day', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '指挥僵尸吃到脑子' },
+  izombie:     { id: 202, label: '我是僵尸',   mode: 'puzzle', fixed: 'izombie', scene: 'day',   waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '指挥僵尸吃到脑子' },
   // ---- 生存模式 (无尽) ----
   survival_day:   { id: 301, label: '白天生存',   mode: 'survival', scene: 'day',   waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true,  chooseSeeds: true, bankSlots: 9, bgm: 'front_day', endless: true, desc: '白天草坪无尽挑战' },
   survival_night: { id: 302, label: '黑夜生存',   mode: 'survival', scene: 'night', waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [[5, 1], [6, 1], [7, 2], [8, 3]], skySun: false, chooseSeeds: true, bankSlots: 9, bgm: 'front_night', endless: true, desc: '黑夜墓园无尽挑战' },
@@ -356,4 +381,4 @@ const WAVE = {
   ACCEL_DELAY: 2,              // 加速后2秒刷下一波
 };
 
-if (typeof module !== 'undefined') module.exports = { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, PROJECTILES, LEVELS, MODE_LEVELS, WAVE_COUNTS, SEED_ORDER, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, UPGRADE_ORDER, SHOP_ITEMS, GARDEN_PLANTS, ZOMBIE_NOTES, STR, availablePlants, seedsAvailableCount, awardPlantForLevel, gravesForLevel };
+if (typeof module !== 'undefined') module.exports = { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, PROJECTILES, LEVELS, MODE_LEVELS, WAVE_COUNTS, SEED_ORDER, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, UPGRADE_ORDER, SHOP_ITEMS, availablePlants, seedsAvailableCount, awardPlantForLevel, awardForLevel, gravesForLevel };

@@ -173,7 +173,7 @@ def build(mode):
         # 生产模式: 嵌入式数据块 (在模块script之前)
         embed_scripts = []
         rd = load_reanim_data()
-        embed_scripts.append('<script>\nwindow.__EMBED__ = {reanim:{}, images:{}, audio:{}};\n</script>\n')
+        embed_scripts.append('<script>\nwindow.__EMBED__ = {reanim:{}, images:{}, audio:{}, data:{}};\n</script>\n')
         chunk = []; size = 0
         def flush_r():
             if chunk:
@@ -211,6 +211,15 @@ def build(mode):
             if size > 4_000_000:
                 flush_a(); size = 0
         flush_a()
+        # 数据文件 (图鉴文本 / 戴夫对话)
+        data_chunk = []
+        for dk in ['almanac_data', 'dave_dialogs']:
+            dp = os.path.join(WEB, 'assets', dk + '.json')
+            if os.path.exists(dp):
+                e = base64.b64encode(open(dp, 'rb').read()).decode()
+                data_chunk.append(json.dumps(dk) + ':"' + e + '"')
+        if data_chunk:
+            embed_scripts.append('<script>\nObject.assign(window.__EMBED__.data, {' + ','.join(data_chunk) + '});\n</script>\n')
         # 嵌入块插到模块script之前
         idx = html.find('<script>\n(function(){\nvar __mods = {};')
         html = html[:idx] + ''.join(embed_scripts) + html[idx:]

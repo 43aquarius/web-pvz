@@ -9,7 +9,7 @@
 'use strict';
 
 const { CONST } = require('./data');
-const { SCENE_BG, sceneBgName, RENDER_LAYER } = require('./board');
+const { SCENE_BG, RENDER_LAYER } = require('./board');
 const RE = require('./reanim');
 
 const BG_OFFSET_X = -220; // 原版 BOARD_OFFSET=220
@@ -434,30 +434,6 @@ const Renderer = {
           ctx.restore();
           break;
         }
-        case 'rain': {
-          // 雨滴 (斜线, 原版 StormyNight)
-          ctx.save();
-          ctx.globalAlpha = 0.4;
-          ctx.strokeStyle = '#aac8e8';
-          ctx.lineWidth = 1.6;
-          const x = e.x + e.opts.vx * e.t, y = e.y + e.opts.vy * e.t;
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(x - 5, y - 16);
-          ctx.stroke();
-          ctx.restore();
-          break;
-        }
-        case 'lightning': {
-          // 闪电白闪 (全屏, 原版 DrawStormFlash)
-          ctx.save();
-          const p = e.t / (e.opts.hold || 0.35);
-          ctx.globalAlpha = 0.75 * (1 - p) * (Math.random() > 0.3 ? 1 : 0.4);
-          ctx.fillStyle = '#e8f0ff';
-          ctx.fillRect(0, 0, 800, 600);
-          ctx.restore();
-          break;
-        }
         case 'screen_flash': {
           ctx.save();
           ctx.globalAlpha = Math.max(0, 0.7 - e.t);
@@ -543,6 +519,25 @@ const Renderer = {
           ctx.arc(px, py, e.opts.r * (1 - p * 0.5), 0, Math.PI * 2);
           ctx.fill();
           ctx.restore();
+          break;
+        }
+        case 'vase_shatter': {
+          // 罐子碎片 (原版 PARTICLE_VASE_SHATTER: vase_chunks.png 9x3格 32px碎片)
+          const img = Assets.image('vase_chunks.png');
+          if (img && e.parts) {
+            const fade = e.t > 1 ? 1 - (e.t - 1) / 0.4 : 1;
+            ctx.save();
+            ctx.globalAlpha = Math.max(0, fade);
+            for (const p of e.parts) {
+              const px = e.x + (p.x || 0), py = e.y + (p.y || 0) - 30;
+              ctx.save();
+              ctx.translate(px, py);
+              ctx.rotate(p.rot);
+              ctx.drawImage(img, p.cx, p.cy, 32, 32, -16, -16, 32, 32);
+              ctx.restore();
+            }
+            ctx.restore();
+          }
           break;
         }
       }
