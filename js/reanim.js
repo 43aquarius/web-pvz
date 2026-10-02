@@ -58,7 +58,8 @@ const RE = (function () {
 
   function resolveImage(key) {
     if (!key) return null;
-    const k = key.toLowerCase();
+    let k = key.toLowerCase();
+    if (k.startsWith('images/')) k = k.slice(7);   // setImageOverride 带目录前缀容错
     if (k.endsWith('.jpg')) {
       const png = images.get(k.slice(0, -4) + '.png');
       if (png) return png;
@@ -167,19 +168,21 @@ const RE = (function () {
       this.shown = true;
     }
 
-    // ---- 轨道查找 ----
-    trackIndex(name) { return this.def.trackIdx[name.toLowerCase()] ?? 0; }
-    trackExists(name) { return this.def.trackIdx[name.toLowerCase()] !== undefined; }
-    animExists(name) { return this.def.anims[name] !== undefined; }
+    // ---- 轨道查找 (def 未加载时空安全) ----
+    trackIndex(name) { return this.def ? (this.def.trackIdx[name.toLowerCase()] ?? 0) : 0; }
+    trackExists(name) { return !!this.def && this.def.trackIdx[name.toLowerCase()] !== undefined; }
+    animExists(name) { return !!this.def && this.def.anims[name] !== undefined; }
 
     // ---- 动画区间 ----
     getAnimRange(animName) {
+      if (!this.def) return [0, 0];
       const r = this.def.anims[animName];
       if (!r) return [0, 0];
       return r;
     }
     // GetFramesForLayer: 也可由轨道数据推导 (控制轨道不在 anims 表时的回退)
     framesForLayer(name) {
+      if (!this.def) return [0, 0];
       const r = this.def.anims[name];
       if (r) return r;
       // 按 animName 匹配同名轨道, 找非空白帧区间
@@ -221,7 +224,7 @@ const RE = (function () {
 
     // ---- 更新 (dt 秒; 内部按100Hz语义) ----
     update(dt) {
-      if (this.frameCount <= 0 || this.dead) return;
+      if (this.frameCount <= 0 || this.dead || !this.def) return;
       const ticks = Math.max(1, Math.round(dt / SECONDS_PER_UPDATE));
       this.updateTicks(ticks);
     }
@@ -251,6 +254,7 @@ const RE = (function () {
         }
       }
       // 轨道实例维护
+      if (!this.def) return;
       const nt = this.tracks.length;
       for (let ti = 0; ti < nt; ti++) {
         const t = this.tracks[ti];
@@ -358,6 +362,7 @@ const RE = (function () {
 
     // ---- 速度 (GetTrackVelocity) ----
     getTrackVelocity(name) {
+      if (!this.def) return 0;
       const ti = this.trackIndex(name);
       const [ib, ia] = this.frameTime();
       const F = this.def.tracks[ti].F;
@@ -366,6 +371,7 @@ const RE = (function () {
     }
     // 行走同步支撑: _ground 在当前动画区间的总位移
     groundDist(animName) {
+      if (!this.def) return null;
       const [s, c] = this.getAnimRange(animName || 'anim_walk');
       if (c <= 0) return null;
       const ti = this.def.trackIdx['_ground'];
@@ -434,6 +440,18 @@ const RE = (function () {
       reanim.isAttachment = true;
       this.tracks[ti].attachments.push(att);
       return att;
+    }
+    // 立即重算所有附件 overlay (供宿主位置变更后同步调用, 消除一帧滞后)
+    refreshAttachments() {
+      for (let ti = 0; ti < this.tracks.length; ti++) {
+        const t = this.tracks[ti];
+        if (!t.attachments.length) continue;
+        const om = this.getAttachmentOverlayMatrix(ti);
+        for (const att of t.attachments) {
+          if (att.dead || !att.reanim) continue;
+          att.reanim.overlay = MAT.mul(om, att.offset);
+        }
+      }
     }
     attachToAnotherReanimation(host, trackName) {
       return host.attachToTrack(trackName, this, 0, 0);

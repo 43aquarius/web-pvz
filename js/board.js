@@ -8,8 +8,8 @@
 // ============================================================
 'use strict';
 
-const { CONST, PLANTS, ZOMBIES, zombieAllowedOnLevel, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER } = require('./data');
-const { Zombie } = require('./zombie');
+const { CONST, PLANTS, ZOMBIES, MODE_LEVELS, zombieAllowedOnLevel, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, availablePlants } = require('./data');
+const { Zombie, H } = require('./zombie');
 const RE = require('./reanim');
 const { Projectile } = require('./projectiles');
 const { Banners } = require('./cutscene');
@@ -18,6 +18,11 @@ const SCENE_BG = {
   day: 'background1.jpg', night: 'background2.jpg',
   pool: 'background3.jpg', fog: 'background4.jpg', roof: 'background5.jpg',
 };
+// #10: 5-10 僵王博士 = 夜间屋顶 (原版 background6boss)
+function sceneBgName(board) {
+  if (board.level && board.level.bossNight) return 'background6boss.jpg';
+  return SCENE_BG[board.scene];
+}
 
 const RENDER_LAYER = {
   ROW_OFFSET: 10000, GROUND: 200000, LAWN: 300000, GRAVE: 301000,
@@ -51,6 +56,7 @@ class Board {
     this.gridPumpkin = Array.from({ length: this.rows }, () => new Array(this.cols).fill(null));
     this.gridLily = Array.from({ length: this.rows }, () => new Array(this.cols).fill(null));
     this.gridPot = Array.from({ length: this.rows }, () => new Array(this.cols).fill(null));
+    this.gridSpikes = Array.from({ length: this.rows }, () => new Array(this.cols).fill(null));   // 地刺层 (#19 根因: 从未初始化)
     this.ladders = [];         // 梯子 GridItem
     this.craters = [];
     this.iceTrails = [];
@@ -77,12 +83,35 @@ class Board {
     this.cameraX = 0;
     this.skySunTimer = 5;
 
-    // 割草机
+    // ---- 雾系统 (原版 Board: mGridCelFog/mGridCelLook/mFogOffset/mFogBlownCountDown) ----
+    this.gridCelFog = Array.from({ length: 9 }, () => new Array(7).fill(0));
+    this.gridCelLook = Array.from({ length: 9 }, () => Array.from({ length: 7 }, () => Math.floor(Math.random() * 20)));
+    this.fogBlown = 0;       // 秒 (原版 tick/100)
+    this.fogOffset = 0;
+    if (this.scene === 'fog') {
+      this.fogBlown = 2;                       // 开场雾滚入 (原版 200 tick)
+      this.fogOffset = this.maxFogOffset();
+    }
+
+    // 割草机 (特殊玩法关卡无割草机: 保龄球/打僵尸/罐子/我不是僵尸)
+    // 原版: 泳池清洁车/屋顶清洁车需在戴夫商店购买
+    const noMowerModes = ['bowling', 'whack', 'vasebreaker', 'izombie'];
+    const bought = (game && game.purchased) || {};
     for (let r = 0; r < this.rows; r++) {
+      if (noMowerModes.includes(level.fixed)) continue;
+      if (this.waterRows.includes(r)) {
+        // 水行: 购买泳池清洁车后配备
+        if (bought['poolcleaner']) this.mowers.push({ row: r, x: -20, state: 'idle', type: 'pool', reanim: null });
+        continue;
+      }
       if (!this.grassRows.includes(r)) continue;
+      if (this.isRoof) {
+        if (bought['roofcleaner']) this.mowers.push({ row: r, x: -20, state: 'idle', type: 'roof', reanim: null });
+        continue;
+      }
       this.mowers.push({
         row: r, x: -20, state: 'idle',
-        type: this.waterRows.includes(r) ? 'pool' : (this.isRoof ? 'roof' : 'lawn'),
+        type: 'lawn',
         reanim: null,
       });
     }
@@ -96,11 +125,12 @@ class Board {
         for (let i = 0; i < cnt && rowsPool.length; i++) {
           const j = Math.floor(Math.random() * rowsPool.length);
           const r = rowsPool.splice(j, 1)[0];
-          this.graves.push({ row: r, col, hp: CONST.GRAVE_HP, type: Math.floor(Math.random() * 4) });
+          this.graves.push({ row: r, col, hp: CONST.GRAVE_HP, type: Math.floor(Math.random() * 4), look: Math.floor(Math.random() * 20), rise: 0 });
         }
       }
     }
     this.game.audio.playBGM(level.bgm);
+    this.initMode();
   }
 
   // ---------- 网格坐标 (原版 Board.cpp 8846-8930) ----------
@@ -220,6 +250,8 @@ class Board {
   canSpawnType(ty) {
     const d = ZOMBIES[ty];
     if (!d || d.weight <= 0 || d.boss) return false;
+    // 5-5 蹦极闪电战 (原版: NORMAL/CONE/BUCKET/LADDER)
+    if (this.level.id === 45 && ['NORMAL', 'CONE', 'BUCKET', 'LADDER', 'FLAG', 'BUNGEE'].includes(ty)) return true;
     return zombieAllowedOnLevel(ty, this.level.id);
   }
   introZombieType() {
@@ -232,16 +264,16 @@ class Board {
     return null;
   }
   buildWaves(level) {
-    const lv = level.id;
-    const numWaves = level.waves;
+    const lv = level.id > 50 ? 50 : level.id;   // 额外模式(生存等)按满级僵尸池
+    const numWaves = level.endless ? 200 : level.waves;
     const wavesPerFlag = numWaves >= 10 ? 10 : numWaves;
     const intro = this.introZombieType();
     const out = [];
     for (let w = 0; w < numWaves; w++) {
       const isFlag = numWaves >= 10 && w % wavesPerFlag === wavesPerFlag - 1 && lv !== 1;
-      const isFinal = w === numWaves - 1;
+      const isFinal = !level.endless && w === numWaves - 1;
       const types = [];
-      let points = Math.floor(w / 3) + 1;
+      let points = level.endless ? Math.min(26, Math.floor(w / 2.2) + 1) : Math.floor(w / 3) + 1;
       if (level.fixed === 'boss' && isFinal) {
         out.push({ flag: false, final: true, boss: true, count: 1, types: [['BOSS', 1]] });
         continue;
@@ -251,6 +283,8 @@ class Board {
         points = Math.round(points * 2.5);
         types.push(['NORMAL', plain]);
         types.push(['FLAG', 1]);
+        // 5-5 蹦极闪电战 (原版: 旗波追加 5 只蹦极僵尸偷植物)
+        if (lv === 45) types.push(['BUNGEE', 5]);
       }
       if (intro && !isFlag) {
         if (w === Math.floor(numWaves / 2) || isFinal) types.push([intro, 1]);
@@ -261,7 +295,7 @@ class Board {
           if (this.canSpawnType(ty) && !types.some(([t]) => t === ty)) types.push([ty, 1]);
         }
       }
-      if (lv === 50 && isFinal && !types.some(([t]) => t === 'GARGANTUAR')) types.push(['GARGANTUAR', 1]);
+      if (!level.endless && lv === 50 && isFinal && !types.some(([t]) => t === 'GARGANTUAR')) types.push(['GARGANTUAR', 1]);
       const pool = Object.keys(ZOMBIES).filter(ty => {
         const d = ZOMBIES[ty];
         if (d.weight <= 0 || d.boss) return false;
@@ -302,6 +336,13 @@ class Board {
   spawnZombieForWave(type, row, waveIdx) {
     const z = new Zombie(type, row, this, waveIdx + 1);
     this.zombies.push(z);
+    // 戴夫的耙子 (原版: 商店购买, 自动消灭本关第一只僵尸)
+    if (this.game && this.game.purchased && this.game.purchased['rake'] && !this.rakeUsed && z.fromWave !== -2) {
+      this.rakeUsed = true;
+      z.takeDamage(99999, null, { noFlash: true });
+      this.addEffect('text', z.posX + 20, z.posY + 40, { hold: 1.2, txt: '耙子!', c: '#ff5a3c', size: 22 });
+      this.game.audio.play('swing');
+    }
     return z;
   }
   zombiesWon(zombie) {
@@ -321,6 +362,14 @@ class Board {
     const tickDt = dt;
     // 波次与天降阳光 (秒)
     this.updateWaves(tickDt);
+    // 最后一波墓僵僵尸计时 (原版 mRiseFromGraveCounter 200tick)
+    if (this.riseFromGraveTimer > 0) {
+      this.riseFromGraveTimer -= tickDt;
+      if (this.riseFromGraveTimer <= 0) {
+        this.riseFromGraveTimer = 0;
+        this.spawnZombiesFromGraves();
+      }
+    }
     if (this.level.skySun) {
       this.skySunTimer -= tickDt;
       if (this.skySunTimer <= 0) {
@@ -339,6 +388,7 @@ class Board {
     for (const s of this.suns) s.update(dt, this);
     for (const c of this.coins) c.update(dt, this);
     for (const m of this.mowers) this.updateMower(m, dt);
+    this.updateMode(dt);
     this.updateVisuals(dt);
     // 清理
     this.plants = this.plants.filter(p => !p.dead);
@@ -358,6 +408,22 @@ class Board {
     this.reanims = this.reanims.filter(r => !r.dead);
     for (const e of this.effects) e.update(dt, this);
     this.effects = this.effects.filter(e => !e.dead);
+    // 4-10 暴风雨夜 (#暴风雨: 雨滴粒子 + 周期闪电)
+    if (this.level.stormy && this.state === 'playing') {
+      this._rainT = (this._rainT || 0) - dt;
+      if (this._rainT <= 0) {
+        this._rainT = 0.016;
+        for (let i = 0; i < 3; i++) {
+          this.effects.push(new Effect('rain', Math.random() * 900 - 50, -20, { vy: 900 + Math.random() * 200, vx: -120 }));
+        }
+      }
+      this._stormT = (this._stormT === undefined ? 8 : this._stormT) - dt;
+      if (this._stormT <= 0) {
+        this._stormT = 9 + Math.random() * 12;
+        this.addEffect('lightning', 0, 0, { hold: 0.35 });
+        this.game.audio.play('thunder' in this.game.audio ? 'thunder' : 'bossstomp');
+      }
+    }
     // 冰道衰减
     for (let r = 0; r < this.rows; r++) {
       if (this.iceTimers[r] > 0) {
@@ -366,7 +432,7 @@ class Board {
       }
     }
     this.shakeX *= 0.85; this.shakeY *= 0.85;
-    if (this.fogClearUntil < this.time) this.fogCleared = 0;
+    this.updateFog(dt);
   }
 
   // ---------- reanim 特效 ----------
@@ -386,6 +452,7 @@ class Board {
   updateWaves(dt) {
     if (this.state !== 'playing') return;
     if (!this.wavesStarted) return;
+    if (!this.waves.length) return;   // 无波次模式 (打僵尸/罐子/我不是僵尸): 胜利由 updateMode 判定
     if (this.wave >= this.totalWaves) {
       if (this.zombies.filter(z => z.fromWave !== -2 && !z.dead).length === 0) this.triggerWin();
       return;
@@ -403,8 +470,8 @@ class Board {
       const isFinalNext = this.waves[nextW] && this.waves[nextW].final;
       if (isFlagNext || isFinalNext) {
         this.hugeWaveWarned = true;
-        const bn = isFinalNext ? 'finalwave.png' : 'approaching.png';
-        Banners.show(bn, 3.6, isFinalNext ? 'finalwave' : 'hugewave', this.game.audio);
+        if (isFinalNext) Banners.showFinalWave(3.6, this.game.audio);
+        else Banners.show('approaching.png', 3.6, 'hugewave', this.game.audio);
       }
     }
     if (this.waveTimer <= 0) {
@@ -450,6 +517,64 @@ class Board {
       this.spawnZombieForWave('BOSS', 0, this.wave - 1);
       this.game.audio.play('bossintro');
     }
+    // 原版: 最后一波刷出后 200tick → 墓碑/泳池/天空额外僵尸 (SpawnZombiesFromGraves/Pool/Sky)
+    if (this.wave === this.totalWaves && !this.level.endless) {
+      this.riseFromGraveTimer = 2;
+    }
+  }
+
+  // 原版 Board::SpawnZombiesFromGraves — 最后一波从墓碑爬出僵尸
+  spawnZombiesFromGraves() {
+    const pool = this.waterRows.length > 0;
+    if (this.isRoof) {
+      this.spawnZombiesFromSky();
+      return;
+    }
+    if (pool) {
+      this.spawnZombiesFromPool();
+      return;
+    }
+    for (const g of this.graves) {
+      // 原版 PickGraveRisingZombieType: NORMAL / TRAFFIC_CONE 加权
+      const ty = Math.random() < 0.75 ? 'NORMAL' : 'CONE';
+      const z = this.spawnZombieForWave(ty, g.row, this.wave - 1);
+      z.riseFromGrave(g.col, g.row);
+    }
+  }
+
+  // 原版 SpawnZombiesFromPool — 泳池关最后一波从水里冒出 ( NORMAL/CONE/BUCKET )
+  spawnZombiesFromPool() {
+    const count = 2 + Math.floor(Math.random() * 2);
+    const poolSquares = [];
+    for (const r of this.waterRows) {
+      for (let c = 1; c < 8; c++) {
+        if (!this.getLilyAt ? !this.gridLily[r][c] : !this.getLilyAt(r, c)) poolSquares.push([r, c]);
+      }
+    }
+    for (let i = 0; i < count && poolSquares.length; i++) {
+      const [r, c] = poolSquares.splice(Math.floor(Math.random() * poolSquares.length), 1)[0];
+      const roll = Math.random();
+      const ty = roll < 0.55 ? 'DUCKY' : roll < 0.85 ? 'CONE' : 'BUCKET';
+      const z = this.spawnZombieForWave(ty, r, this.wave - 1);
+      z.riseFromGrave(c, r, true);
+    }
+  }
+
+  // 原版 SpawnZombiesFromSky — 屋顶关最后一波蹦极投僵尸
+  spawnZombiesFromSky() {
+    const count = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < count; i++) {
+      const c = 1 + Math.floor(Math.random() * 7);
+      const r = this.grassRows[Math.floor(Math.random() * this.grassRows.length)];
+      const ty = Math.random() < 0.6 ? 'NORMAL' : 'CONE';
+      const z = this.spawnZombieForWave(ty, r, this.wave - 1);
+      z.posX = this.gridX(c);
+      z.x = Math.floor(z.posX);
+      z.zombieHeight = H.FALLING;
+      z.altitude = 400;
+      z.velX = 0;
+      try { z.playZombieReanim('anim_falling', RE.PLAY_ONCE_HOLD, 20); } catch (e) { }
+    }
   }
 
   spawnSkySun() {
@@ -482,8 +607,11 @@ class Board {
   }
 
   // ---------- 阳光/金币 ----------
-  addSun(x, y, targetY, from) {
-    this.suns.push(new Sun(x, y, targetY, from));
+  addSun(x, y, targetY, from, value) {
+    const s = new Sun(x, y, targetY, from);
+    if (value) s.value = value;
+    this.suns.push(s);
+    return s;
   }
   collectSun(s) {
     if (s.collected || s.dead) return;
@@ -511,6 +639,8 @@ class Board {
 
   // ---------- 胜负 ----------
   checkWinLose() {
+    // 我不是僵尸: 僵尸进屋 = 吃到脑子 = 胜利 (由 updateMode 判定)
+    if (this.mode === 'izombie') return;
     for (const z of this.zombies) {
       if (!z.dead && !z.boss && z.x < -60 && z.hasHead) {
         if (z.flyingHigh) { this.triggerLose(z.row); return; }
@@ -557,14 +687,345 @@ class Board {
   }
   fogLevel(x) {
     if (this.scene !== 'fog') return 0;
-    if (this.time < this.fogClearUntil) return 0;
-    for (const p of this.plants) {
-      if (!p.dead && p.type === 'PLANTERN') {
-        if (Math.abs(p.x - x) < 200) return 0;
+    // 迷雾只在右半区 (原版 fogOffset 期间整体右移)
+    return 1;
+  }
+  // ---- 雾 (原版语义) ----
+  leftFogColumn() {
+    const lv = this.level.id;
+    if (lv === 31) return 6;
+    if (lv >= 32 && lv <= 36) return 5;
+    if (lv >= 37 && lv <= 40) return 4;
+    return 5;
+  }
+  maxFogOffset() { return 1065 - this.leftFogColumn() * 80; }
+  blowFog(seconds = 20) { this.fogBlown = seconds; }   // 三叶草
+  updateFog(dt) {
+    if (this.scene !== 'fog') return;
+    // 偏移 (原版 UpdateGame: blown 倒计时 2000tick, offset = max*easeOut)
+    if (this.fogBlown > 0) {
+      this.fogBlown = Math.max(0, this.fogBlown - dt);
+      const p = this.fogBlown / 20;
+      this.fogOffset = this.maxFogOffset() * easeOut01(Math.min(1, p));
+    } else {
+      this.fogOffset = 0;
+    }
+    // 单元格淡入 (原版 3/tick@100Hz = 300/s; blown 返回期 1/tick=100/s; 最左列上限 200)
+    const left = this.leftFogColumn();
+    const speed = this.fogBlown > 0 ? 100 : 300;
+    for (let x = left; x < 9; x++) {
+      const mx = x === left ? 200 : 255;
+      for (let y = 0; y < 7; y++) {
+        this.gridCelFog[x][y] = Math.min(mx, this.gridCelFog[x][y] + speed * dt);
       }
     }
-    return x > 340 ? 1 : 0;
+    // 路灯花/火炬树清除 (原版 ClearFogAroundPlant: 6/tick = 600/s)
+    for (const p of this.plants) {
+      if (p.dead || p.notOnGround) continue;
+      if (p.type === 'PLANTERN') this.clearFogAround(p.col, p.row, 4, dt);
+      else if (p.type === 'TORCHWOOD') this.clearFogAround(p.col, p.row, 1, dt);
+    }
   }
+  clearFogAround(col, row, size, dt) {
+    const fadeOut = 600 * dt;   // 原版 6/tick@100Hz
+    const offX = Math.round((this.fogOffset + 50) / 100);
+    for (let x = Math.max(0, col - size - offX); x <= Math.min(8, col + size - offX); x++) {
+      for (let y = Math.max(0, row - size); y <= Math.min(6, row + size); y++) {
+        const dx = Math.abs(x + offX - col), dy = Math.abs(y - row);
+        if (size === 4) {
+          if (dx > 3 || dy > 2) continue;
+          if (dx + dy === 5) continue;
+        } else if (dx + dy > size) continue;
+        this.gridCelFog[x][y] = Math.max(0, this.gridCelFog[x][y] - fadeOut);
+      }
+    }
+  }
+  // ============================================================
+  // 特殊模式系统 (传送带 / 坚果保龄球 / 打僵尸 / 罐子解谜 / 我不是僵尸 / 雨天种子 / 无尽生存)
+  // ============================================================
+  initMode() {
+    const f = this.level.fixed;
+    this.mode = null;
+    this.modeData = {};
+    if (f === 'bowling' || f === 'conveyor' || f === 'boss') {
+      // 传送带种子银行 (原版 HasConveyorBeltSeedBank: 无阳光经济, 卡从右侧滚动而来)
+      this.mode = 'conveyor';
+      const world = Math.ceil((this.level.id || 1) / 10) || 1;
+      // 原版特殊关固定卡池 (Challenge.cpp ChooseSeedsForConveyorBelt 权重表)
+      //   1-5 保龄球: WALLNUT85/EXPLODEONUT15; 3-5 小僵尸; 4-10 暴风雨; 5-5 蹦极
+      const FIXED_POOLS = {
+        5:  [['WALLNUT', 85], ['EXPLODEONUT', 15]],
+        25: [['LILYPAD', 25], ['WALLNUT', 15], ['PEASHOOTER', 25], ['CHERRYBOMB', 35]],
+        40: [['LILYPAD', 30], ['CACTUS', 10], ['PEASHOOTER', 20], ['PUFFSHROOM', 15], ['CHERRYBOMB', 25]],
+        45: [['FLOWERPOT', 50], ['CHOMPER', 25], ['PUMPKIN', 15], ['CHERRYBOMB', 10]],
+      };
+      const fixed = FIXED_POOLS[this.level.id];
+      const avail = this.level.id <= 50 ? availablePlants(this.level.id, game && game.purchasedSet) : availablePlants(50, game && game.purchasedSet);
+      this.beltPool = fixed || avail;
+      this.beltWeights = fixed || null;
+      this.belt = { items: [], speed: f === 'bowling' ? 33 : 13 + Math.min(world, 5) * 2, spawnT: 0.8 };
+      this.sun = 0;
+      this.seedCards = [];
+    } else if (f === 'whack') {
+      // 打僵尸: 无种子无阳光, 僵尸从地里冒头, 点击捶击 (原版 2-5)
+      this.mode = 'whack';
+      this.whackScore = 0;
+      this.sun = 0;
+      this.seedCards = [];
+    } else if (f === 'vasebreaker') {
+      // 罐子解谜: 右侧棋盘摆罐子, 点击打碎 → 植物或僵尸 (原版 4-5)
+      this.mode = 'vasebreaker';
+      this.sun = 0;
+      this.seedCards = [];
+      this.vases = [];
+      const plantPool = ['PEASHOOTER', 'SUNFLOWER', 'WALLNUT', 'SNOWPEA', 'CHOMPER', 'REPEATER', 'POTATOMINE', 'SQUASH', 'THREEPEATER', 'JALAPENO', 'MELONPULT'];
+      const zombiePool = ['NORMAL', 'NORMAL', 'CONE', 'BUCKET'];
+      for (let r = 0; r < this.rows; r++) {
+        for (let c = 3; c < 9; c++) {
+          if (Math.random() < 0.78) {
+            const isPlant = Math.random() < 0.55;
+            this.vases.push({
+              row: r, col: c, broken: false, rising: 0,
+              content: isPlant ? plantPool[Math.floor(Math.random() * plantPool.length)]
+                : zombiePool[Math.floor(Math.random() * zombiePool.length)],
+              isPlant,
+              type: Math.floor(Math.random() * 3),
+            });
+          }
+        }
+      }
+    } else if (f === 'izombie') {
+      // 我不是僵尸: 指挥僵尸吃掉脑子 (原版解谜)
+      this.mode = 'izombie';
+      this.sun = this.level.startSun || 150;
+      this.zombieCards = [
+        { type: 'NORMAL', cost: 50 }, { type: 'CONE', cost: 125 },
+        { type: 'POLEVAULTER', cost: 175 }, { type: 'BUCKET', cost: 200 },
+      ];
+      // 原版红线: 植物区右边界列 (I_ZOMBIE_1..5 = 4列; 通用 = 5列)
+      this.izLineCol = 4;
+      // 预置植物防线
+      this.izSetup();
+    } else if (this.level.rainingSeeds) {
+      // 雨天种子: 种子包从天而降 (原版 It's Raining Seeds)
+      this.mode = 'raining';
+      this.rainCards = [];
+      this.rainT = 2;
+      this.heldCards = [];
+    }
+    if (this.level.endless) this.mode = this.mode || 'endless';
+  }
+
+  izSetup() {
+    // 我不是僵尸: 经典植物防线 (原版: 纸板植物 — 不会射击/产出, 只会被啃)
+    const layouts = [
+      ['SUNFLOWER', 'PEASHOOTER', 'PEASHOOTER', 'WALLNUT'],
+      ['SUNFLOWER', 'SNOWPEA', 'PEASHOOTER', 'WALLNUT'],
+      ['SUNFLOWER', 'PEASHOOTER', 'REPEATER', 'WALLNUT'],
+      ['SUNFLOWER', 'PEASHOOTER', 'PEASHOOTER', 'WALLNUT'],
+      ['SUNFLOWER', 'SNOWPEA', 'REPEATER', 'WALLNUT'],
+    ];
+    for (let r = 0; r < this.rows; r++) {
+      const lay = layouts[r % layouts.length];
+      lay.forEach((ty, i) => {
+        const col = 1 + i;
+        const p = new (this._plantClass())(ty, r, col, this);
+        this.plants.push(p);
+        this.grid[r][col] = p;
+      });
+    }
+  }
+  _plantClass() {
+    const m = (window.__mods && window.__mods['plants']) || require('./plants');
+    return m.Plant;
+  }
+
+  updateMode(dt) {
+    if (this.state !== 'playing') return;
+    switch (this.mode) {
+      case 'conveyor': {
+        const b = this.belt;
+        // 卡片右→左滚动
+        for (const it of b.items) it.x -= b.speed * dt;
+        b.items = b.items.filter(it => it.x > -60);
+        // 生成新卡 (带空时更快; 原版固定池按权重抽取)
+        b.spawnT -= dt;
+        const empty = b.items.length === 0;
+        if (b.spawnT <= 0 && b.items.length < 9) {
+          const pool = this.beltPool;
+          if (pool.length) {
+            let type;
+            if (this.beltWeights) {
+              const total = this.beltWeights.reduce((s, [, w]) => s + w, 0);
+              let r = Math.random() * total;
+              type = pool[0][0];
+              for (const [t, w] of this.beltWeights) { r -= w; if (r <= 0) { type = t; break; } }
+            } else {
+              type = pool[Math.floor(Math.random() * pool.length)];
+            }
+            b.items.push({ type, x: 830 });
+          }
+          b.spawnT = empty ? 1.5 : 3.2 + Math.random() * 3.5;
+        }
+        break;
+      }
+      case 'whack': {
+        // 僵尸冒头波次 (借用波次系统; 僵尸从地里钻出)
+        if (this.zombies.length < 3 + Math.floor(this.wave / 2) && this.time > 2) {
+          if (!this._whackT) this._whackT = 0;
+          this._whackT -= dt;
+          if (this._whackT <= 0) {
+            this._whackT = 1.6 - Math.min(1.1, this.wave * 0.06);
+            const rows = this.grassRows;
+            const r = rows[Math.floor(Math.random() * rows.length)];
+            const z = this.spawnZombieForWave(Math.random() < 0.3 ? 'CONE' : 'NORMAL', r, this.wave);
+            if (z) { z.posX = 140 + Math.random() * 500; z.x = Math.floor(z.posX); }
+            this.whackSpawned = (this.whackSpawned || 0) + 1;
+          }
+        }
+        // 胜利: 打满 30 只且场上无僵尸
+        if (this.whackScore >= 30 && this.zombies.filter(z => !z.dead).length === 0) this.triggerWin();
+        break;
+      }
+      case 'vasebreaker': {
+        // 打碎后植物落地 → 由 main/gameClick 处理; 此处检查胜利
+        if (this.vases.every(v => v.broken) && this.zombies.filter(z => !z.dead && z.fromWave !== -2).length === 0) {
+          this.triggerWin();
+        }
+        break;
+      }
+      case 'izombie': {
+        // 胜利: 任意僵尸抵达左侧 (吃到脑子)
+        for (const z of this.zombies) {
+          if (!z.dead && z.x < 30) { this.triggerWin(); return; }
+        }
+        // 失败: 没僵尸且阳光不够最便宜卡
+        if (this.zombies.filter(z => !z.dead).length === 0 && this.sun < 50) {
+          this.triggerLose(0);
+        }
+        break;
+      }
+      case 'raining': {
+        // 种子包掉落
+        this.rainT -= dt;
+        if (this.rainT <= 0 && this.heldCards.length < 4) {
+          this.rainT = 5 + Math.random() * 4;
+          const pool = availablePlants(Math.min(this.level.id || 40, 50)).filter(t => PLANTS[t].cost <= 300);
+          const type = pool[Math.floor(Math.random() * pool.length)];
+          this.rainCards.push({ type, x: 120 + Math.random() * 600, y: -40, vy: 55, land: 90 + Math.random() * 60, taken: false, life: 11 });
+        }
+        for (const c of this.rainCards) {
+          if (c.taken) continue;
+          if (c.y < c.land) c.y += c.vy * dt;
+          else { c.life -= dt; if (c.life <= 0) c.taken = true; }
+        }
+        this.rainCards = this.rainCards.filter(c => !c.taken);
+        break;
+      }
+    }
+  }
+
+  // 模式点击处理 (返回 true 表示已消费)
+  modeClick(game, p) {
+    if (this.state !== 'playing') return false;
+    switch (this.mode) {
+      case 'whack': {
+        // 锤击僵尸 (大命中区)
+        for (const z of this.zombies) {
+          if (z.dead || z.isDeadOrDying) continue;
+          if (p.x > z.x && p.x < z.x + 100 && p.y > z.y - 20 && p.y < z.y + 120) {
+            z.takeDamage(9999, this, { mowed: true });
+            this.whackScore += 1;
+            this.addEffect('squish', z.x + 40, z.y + 40);
+            game.audio.play('squash_hmm');
+            return true;
+          }
+        }
+        return true;   // 模式下吞掉点击
+      }
+      case 'vasebreaker': {
+        for (const v of this.vases) {
+          if (v.broken) continue;
+          const vx = this.gridX(v.col), vy = this.cellY(v.row, v.col);
+          if (p.x > vx && p.x < vx + 80 && p.y > vy && p.y < vy + 90) {
+            this.breakVase(v, game);
+            return true;
+          }
+        }
+        return true;
+      }
+      case 'izombie': {
+        // 卡片点击 → 选中僵尸种类 (main.js 用 game.selectedZombieCard)
+        for (let i = 0; i < this.zombieCards.length; i++) {
+          const x = 20 + i * 100;
+          if (p.x > x && p.x < x + 90 && p.y > 0 && p.y < 78) {
+            game.selectedZombieCard = game.selectedZombieCard === i ? -1 : i;
+            game.audio.play('seedlift');
+            return true;
+          }
+        }
+        // 场地点击 → 红线右侧放置选中僵尸 (原版: 左于红线 = NOT_PASSED_LINE)
+        if (game.selectedZombieCard >= 0) {
+          const card = this.zombieCards[game.selectedZombieCard];
+          if (this.sun >= card.cost) {
+            const cell = game.pixelToCell(p.x, p.y);
+            if (cell) {
+              const [col, row] = cell;
+              if (col <= this.izLineCol) {
+                game.audio.play('buzzer');
+                game.selectedZombieCard = -1;
+                return true;
+              }
+              const z = this.spawnZombieForWave(card.type, row, this.wave);
+              if (z) { z.posX = 820; z.x = 820; this.sun -= card.cost; game.audio.play('gravebuttonchime'); }
+            }
+          } else game.audio.play('buzzer');
+          game.selectedZombieCard = -1;
+          return true;
+        }
+        return true;
+      }
+      case 'raining': {
+        // 点击掉落的种子包 → 拾取
+        for (const c of this.rainCards) {
+          if (c.taken) continue;
+          if (Math.abs(p.x - c.x) < 32 && Math.abs(p.y - c.y) < 34) {
+            c.taken = true;
+            this.heldCards.push({ type: c.type, life: 14 });
+            game.audio.play('seedlift');
+            return true;
+          }
+        }
+        // 点击持有卡 → 选择
+        for (let i = 0; i < this.heldCards.length; i++) {
+          const x = 130 + i * 60;
+          if (p.x > x && p.x < x + 50 && p.y > 6 && p.y < 76) {
+            game.selectedCard = game.selectedCard === i ? -1 : i;
+            game.audio.play('seedlift');
+            return true;
+          }
+        }
+        return false;
+      }
+    }
+    return false;
+  }
+
+  breakVase(v, game) {
+    v.broken = true;
+    this.addEffect('dust', this.gridX(v.col) + 40, this.cellY(v.row, v.col) + 40);
+    game.audio.play('gravedigger');
+    if (v.isPlant) {
+      const PlantC = this._plantClass();
+      const p = new PlantC(v.content, v.row, v.col, this);
+      this.plants.push(p);
+      this.grid[v.row][v.col] = p;
+    } else {
+      const z = this.spawnZombieForWave(v.content, v.row, this.wave);
+      if (z) { z.posX = this.gridX(v.col) + 30; z.x = Math.floor(z.posX); }
+    }
+  }
+
   canPlantOn(row, col) {
     if (this.isWater(row, col)) return this.gridLily[row][col] && !this.grid[row][col];
     if (this.isRoof) return (this.gridPot[row][col] || this.gridLily[row][col]) && !this.grid[row][col];
@@ -649,6 +1110,8 @@ class Effect {
       case 'chomper_bite': if (this.t > 0.3) this.dead = true; break;
       case 'zag': if (this.t > 0.4) this.dead = true; break;
       case 'text': if (this.t > (this.opts.hold || 2)) this.dead = true; break;
+      case 'rain': if (this.y > 640) this.dead = true; break;
+      case 'lightning': if (this.t > (this.opts.hold || 0.35)) this.dead = true; break;
       default: if (this.t > 1) this.dead = true;
     }
     if (this.reanim) this.reanim.update(dt);
@@ -675,4 +1138,6 @@ class LimbParticle {
   }
 }
 
-if (typeof module !== 'undefined') module.exports = { Board, Sun, Coin, Effect, LimbParticle, SCENE_BG, RENDER_LAYER };
+if (typeof module !== 'undefined') module.exports = { Board, Sun, Coin, Effect, LimbParticle, SCENE_BG, sceneBgName, RENDER_LAYER };
+
+function easeOut01(p) { return 1 - (1 - p) * (1 - p); }

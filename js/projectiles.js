@@ -39,7 +39,8 @@ class Projectile {
     this.img = this.def.img ? Assets.image(this.def.img) : null;
     this.reanim = this.def.reanim && RE.hasDef(this.def.reanim) ? Assets.reanim(this.def.reanim) : null;
     if (this.reanim) {
-      const a = this.def.reanim === 'FirePea' ? 'anim_idle' : 'anim_idle';
+      // Puff 只有 anim_puff 区间; FirePea 用 anim_idle (兜底)
+      const a = this.reanim.animExists('anim_puff') ? 'anim_puff' : 'anim_idle';
       this.reanim.play(a, RE.LOOP, 24);
     }
     this.trail = [];
@@ -79,12 +80,17 @@ class Projectile {
       return;
     }
 
-    // ---- 抛物线弹 ----
+    // ---- 抛物线弹 (#20: 原版抛物线 — 起点高→目标行地面, 顶点比例距离) ----
     if (this.def.lob) {
       const p = Math.min(1, this.t / this.dur);
+      const targetY = board.gridY(this.row) + 30;
       this.x = this.sx + (this.tx - this.sx) * p;
-      this.y = this.sy - Math.sin(p * Math.PI) * this.arcH + (board.gridY(this.row) + 30 - this.sy) * p * 0.6;
+      // 弧顶随距离缩放 (近距低弧/远距高弧), 落点精确到目标行地面
+      const arc = this.arcH * Math.min(1, Math.abs(this.tx - this.sx) / 320);
+      this.y = this.sy + (targetY - this.sy) * p - Math.sin(p * Math.PI) * arc;
+      this.spin = (this.spin || 0) + dt * 360 * (this.backward ? -1 : 1);
       if (p >= 1) {
+        this.y = targetY;
         this.land(board);
         return;
       }
@@ -244,10 +250,13 @@ class Projectile {
       if (this.x < -60) this.dead = true;
       return;
     }
-    // 篮球(抛物线)
+    // 篮球(抛物线, #20 同步修复落点)
     const p = Math.min(1, this.t / this.dur);
+    const targetY = board.gridY(this.row) + 30;
     this.x = this.sx + (this.tx - this.sx) * p;
-    this.y = this.sy - Math.sin(p * Math.PI) * this.arcH + (board.gridY(this.row) + 30 - this.sy) * p * 0.6;
+    const arc2 = this.arcH * Math.min(1, Math.abs(this.tx - this.sx) / 320);
+    this.y = this.sy + (targetY - this.sy) * p - Math.sin(p * Math.PI) * arc2;
+    this.spin = (this.spin || 0) - dt * 300;
     if (p >= 1) {
       // 砸植物
       const col = Math.floor((this.tx - CONST.LAWN_XMIN) / 80);
@@ -275,7 +284,16 @@ class Projectile {
       let frame = 0;
       if (cel > 1) frame = Math.min(cel - 1, Math.floor(this.t * 12));
       const w = this.img.width / cel;
-      ctx.drawImage(this.img, frame * w, 0, w, this.img.height, this.x - w / 2, this.y - this.img.height / 2, w, this.img.height);
+      if (this.def.lob && this.spin !== undefined) {
+        // #20: 抛物线弹飞行中旋转 (原版卷心菜/玉米/西瓜旋转)
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.spin * Math.PI / 180);
+        ctx.drawImage(this.img, frame * w, 0, w, this.img.height, -w / 2, -this.img.height / 2, w, this.img.height);
+        ctx.restore();
+      } else {
+        ctx.drawImage(this.img, frame * w, 0, w, this.img.height, this.x - w / 2, this.y - this.img.height / 2, w, this.img.height);
+      }
       return;
     }
     // 兜底: 圆点

@@ -9,7 +9,8 @@
 'use strict';
 
 const { CONST } = require('./data');
-const { SCENE_BG, RENDER_LAYER } = require('./board');
+const { SCENE_BG, sceneBgName, RENDER_LAYER } = require('./board');
+const RE = require('./reanim');
 
 const BG_OFFSET_X = -220; // 原版 BOARD_OFFSET=220
 
@@ -46,8 +47,13 @@ const Renderer = {
         }
       }
     } else {
-      const bg = Assets.image(SCENE_BG[board.scene]);
+      const bg = Assets.image(sceneBgName(board));
       if (bg) ctx.drawImage(bg, BG_OFFSET_X, 0);
+      // 4-10 暴风雨夜: 夜色压暗
+      if (board.level.stormy) {
+        ctx.fillStyle = 'rgba(10,14,30,0.42)';
+        ctx.fillRect(BG_OFFSET_X, 0, 1300, 600);
+      }
     }
     this.drawScene(ctx, board);
     ctx.restore();
@@ -67,17 +73,8 @@ const Renderer = {
   },
 
   drawScene(ctx, board) {
-    // ---- 泳池水面波光 ----
-    if (board.waterRows.length) {
-      for (const r of board.waterRows) {
-        const y = board.gridY(r);
-        ctx.save();
-        ctx.globalAlpha = 0.12 + Math.sin(board.time * 2 + r) * 0.04;
-        ctx.fillStyle = '#bfe8ff';
-        ctx.fillRect(250, y + 18, 730, 55);
-        ctx.restore();
-      }
-    }
+    // ---- 泳池水面 (原版 PoolEffect: 水面波动 + 波光端端) ----
+    if (board.waterRows.length) this.drawPoolWater(ctx, board);
     // ---- 冰道 (Zamboni/Bobsled) ----
     for (let r = 0; r < board.rows; r++) {
       if (board.iceTimers[r] > 0) {
@@ -95,13 +92,29 @@ const Renderer = {
       const img = Assets.image(board.isRoof ? 'crater_roof_center' : 'crater');
       if (img) ctx.drawImage(img, board.gridX(c.col) + 8, board.cellY(c.row, c.col) + 40);
     }
-    // ---- 墓碑 (RENDER_LAYER_GRAVE_STONE) ----
+    // ---- 墓碑 (原版 GridItem::DrawGraveStone: 5列×4行cel表 + 升起动画 + 土堆) ----
+    const tombImg = Assets.image('tombstones');
+    const moundImg = Assets.image('tombstone_mounds');
     for (const g of board.graves) {
-      const img = Assets.image('tombstones');
-      if (img) {
-        const cw = img.width / 4;
-        ctx.drawImage(img, g.type * cw, 0, cw, img.height,
-          board.gridX(g.col) + 10, board.cellY(g.row, g.col) + 18, cw, img.height);
+      if (!tombImg) break;
+      const celW = tombImg.width / 5, celH = tombImg.height / 4;
+      const look = (g.col * 7 + g.row * 13 + (g.look || 0) * 29) % 10;
+      const graveCol = look % 5;
+      const graveRow = g.row === 0 ? 1 : 2 + look % 2;
+      // 升起动画 (原版 mGridItemCounter 0→100 → 高度 0→celH, ease-in-out)
+      const rise = g.rise === undefined ? 1 : g.rise;
+      const ease = rise < 0.5 ? 2 * rise * rise : 1 - Math.pow(-2 * rise + 2, 2) / 2;
+      const visH = Math.max(1, Math.round(celH * ease));
+      const x = board.gridX(g.col) + ((g.look || 0) % 3) * 2 - 4;
+      const y = board.cellY(g.row, g.col) + celH - 9;
+      // 墓碑 (底部锚定, 从地下升起)
+      ctx.drawImage(tombImg, graveCol * celW, graveRow * celH, celW, visH,
+        x, y - visH, celW, visH);
+      // 土堆 (原版 IMAGE_TOMBSTONE_MOUNDS)
+      if (moundImg) {
+        const moundH = Math.min(celH, Math.max(1, Math.round(celH * Math.max(0, (rise - 0.5) * 2))));
+        ctx.drawImage(moundImg, graveCol * celW, graveRow * celH, celW, Math.min(celH, moundH + 14),
+          x, y - Math.min(celH, moundH + 14), celW, Math.min(celH, moundH + 14));
       }
     }
     // ---- 花盆/睡莲 (底层) ----
@@ -153,8 +166,9 @@ const Renderer = {
       if (m.state === 'gone' || m.hidden) continue;
       list.push({ o: m.row * 10000 + RENDER_LAYER.MOWER, d: () => this.drawMower(ctx, m, board) });
     }
-    // reanim特效池 (水花/尘土/掉落dirt — 粒子层)
+    // reanim特效池 (原版 Board.cpp: 只绘制 !mIsAttachment 的 reanim; 僵尸/植物 bodyReanim 由其宿主绘制)
     for (const r of board.reanims) {
+      if (r.isAttachment || r.dead) continue;
       list.push({ o: r.renderOrder || RENDER_LAYER.PARTICLE, d: () => r.draw(ctx) });
     }
     list.sort((a, b) => a.o - b.o);
@@ -170,15 +184,97 @@ const Renderer = {
     // ---- 阳光/金币 ----
     for (const s of board.suns) s.draw ? s.draw(ctx, board) : this.drawSun(ctx, s, board);
     for (const c of board.coins) this.drawCoin(ctx, c);
-    // ---- 浓雾 ----
-    if (board.scene === 'fog') {
-      const fog = Assets.image('fog');
-      if (fog && board.fogLevel(500) > 0) {
+    // ---- 浓雾 (原版 Board::DrawFog: 逐格 8-cel + 呼吸波动) ----
+    if (board.scene === 'fog') this.drawFog(ctx, board);
+  },
+
+  // ---- 泳池水 (原版 PoolEffect.cpp 移植) ----
+  // 基础: pool.jpg(白天)/pool_night.jpg(夜) @ (34,278) 720x159
+  // 动画: 30列条带 sin 波动 (原版 xPhase=x*3*2π/15) + 波光纹理对角滚动叠加
+  drawPoolWater(ctx, board) {
+    const isNight = board.scene === 'fog';   // 雾场景 = 夜间泳池
+    const base = Assets.image(isNight ? 'pool_night.jpg' : 'pool.jpg');
+    if (!base) return;
+    const X = 34, Y = 278, W = 720, H = 159;
+    const t = board.time;
+    const N = 30;
+    const sw = base.width / N;
+    for (let i = 0; i < N; i++) {
+      const fx = i / N;
+      const xPhase = fx * Math.PI * 2 * 3;              // 原版 15列×3周期
+      const bob = Math.sin(xPhase + t * 0.9) * 1.6 + Math.sin(xPhase * 2 + t * 1.3) * 1.0;
+      ctx.drawImage(base, i * sw, 0, sw, base.height,
+        X + fx * W, Y + bob, W / N + 0.6, H);
+    }
+    // 水面明暗纹理 (原版 pool_shading 三角形扭曲 → 条带滚动叠加)
+    const shade = Assets.image(isNight ? 'pool_shading_night.jpg' : 'pool_shading_.jpg');
+    if (shade) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(X, Y, W, H); ctx.clip();
+      ctx.globalAlpha = isNight ? 0.28 : 0.18;
+      ctx.globalCompositeOperation = 'multiply';
+      const scroll = (t * 6) % shade.width;
+      for (let sx = -scroll; sx < W; sx += shade.width) {
+        for (let sy = 0; sy < H; sy += shade.height) {
+          ctx.drawImage(shade, sx + Math.sin(t * 0.8 + sy) * 2, sy);
+        }
+      }
+      ctx.restore();
+    }
+    // 波光 caustic (原版 UpdateWaterEffect 滚动查找 → 双层对角滚动 lighter)
+    const ca = Assets.image('pool_caustic_effect.jpg');
+    if (ca) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(X, Y, W, H); ctx.clip();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = isNight ? 0.06 : 0.12;
+      const o1x = (t * 9) % ca.width, o1y = (t * 5) % ca.height;
+      const o2x = (-t * 6) % ca.width, o2y = (t * 7) % ca.height;
+      for (let x = -ca.width; x < W + ca.width; x += ca.width) {
+        for (let y = -ca.height; y < H + ca.height; y += ca.height) {
+          ctx.drawImage(ca, X + x + o1x, Y + y + o1y);
+          ctx.drawImage(ca, X + x + o2x, Y + y + o2y);
+        }
+      }
+      ctx.restore();
+    }
+  },
+
+  // ---- 浓雾 (原版 Board::DrawFog 逐格移植) ----
+  // fog.png 1680x190 = 8 cel × 210; 每格 celLook%8 选图, 颜色随 celLook+motion 变暗
+  drawFog(ctx, board) {
+    const fog = Assets.image('fog.png');
+    if (!fog) {
+      // 兑底: 旧版矩形雾
+      const fj = Assets.image('fog');
+      if (fj && board.fogLevel(500) > 0) {
         ctx.save();
         ctx.globalAlpha = 0.95;
-        const w = 460;
-        const fx = 340 + Math.sin(board.time * 0.7) * 8;
-        ctx.drawImage(fog, 0, 0, fog.width, fog.height, fx, 70, w, 470);
+        ctx.drawImage(fj, 0, 0, fj.width, fj.height, 340, 70, 460, 470);
+        ctx.restore();
+      }
+      return;
+    }
+    const celW = fog.width / 8, celH = fog.height;
+    const PERIOD = 4500;                        // 原版 lcm(900,500) 防精度丢失
+    const time = (board.time % PERIOD) * Math.PI * 2;
+    for (let x = 0; x < 9; x++) {
+      for (let y = 0; y < 7; y++) {
+        const fade = board.gridCelFog[x][y];
+        if (fade <= 0) continue;
+        const look = board.gridCelLook[x][y % 6];
+        const celCol = look % 8;
+        const posX = x * 80 + board.fogOffset - 15;
+        const posY = y * 85 + 20;
+        const phaseX = 6 * Math.PI * x / 9;
+        const phaseY = 6 * Math.PI * y / 7;
+        const motion = 13 + 4 * Math.sin(time / 900 + phaseY) + 8 * Math.sin(time / 500 + phaseX);
+        const cVariant = 255 - look * 1.5 - motion * 1.5;
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, fade / 255);
+        ctx.filter = `brightness(${Math.max(40, cVariant / 2.55) / 100})`;
+        ctx.drawImage(fog, celCol * celW, 0, celW, celH, posX, posY, celW, celH);
+        if (x === 8) ctx.drawImage(fog, celCol * celW, 0, celW, celH, posX + 80, posY, celW, celH);
         ctx.restore();
       }
     }
@@ -202,11 +298,17 @@ const Renderer = {
   drawSun(ctx, s, board) {
     if (!s.anim) {
       s.anim = Assets.reanim('Sun');
-      s.anim.play('anim_idle', 0, 8);
+      // Sun.reanim 无 anims 区间: 全帧循环 (Sun1/2/3 轨道轮流显现 = 旋转)
+      s.anim.frameStart = 0;
+      s.anim.frameCount = s.anim.def ? s.anim.def.n : 1;
+      s.anim.animRate = 8;
+      s.anim.loopType = RE.LOOP;
     }
     s.anim.update(1 / 60);
     s.anim.setPosition(s.x + Math.sin(s.phase) * 3, s.y);
-    const sc = s.collected ? Math.max(0.3, 1 - s.flyT) : (s.life < 2 ? 0.7 + Math.sin(board.time * 8) * 0.15 : 1);
+    // 原版 Coin::GetSunScale: 小阳光15→0.5 / 大阳光50→2.0 / 普通→1.0
+    const sunScale = s.value <= 15 ? 0.55 : (s.value >= 50 ? 1.0 : 1.0);
+    const sc = sunScale * (s.collected ? Math.max(0.3, 1 - s.flyT) : (s.life < 2 ? 0.7 + Math.sin(board.time * 8) * 0.15 : 1));
     s.anim.overrideScale(sc, sc);
     s.anim.draw(ctx);
   },
@@ -287,7 +389,7 @@ const Renderer = {
         case 'splat': case 'snowsplat': case 'firesplat': case 'melonsplat': case 'basketballsplat': {
           if (!e.anim) {
             e.anim = Assets.reanim('Puff');
-            e.anim.play('anim_idle', 1, 20);
+            e.anim.play('anim_puff', 1, 20);
           }
           e.anim.update(1 / 60);
           e.anim.setPosition(e.x, e.y);
@@ -296,6 +398,64 @@ const Renderer = {
           if (e.name === 'snowsplat') e.anim.colorOverride = [153, 217, 255, 255];
           if (e.name === 'firesplat') e.anim.colorOverride = [255, 190, 128, 255];
           e.anim.draw(ctx);
+          break;
+        }
+        case 'fumecloud': {
+          // 原版 PARTICLE_FUMECLOUD/GLOOMCLOUD: Puff reanim 放大 + 向前漂移 (1s 生命周期)
+          if (!e.anim) {
+            e.anim = Assets.reanim('Puff');
+            e.anim.play('anim_puff', RE.PLAY_ONCE_HOLD, 26);
+          }
+          e.anim.update(1 / 60);
+          const p = Math.min(1, e.t);
+          const drift = (e.opts.dir || 0) * 150 * p;
+          e.anim.setPosition(e.x + drift, e.y - p * 10);
+          const sc = (e.opts.scale || 2.4) * (0.6 + 0.45 * p);
+          e.anim.overrideScale(sc, sc);
+          ctx.save();
+          ctx.globalAlpha = 0.95 - p * 0.95;
+          e.anim.draw(ctx);
+          ctx.restore();
+          break;
+        }
+        case 'text': {
+          // 浮动文字 (耙子/提示)
+          const hold = e.opts.hold || 2;
+          const p2 = e.t / hold;
+          ctx.save();
+          ctx.globalAlpha = p2 < 0.8 ? 1 : (1 - p2) / 0.2;
+          ctx.font = `bold ${e.opts.size || 18}px "Noto Sans SC", sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = 'rgba(20,12,0,0.8)';
+          ctx.strokeText(e.opts.txt || '', e.x, e.y - p2 * 26);
+          ctx.fillStyle = e.opts.c || '#ffe9a8';
+          ctx.fillText(e.opts.txt || '', e.x, e.y - p2 * 26);
+          ctx.restore();
+          break;
+        }
+        case 'rain': {
+          // 雨滴 (斜线, 原版 StormyNight)
+          ctx.save();
+          ctx.globalAlpha = 0.4;
+          ctx.strokeStyle = '#aac8e8';
+          ctx.lineWidth = 1.6;
+          const x = e.x + e.opts.vx * e.t, y = e.y + e.opts.vy * e.t;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - 5, y - 16);
+          ctx.stroke();
+          ctx.restore();
+          break;
+        }
+        case 'lightning': {
+          // 闪电白闪 (全屏, 原版 DrawStormFlash)
+          ctx.save();
+          const p = e.t / (e.opts.hold || 0.35);
+          ctx.globalAlpha = 0.75 * (1 - p) * (Math.random() > 0.3 ? 1 : 0.4);
+          ctx.fillStyle = '#e8f0ff';
+          ctx.fillRect(0, 0, 800, 600);
+          ctx.restore();
           break;
         }
         case 'screen_flash': {

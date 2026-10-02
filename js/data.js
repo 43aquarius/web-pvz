@@ -4,6 +4,8 @@
 // ============================================================
 'use strict';
 
+// 官方中文文案 (图鉴/对话, 由 screens.js/ui.js/cutscene.js 使用)
+const { STR } = require('./strings');
 // 常量
 const CONST = {
   BOARD_W: 800, BOARD_H: 600,
@@ -31,12 +33,14 @@ const PLANTS = {
   SUNFLOWER:       { cn: '向日葵',     cost: 50,  cd: 7500,  hp: 300,  reanim: 'SunFlower', anim: 'anim_idle', sunRate: 24, sunVal: 25, firstSun: [3, 12], cls: 'producer', desc: '每隔24秒生产25阳光' },
   CHERRYBOMB:      { cn: '樱桃炸弹',   cost: 150, cd: 50000, hp: 300,  reanim: 'CherryBomb', anim: 'anim_idle', cls: 'instant', fuse: 1.0, dmg: 1800, radius: 115, desc: '炸毁3x3范围僵尸' },
   WALLNUT:         { cn: '坚果墙',     cost: 50,  cd: 30000, hp: 4000, reanim: 'Wallnut', anim: 'anim_idle', cls: 'defense', desc: '抵挡僵尸的高血量壁垒' },
+  EXPLODEONUT:     { cn: '爆炸坚果',   cost: 0,   cd: 30000, hp: 4000, reanim: 'Wallnut', anim: 'anim_idle', cls: 'defense', bowling: 'explode', desc: '保龄球中会爆炸' },
+  GIANTWALLNUT:    { cn: '巨型坚果',   cost: 0,   cd: 30000, hp: 8000, reanim: 'Wallnut', anim: 'anim_idle', cls: 'defense', bowling: 'giant', scale: 1.6, desc: '巨无霸保龄球' },
   POTATOMINE:      { cn: '土豆雷',     cost: 25,  cd: 30000, hp: 300,  reanim: 'PotatoMine', anim: 'anim_armed', cls: 'instant', arm: 15, dmg: 1800, radius: 55, desc: '需要时间破土, 触发即爆' },
   SNOWPEA:         { cn: '寒冰射手',   cost: 175, cd: 7500,  hp: 300,  reanim: 'SnowPea', anim: 'anim_idle', layers: [['anim_idle'],['anim_head_idle']], shootRate: 1.5, dmg: 20, range: 9, cls: 'shooter', proj: 'snowpea', desc: '冰豌豆减速僵尸' },
   CHOMPER:         { cn: '大嘴花',     cost: 150, cd: 7500,  hp: 300,  reanim: 'Chomper', anim: 'anim_idle', cls: 'shooter', chew: 42, biteDmg: 1800, desc: '吞噬僵尸后需42秒咀嚼' },
   REPEATER:        { cn: '双发射手',   cost: 200, cd: 7500,  hp: 300,  reanim: 'PeaShooter', anim: 'anim_idle', layers: [['anim_idle'],['anim_head_idle']], shootRate: 1.5, dmg: 20, range: 9, cls: 'shooter', proj: 'pea', shots: 2, desc: '一次发射两颗豌豆' },
   PUFFSHROOM:      { cn: '小喷菇',     cost: 0,   cd: 7500,  hp: 300,  reanim: 'PuffShroom', anim: 'anim_idle', shootRate: 1.5, dmg: 20, range: 3, cls: 'shooter', proj: 'puff', desc: '免费短程蘑菇, 白天睡觉' },
-  SUNSHROOM:       { cn: '阳光菇',     cost: 25,  cd: 7500,  hp: 300,  reanim: 'SunShroom', anim: 'anim_idle', sunRate: 24, sunVal: 15, growTime: 30, firstSun: [3, 10], cls: 'producer', desc: '产出阳光, 长大后产量翻倍' },
+  SUNSHROOM:       { cn: '阳光菇',     cost: 25,  cd: 7500,  hp: 300,  reanim: 'SunShroom', anim: 'anim_idle', sunRate: 24, sunVal: 15, growTime: 120, firstSun: [3, 10], cls: 'producer', desc: '产出阳光, 长大后产量翻倍' },
   FUMESHROOM:      { cn: '大喷菇',     cost: 75,  cd: 7500,  hp: 300,  reanim: 'FumeShroom', anim: 'anim_idle', shootRate: 1.5, dmg: 20, range: 4, cls: 'shooter', proj: 'fume', desc: '穿透雾气攻击4格内僵尸' },
   GRAVEBUSTER:     { cn: '墓碑吞噬者', cost: 75,  cd: 7500,  hp: 300,  reanim: 'Gravebuster', anim: 'anim_idle', cls: 'instant', graveEat: 4, desc: '种植在墓碑上将其清除' },
   HYPNOSHROOM:     { cn: '魅惑菇',     cost: 75,  cd: 30000, hp: 300,  reanim: 'HypnoShroom', anim: 'anim_idle', cls: 'defense', hypno: true, desc: '被吃的僵尸会倒戈' },
@@ -59,7 +63,7 @@ const PLANTS = {
   STARFRUIT:       { cn: '杨桃',       cost: 125, cd: 7500,  hp: 300,  reanim: 'Starfruit', anim: 'anim_idle', shootRate: 1.5, dmg: 20, range: 9, cls: 'shooter', proj: 'star', dirs: 5, desc: '向五个方向发射星星' },
   PUMPKIN:         { cn: '南瓜头',     cost: 125, cd: 30000, hp: 4000, reanim: 'Pumpkin', anim: 'anim_idle', cls: 'shell', desc: '套在植物外层的护甲' },
   MAGNETSHROOM:    { cn: '磁力菇',     cost: 100, cd: 7500,  hp: 300,  reanim: 'Magnetshroom', anim: 'anim_idle', cls: 'support', magnet: 24, magnetRange: 5, desc: '吸走僵尸的铁器' },
-  CABBAGEPULT:     { cn: '卷心菜投手', cost: 100, cd: 7500,  hp: 300,  reanim: 'Cabbagepult', anim: 'anim_full_idle', shootRate: 3, dmg: 40, range: 9, cls: 'shooter', proj: 'cabbage', lob: true, desc: '抛物线投掷卷心菜' },
+  CABBAGEPULT:     { cn: '卷心菜投手', cost: 100, cd: 7500,  hp: 300,  reanim: 'Cabbagepult', anim: 'anim_idle', shootRate: 3, dmg: 40, range: 9, cls: 'shooter', proj: 'cabbage', lob: true, desc: '抛物线投掷卷心菜' },
   FLOWERPOT:       { cn: '花盆',       cost: 25,  cd: 7500,  hp: 300,  reanim: 'Pot', anim: 'anim_idle', cls: 'support', pot: true, desc: '屋顶种植的基座' },
   KERNELPULT:      { cn: '玉米投手',   cost: 100, cd: 7500,  hp: 300,  reanim: 'Cornpult', anim: 'anim_full_idle', shootRate: 3, dmg: 20, range: 9, cls: 'shooter', proj: 'corn', lob: true, butterChance: 0.25, desc: '投掷玉米粒, 偶尔投黄油定身' },
   COFFEEBEAN:      { cn: '咖啡豆',     cost: 75,  cd: 7500,  hp: 300,  reanim: 'Coffeebean', anim: 'anim_idle', cls: 'instant', wake: true, desc: '唤醒睡觉的蘑菇' },
@@ -86,6 +90,28 @@ const AQUATIC = new Set(['LILYPAD', 'TANGLEKELP', 'SEASHROOM', 'CATTAIL']);
 const GROUNDCOVER = new Set(['SPIKEWEED', 'SPIKEROCK']);
 // 升级植物(原版商店购买) — 5-x后期关卡解锁
 const UPGRADES = new Set(['GATLINGPEA', 'TWINSUNFLOWER', 'GLOOMSHROOM', 'CATTAIL', 'WINTERMELON', 'GOLDMAGNET', 'SPIKEROCK', 'COBCANNON', 'IMITATER']);
+
+// ---------- 戴夫商店 (原版 StoreScreen: 通关 3-4 后解锁, 僵尸掉金币购买) ----------
+// minLevel: 出现在货架上的最早进度; slot 依次购买
+const SHOP_ITEMS = [
+  { key: 'rake',        label: '戴夫的耙子',   cost: 200,   minLevel: 2,  desc: '自动消灭本关第一只僵尸', icon: 'rake' },
+  { key: 'slot8',       label: '种子槽 ×8',    cost: 750,   minLevel: 13, desc: '卡槽扩充到 8 格', icon: 'slot' },
+  { key: 'slot9',       label: '种子槽 ×9',    cost: 5000,  minLevel: 13, desc: '卡槽扩充到 9 格', icon: 'slot' },
+  { key: 'slot10',      label: '种子槽 ×10',   cost: 20000, minLevel: 13, desc: '卡槽扩充到 10 格', icon: 'slot' },
+  { key: 'poolcleaner', label: '泳池清洁车',   cost: 1000,  minLevel: 21, desc: '泳池关卡配备清洁车', icon: 'poolcleaner' },
+  { key: 'roofcleaner', label: '屋顶清洁车',   cost: 2000,  minLevel: 41, desc: '屋顶关卡配备清洁车', icon: 'roofcleaner' },
+  { key: 'GATLINGPEA',  label: '机枪射手',     cost: 5000,  minLevel: 11, desc: '一次发射四颗豌豆', icon: 'plant' },
+  { key: 'TWINSUNFLOWER', label: '双子向日葵', cost: 5000,  minLevel: 11, desc: '一次产出两颗阳光', icon: 'plant' },
+  { key: 'IMITATER',    label: '模仿者',       cost: 2500,  minLevel: 11, desc: '复制任意一张卡', icon: 'plant' },
+  { key: 'GLOOMSHROOM', label: '忧郁蘑菇',     cost: 7500,  minLevel: 21, desc: '向四周喷射毒雾', icon: 'plant' },
+  { key: 'CATTAIL',     label: '香蒲',         cost: 7500,  minLevel: 21, desc: '追踪导弹打气球', icon: 'plant' },
+  { key: 'GOLDMAGNET',  label: '吸金磁',       cost: 3000,  minLevel: 31, desc: '自动吸取金币', icon: 'plant' },
+  { key: 'SPIKEROCK',   label: '地刺王',       cost: 7500,  minLevel: 31, desc: '扎爆轮胎更耐久', icon: 'plant' },
+  { key: 'COBCANNON',   label: '玉米加农炮',   cost: 5000,  minLevel: 41, desc: '点选目标轰爆全场', icon: 'plant' },
+  { key: 'WINTERMELON', label: '冰西瓜',       cost: 10000, minLevel: 41, desc: '群体减速的西瓜', icon: 'plant' },
+];
+// 商店升级植物顺序 (availablePlants 追加顺序)
+const UPGRADE_ORDER = ['GATLINGPEA', 'TWINSUNFLOWER', 'GLOOMSHROOM', 'CATTAIL', 'WINTERMELON', 'GOLDMAGNET', 'SPIKEROCK', 'COBCANNON', 'IMITATER'];
 
 // ---------- 僵尸定义 ----------
 // vel: px/s (原版 mVelX×47, 实际地面行走速度; 原版逻辑 100Hz)
@@ -122,6 +148,9 @@ const ZOMBIES = {
 
 // 原版 gZombieAllowedLevels: 特殊僵尸仅在指定关卡出现 (PvZ-Portable 反编译数据)
 const ZOMBIE_ALLOWED = {
+  // 原版 gZombieAllowedLevels 精确表 (PvZ-Portable Challenge.h)
+  CONE: [3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50],  // 2-1 不出 (首次夜晚仅普僵)
+  BUCKET: [8, 9, 10, 12, 15, 22, 24, 27, 29, 30, 37, 39, 40, 42, 45, 49, 50],
   POLEVAULTER: [6, 7, 9, 10, 14, 15, 24, 29, 42],
   NEWSPAPER: [11, 12, 15, 22, 24],
   DOOR: [13, 14, 17, 19, 20],
@@ -205,10 +234,14 @@ function seedsAvailableCount(level) {
   else if (sub >= 5) n -= 1;
   return Math.min(n, 40);
 }
-// 玩到第 level 关时可用植物列表
-function availablePlants(level) {
+// 玩到第 level 关时可用植物列表 (含已购买的商店升级植物)
+function availablePlants(level, purchased) {
   const n = seedsAvailableCount(level);
-  return SEED_ORDER.slice(0, n);
+  const base = SEED_ORDER.slice(0, n);
+  if (purchased && purchased.size) {
+    for (const t of UPGRADE_ORDER) if (purchased.has(t)) base.push(t);
+  }
+  return base;
 }
 // 通关第 level 关后奖励的植物 (null=纸条/无植物)
 function awardPlantForLevel(level) {
@@ -226,6 +259,29 @@ function gravesForLevel(lv) {
   if (lv >= 20) return [[3, 1], [4, 2], [5, 2], [6, 2], [7, 3], [8, 3]];
   return [];
 }
+
+// ---------- 僵尸纸条文本 (X-5 / X-10 通关后僵尸留言, 原版字迹风格) ----------
+const ZOMBIE_NOTES = {
+  5:  '我们拿到了你的墙果！哈哈！尝尝这个！——僵尸',
+  10: '我们看到了你家里那美好而丰盛的大脑！它属于我们！——僵尸',
+  15: '我们什么也没学到！僵尸不可致！我们会回来的！——僵尸',
+  20: '我们告诉你，我们组织起来就是为了你！你完蛋了！——僵尸',
+  25: '我们更强大了！我们升级了武器！有本事就来吧！——僵尸',
+  30: '奇怪……我们居然喜欢上了你的泳池派对！——僵尸',
+  35: '我们不需要阳光！我们只要大脑！——僵尸',
+  40: '暴风雨来临……我们更加饥饿了！——僵尸',
+  45: '你的花园真漂亮！我们会把它变成墓地！——僵尸',
+  50: '就这样吧。以后再也没有僵尸来麻烦你了。——僵王博士',
+};
+
+// ---------- 禅园植物商店 (原版: 通关 5-5 解锁禅园后, 商店出售盆栽) ----------
+const GARDEN_PLANTS = [
+  { key: 'g_marigold_1', plant: 'MARIGOLD', cost: 2500, label: '盆栽金盏花', pot: 0 },
+  { key: 'g_marigold_2', plant: 'MARIGOLD', cost: 2500, label: '盆栽金盏花', pot: 1 },
+  { key: 'g_marigold_3', plant: 'MARIGOLD', cost: 2500, label: '盆栽金盏花', pot: 2 },
+  { key: 'g_fertilizer', plant: null, cost: 750, label: '一袋肥料', count: 5 },
+  { key: 'g_bug_spray', plant: null, cost: 750, label: '杀虫剂', count: 5 },
+];
 
 function makeLevels() {
   const L = [];
@@ -252,19 +308,42 @@ function makeLevels() {
       bankSlots: Math.min(6 + Math.max(0, Math.floor((lv - 8) / 12)), 10), // 6槽起步, 后期最多10
       flagWaves: WAVE_COUNTS[lv - 1] >= 10 ? 10 : 0,   // <10波无旗 (1-1)
       introZombies: lv <= 20,                           // 开场镜头右侧展示僵尸
+      stormy: lv === 40,                                // 4-10 暴风雨夜 (雨+闪电+黑暗)
+      bossNight: lv === 50,                             // 5-10 僵王博士夜间屋顶 (background6boss)
     };
-    // 特殊关 (原版: 传送带/小游戏)
-    if (lv === 5)  level.fixed = 'bowling';    // 1-5 坚果保龄球 (传送带)
-    if (lv === 10 || lv === 20 || lv === 30) level.fixed = 'miniboss'; // 小Boss关 (传送带)
-    if (lv === 25) level.fixed = 'little';     // 3-5 小僵尸关 (传送带)
-    if (lv === 40) level.fixed = 'storm';      // 4-10 暴风雨夜 (传送带)
-    if (lv === 45) level.fixed = 'bungee';     // 5-5 蹦极突袭 (传送带)
-    if (lv === 50) level.fixed = 'boss';       // 5-10 僵王博士
+    // 特殊关 (原版 HasConveyorBeltSeedBank: 1-5/1-10/2-10/3-5/3-10/4-10/5-5/5-10 传送带;
+    //          2-5 打僵尸 / 4-5 罐子解谜 为无卡带特殊玩法)
+    if (lv === 5)  level.fixed = 'bowling';    // 1-5 坚果保龄球 (传送带: 仅坚果)
+    if (lv === 10 || lv === 20 || lv === 30) level.fixed = 'conveyor'; // X-10 小Boss关 (传送带)
+    if (lv === 15) level.fixed = 'whack';      // 2-5 打僵尸 (锤子小游戏)
+    if (lv === 25) level.fixed = 'conveyor';   // 3-5 小僵尸关 (传送带)
+    if (lv === 35) level.fixed = 'vasebreaker';// 4-5 罐子解谜
+    if (lv === 40) level.fixed = 'conveyor';   // 4-10 暴风雨夜 (传送带)
+    if (lv === 45) level.fixed = 'conveyor';   // 5-5 蹦极突袭 (传送带)
+    if (lv === 50) level.fixed = 'boss';       // 5-10 僵王博士 (传送带)
     L.push(level);
   }
   return L;
 }
 const LEVELS = makeLevels();
+
+// ---------- 额外模式 (玩玩小游戏 / 解谜 / 生存) ----------
+// id: 100+ 独立于冒险关卡; 通过 Game.startMode(modeId) 进入
+const MODE_LEVELS = {
+  // ---- 玩玩小游戏 ----
+  bowling:   { id: 101, label: '坚果保龄球',   mode: 'minigame', fixed: 'bowling', scene: 'day',   waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', endless: true, desc: '用传送带上的坚果滚翻僵尸' },
+  whack:     { id: 102, label: '打僵尸',       mode: 'minigame', fixed: 'whack', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '冒头的僵尸, 敲! 敲! 敲!' },
+  raining:   { id: 103, label: '雨天种子',     mode: 'minigame', fixed: 'raining', scene: 'day', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: false, bgm: 'front_day', rainingSeeds: true, desc: '天上掉下随机种子包' },
+  // ---- 解谜模式 ----
+  vasebreaker: { id: 201, label: '罐子僵尸',   mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '打碎罐子, 释放植物或僵尸' },
+  izombie:     { id: 202, label: '我不是僵尸', mode: 'puzzle', fixed: 'izombie', scene: 'day', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '指挥僵尸吃到脑子' },
+  // ---- 生存模式 (无尽) ----
+  survival_day:   { id: 301, label: '白天生存',   mode: 'survival', scene: 'day',   waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true,  chooseSeeds: true, bankSlots: 9, bgm: 'front_day', endless: true, desc: '白天草坪无尽挑战' },
+  survival_night: { id: 302, label: '黑夜生存',   mode: 'survival', scene: 'night', waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [[5, 1], [6, 1], [7, 2], [8, 3]], skySun: false, chooseSeeds: true, bankSlots: 9, bgm: 'front_night', endless: true, desc: '黑夜墓园无尽挑战' },
+  survival_pool:  { id: 303, label: '泳池生存',   mode: 'survival', scene: 'pool',  waves: 999, grassRows: [0, 1, 4, 5], rows: 6, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 9, bgm: 'pool', endless: true, desc: '泳池派对无尽挑战' },
+  survival_fog:   { id: 304, label: '浓雾生存',   mode: 'survival', scene: 'fog',   waves: 999, grassRows: [0, 1, 4, 5], rows: 6, startSun: 50, graves: [], skySun: false, chooseSeeds: true, bankSlots: 9, bgm: 'fog', endless: true, desc: '浓雾迷局无尽挑战' },
+  survival_roof:  { id: 305, label: '屋顶生存',   mode: 'survival', scene: 'roof',  waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 9, bgm: 'roof', endless: true, potColumns: 4, desc: '屋顶决战无尽挑战' },
+};
 
 // 原版波次生成常量
 const WAVE = {
@@ -277,4 +356,4 @@ const WAVE = {
   ACCEL_DELAY: 2,              // 加速后2秒刷下一波
 };
 
-if (typeof module !== 'undefined') module.exports = { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, PROJECTILES, LEVELS, WAVE_COUNTS, SEED_ORDER, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, availablePlants, seedsAvailableCount, awardPlantForLevel, gravesForLevel };
+if (typeof module !== 'undefined') module.exports = { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, PROJECTILES, LEVELS, MODE_LEVELS, WAVE_COUNTS, SEED_ORDER, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, UPGRADE_ORDER, SHOP_ITEMS, GARDEN_PLANTS, ZOMBIE_NOTES, STR, availablePlants, seedsAvailableCount, awardPlantForLevel, gravesForLevel };

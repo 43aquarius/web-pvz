@@ -1216,10 +1216,51 @@ class Zombie {
   }
 
   // ---------------- 专项更新 ----------------
+  // 原版 Zombie::RiseFromGrave — 从墓碑/水面爬出 (phaseCounter 150tick, altitude -200→0)
+  riseFromGrave(col, row, inPool = false) {
+    this.posX = this.board.gridToPixelX(col) - 25;
+    this.posY = this.getPosYBasedOnRow(row);
+    this.row = row;
+    this.x = Math.floor(this.posX);
+    this.y = Math.floor(this.posY);
+    this.renderOrder = row * 10000 + 303000;   // RENDER_LAYER_ZOMBIE (原版 MakeRenderOrder)
+    this.phase = PH.RISING_FROM_GRAVE;
+    this.phaseCounter = 150;
+    this.velX = 0;
+    this.altitude = inPool ? -150 : -200;
+    this.inPool = !!inPool;
+    if (inPool) {
+      this.phaseCounter = 50;
+      this.zombieHeight = H.NORMAL;
+      this.startWalkAnim(0);
+      try { this.reanimShowPrefix('Zombie_duckytube', RG.NORMAL); } catch (e) { }
+      this.setupWaterTrack('Zombie_whitewater');
+      this.setupWaterTrack('Zombie_whitewater2');
+      this.splash();
+    } else {
+      // 泥土粒子 + 音效 (原版 PARTICLE_DIRT_RISE / FOLEY_DIRT_RISE)
+      this.board.addEffect('dust', this.posX + 50, this.posY + 100);
+      this.board.game.audio.play('dirt_rise');
+      try { this.playZombieReanim('anim_idle', RE.LOOP, 8); } catch (e) { }
+    }
+    this.updateReanim();
+  }
+
+  splash() {
+    if (!this.board) return;
+    this.board.addReanimEffect('Splash', this.x + 23, this.y + 78, 0).overrideScale(0.8, 0.8);
+    this.board.game.audio.play('zombiesplash');
+  }
+
   updateZombieRiseFromGrave() {
-    this.altitude -= 2;
-    if (this.altitude <= 0) {
-      this.altitude = 0;
+    // 原版 UpdateZombieRiseFromGrave: phaseCounter 150→0; 后50tick 内 altitude -200→0 (线性)
+    if (this.inPool) {
+      this.altitude = lerp(-40, -150, Math.min(1, Math.max(0, this.phaseCounter / 50))) * this.scaleZombie;
+    } else {
+      this.altitude = lerp(0, -200, Math.min(1, Math.max(0, this.phaseCounter / 50)));
+    }
+    if (this.phaseCounter <= 0) {
+      this.altitude = this.isOnHighGround ? HIGH_GROUND_HEIGHT : 0;
       this.phase = PH.NORMAL;
       this.startWalkAnim(0);
     }
@@ -1730,6 +1771,13 @@ class Zombie {
 
   updateLadder() {
     if (this.mindControlled || !this.hasHead || this.isDeadOrDying) return;
+    // #21: 没梯子后只能普通行走 (原版: 放完梯变成慢速普通僵尸)
+    if (this.phase === PH.LADDER_CARRYING && !this.shieldType) {
+      this.phase = PH.NORMAL;
+      this.startWalkAnim(0);
+      this.pickRandomSpeed();
+      return;
+    }
     if (this.phase === PH.LADDER_CARRYING && this.zombieHeight === H.NORMAL) {
       if (this.findPlantTarget('ladder')) {
         this.stopEating();
@@ -2484,7 +2532,12 @@ class Zombie {
   dropLoot() {
     if (this.droppedLoot) return;
     this.droppedLoot = true;
-    // 原版: 普通掉落由掉落表决定; 调试默认不掉
+    // 原版 Zombie::Die: 掉落表 (金币/银币/钻石 概率) — 简化: 18% 金币
+    if (this.fromWave !== -2 && this.board) {
+      const roll = Math.random();
+      if (roll < 0.14) this.board.addCoin(this.posX + 30, this.posY + 30, 25);
+      else if (roll < 0.18) this.board.addCoin(this.posX + 30, this.posY + 30, 10);
+    }
   }
 
   // ---------------- 冰冻/黄油 ----------------
@@ -2547,16 +2600,41 @@ class Zombie {
 
   applyBurn() {
     if (this.isDeadOrDying) return;
-    this.phase = PH.BURNED;
-    this.phaseCounter = 220;
-    this.bodyReanim.colorOverride = [0, 0, 0, 255];
-    this.playZombieReanim('anim_chicken1', RE.LOOP, 0, 24);
+    // #8: 原版烧焦 — 换 Zombie_charred reanim (黑灰僵尸站立即崩塌成灰)
+    const charredName = this.type === 'GARGANTUAR' || this.type === 'REDEYE' ? 'Zombie_charred_gargantuar'
+      : this.type === 'CATAPULT' ? 'Zombie_charred_catapult'
+        : this.type === 'ZAMBONI' ? 'Zombie_charred_zamboni'
+          : this.type === 'DIGGER' ? 'Zombie_charred_digger'
+            : this.type === 'IMP' ? 'Zombie_charred_imp'
+              : 'Zombie_charred';
+    if (RE.hasDef(charredName)) {
+      const old = this.bodyReanim;
+      try { old && old.reanimDie(); } catch (e) { }
+      const r = this.board.addReanimEffect(charredName, 0, 0, 0);
+      this.bodyReanim = r;
+      this._charredReanim = true;
+      r.isAttachment = true;
+      r.play('anim_crumble', RE.PLAY_ONCE_HOLD, 0, 18);
+      if (!r.animExists('anim_crumble')) r.play('anim_idle', RE.PLAY_ONCE_HOLD, 0, 18);
+      this.phase = PH.BURNED;
+      this.phaseCounter = 220;
+      this.updateReanim();
+    } else {
+      this.phase = PH.BURNED;
+      this.phaseCounter = 220;
+      this.bodyReanim.colorOverride = [0, 0, 0, 255];
+      this.playZombieReanim('anim_idle', RE.LOOP, 0, 24);
+    }
+    this.velX = 0;
     this.board.game.audio.play('zombie_burnt');
   }
 
   updateBurn() {
     this.phaseCounter--;
-    if (this.phaseCounter === 0) this.dieWithLoot();
+    if (this.phaseCounter <= 0) {
+      // 崩塌成灰堆 (原版 anim_crumble 末帧 = 灰烬)
+      this.dieWithLoot();
+    }
   }
 
   // ---------------- 死亡 ----------------
@@ -2864,12 +2942,15 @@ class Zombie {
     if (!r) return;
     const dp = this.getDrawPos();
 
-    // 剪裁 (泳池/地道遮挡)
+    // 原版 GameObject::BeginDraw: g->Translate(mX, mY) — reanim overlay 为相对偏移
+    ctx.save();
+    ctx.translate(this.x, this.y);
+
+    // 剪裁 (泳池/地道遮挡, 原版相对坐标)
     let clipSave = null;
     if (dp.clipHeight > CLIP_HEIGHT_LIMIT) {
-      clipSave = { x: 0, y: 0, w: ctx.canvas.width, h: ctx.canvas.height };
+      clipSave = true;
       const drawHeight = 120 - dp.clipHeight + 71;
-      ctx.save();
       ctx.beginPath();
       ctx.rect(dp.imageOffsetX - 200, dp.imageOffsetY + dp.bodyY - 78, 520, drawHeight);
       ctx.clip();
@@ -2882,7 +2963,8 @@ class Zombie {
     let extraAdditive = [0, 0, 0, 0];
     let enableAdditive = false;
     if (this.phase === PH.BURNED) {
-      colorOverride = [0, 0, 0, fadeAlpha];
+      // 烧焦: charred reanim 自带暗色; 旧僵尸保持黑色 tint
+      colorOverride = this._charredReanim ? [255, 255, 255, fadeAlpha] : [0, 0, 0, fadeAlpha];
     } else if (this.mindControlled) {
       colorOverride = [128, 64, 192, fadeAlpha];
       extraAdditive = [128, 64, 192, fadeAlpha / 2];
@@ -2950,7 +3032,8 @@ class Zombie {
       r.drawRenderGroup(ctx, RG.OVER_SHIELD);
     }
 
-    if (clipSave) ctx.restore();
+    if (clipSave) { /* clip 在外层 restore 中一并释放 */ }
+    ctx.restore();   // BeginDraw/EndDraw
   }
 
   drawBobsledReanim(ctx, dp, before) {
@@ -2970,23 +3053,26 @@ class Zombie {
   drawBungeeReanim(ctx) {
     const r = this.bodyReanim;
     if (!r) return;
-    // 绳子
+    // 绳子 (相对坐标: ctx 已 translate(this.x, this.y))
     if (this.phase !== PH.BUNGEE_CUTSCENE) {
       ctx.save();
       ctx.strokeStyle = '#8b7355';
       ctx.lineWidth = 3;
       ctx.beginPath();
-      const ropeX = this.x + 60;
+      const ropeX = 60;
       ctx.moveTo(ropeX, -60);
-      ctx.lineTo(ropeX, this.y + 30);
+      ctx.lineTo(ropeX, 30);
       ctx.stroke();
       ctx.restore();
     }
     r.drawRenderGroup(ctx, RG.NORMAL);
-    // 抓住植物上提
+    // 抓住植物上提 (drawAt 内部自行处理绝对坐标 — 需先抵消外层平移)
     if (this.stolenPlant && !this.stolenPlant.dead) {
+      ctx.save();
+      ctx.translate(-this.x, -this.y);
       const p = this.stolenPlant;
       p.drawAt(ctx, this.x, this.y + 20 - (3000 - this.altitude) * 0.02);
+      ctx.restore();
     }
   }
 

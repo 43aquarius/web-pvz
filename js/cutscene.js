@@ -18,7 +18,7 @@
 'use strict';
 
 const RE = require('./reanim');
-const { WAVE } = require('./data');
+const { WAVE, STR } = require('./data');
 
 const img = (n) => Assets.image(n);
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -69,6 +69,7 @@ const Cutscene = {
     this.board = board;
     this.sodRolls = [];
     this.rspAnim = null;
+    this.rspDone = false;      // READY-SET-PLANT 只播一次
     this.gravesShown = false;
     board.sodRolls = [];
     const level = board.level;
@@ -77,8 +78,10 @@ const Cutscene = {
     // 时间分量 (原版: 首次冒险且关号 1/2/4 才滚草皮)
     this.sodTime = (level.sodRoll && this.firstTime) ? 2000 : 0;
     this.graveTime = (level.graves && level.graves.length) ? 1000 : 0;
-    // 戴夫过场 (原版: 1-5 保龄球关首次冒险, 对话 2400 系列 → 2406 赠送铲子)
-    this.daveMode = level.id === 5 && this.firstTime;
+    // 戴夫过场 (原版 CutScene.cpp 750-860: 按关卡触发对话; 未看过该关对话则播放)
+    this.daveFirst = !!(board.game && board.game.daveSeen && !board.game.daveSeen[level.id]);
+    this.daveDialog = this.daveDialogFor(level, this.daveFirst);
+    this.daveMode = !!this.daveDialog;
     this.davePhase = null;        // null → enter → talk → gift → leave → null
     this.daveT = 0;
     this.daveLine = 0;
@@ -228,18 +231,26 @@ const Cutscene = {
       }
     }
 
-    // ---- 墓碑浮现 (夜关, 带泥土粒子) ----
-    if (this.graveTime > 0 && !this.gravesShown && t >= T.GRAVE_START + this.sodTime) {
-      this.gravesShown = true;
-      for (const g of board.graves) {
-        board.addEffect('dust', board.gridX(g.col) + 40, board.cellY(g.row, g.col) + 50);
+    // ---- 墓碑浮现 (夜关, 带泥土粒子 + 升起动画) ----
+    if (this.graveTime > 0 && t >= T.GRAVE_START + this.sodTime) {
+      const p = clamp01((t - T.GRAVE_START - this.sodTime) / (T.GRAVE_END - T.GRAVE_START));
+      for (const g of board.graves) g.rise = p;
+      if (!this.gravesShown && p > 0.15) {
+        this.gravesShown = true;
+        for (const g of board.graves) {
+          board.addEffect('dust', board.gridX(g.col) + 40, board.cellY(g.row, g.col) + 50);
+        }
+        board.game.audio.play('gravebuttonchime');
       }
-      board.game.audio.play('gravebuttonchime');
+    }
+    if (this.graveTime > 0 && t >= T.GRAVE_END + this.sodTime) {
+      for (const g of board.graves) g.rise = 1;
     }
 
-    // ---- READY-SET-PLANT (原版: 6000+550+sod+grave 起 1.83s, reanim) ----
+    // ---- READY-SET-PLANT (原版: 6000+550+sod+grave 起, reanim 13帧@12fps) ----
     const rspStart = 6000 + T.MOWER_TIME + this.sodTime + this.graveTime;
-    if (!level.noReadySet && !this.rspAnim && t >= rspStart && RE.hasDef('StartReadySetPlant')) {
+    if (!level.noReadySet && !this.rspDone && !this.rspAnim && t >= rspStart && RE.hasDef('StartReadySetPlant')) {
+      this.rspDone = true;      // 防止播完后被重置重新创建 (重复bug根因)
       const r = Assets.reanim('StartReadySetPlant');
       r.x = 400; r.y = 324;
       r.frameStart = 0; r.frameCount = 13;
@@ -248,6 +259,11 @@ const Cutscene = {
       r.animTime = 0;
       this.rspAnim = r;
       board.game.audio.play('readysetplant');
+    }
+    // 按实际帧时间推进 (在 draw 中按 1/60 推进在高刷屏上会变快/节奏错乱)
+    if (this.rspAnim) {
+      this.rspAnim.update(dt);
+      // 原版: reanim 1083ms 播完后 PLANT! 末帧保持至 1830ms 过场结束 (PLAY_ONCE_HOLD 不清除)
     }
 
     // ---- 结束 ----
@@ -314,18 +330,47 @@ const Cutscene = {
   },
 
   // ============================================================
-  // 戴夫过场 (原版 1-5 坚果保龄球关: 对话 2400→2406, 末句赠送铲子)
-  // 时间轴: t=2000 入场(0.75s) → 对话(点击推进, 主时间轴暂停) → 赠铲 → 离场
+  // 戴夫过场 (原版 CutScene.cpp 750-860: 各关卡 mCrazyDaveDialogStart)
+  // 入场 t=1500 (冻结主时间轴) → 对话点击推进 → 离场 → 时间轴恢复
   // ============================================================
+  daveDialogFor(level, firstTime) {
+    const lv = level.id;
+    const D = STR.dave;
+    const isAdv = !level.mode;
+    // --- 特殊玩法关 (按原版 CutScene.cpp Is*Level 判定顺序) ---
+    if (isAdv && level.fixed === 'bowling') {
+      // 1-5 坚果保龄球: 首次 = 介绍 + 赠铲子 (原版 2400, 第6/7句为赠铲台词)
+      if (firstTime) {
+        const L = D.intro_1_5;
+        return { lines: L.slice(0, 5), gift: L.slice(5), giftShovel: true };
+      }
+      return { lines: D.replay_1_5, gift: null };
+    }
+    if (isAdv && level.fixed === 'whack') return { lines: D.whack_2_5, gift: null };          // 2-5 打僵尸
+    if (isAdv && level.fixed === 'vasebreaker') return { lines: D.vase_4_5, gift: null };    // 4-5 罐子
+    if (level.fixed === 'izombie') return { lines: D.izombie, gift: null };                  // 我不是僵尸
+    if (isAdv && lv === 25) return { lines: D.little_3_5, gift: null };                      // 3-5 小僵尸
+    if (isAdv && lv === 40) return { lines: D.storm_4_10, gift: null };                      // 4-10 暴风雨夜
+    if (isAdv && lv === 45) return firstTime ? { lines: D.bungee_5_5, gift: null } : { lines: D.bungee_5_5_replay, gift: null };  // 5-5 蹦极+禅园
+    if (isAdv && lv === 50) return { lines: D.boss_5_10, gift: null };                       // 5-10 僵王
+    if (!firstTime) {
+      if (isAdv && lv === 1) return { lines: D.replay_1_1, gift: null };                     // 重玩 1-1
+      return null;
+    }
+    // --- 首次冒险的关卡引导 (原版编号) ---
+    if (lv === 11) return { lines: D.night_2_1, gift: null };                                 // 2-1 夜晚
+    if (lv === 12) return { lines: D.coins_2_2, gift: null };                                 // 2-2 金币/商店提示
+    if (lv >= 13 && lv <= 24 && lv !== 15 && lv !== 20 && lv !== 21) return { lines: D.slot7, gift: null };  // 第7卡槽
+    if (lv === 21) return { lines: D.pool_3_1, gift: null };                                  // 3-1 泳池
+    if (lv === 31) return { lines: D.fog_4_1, gift: null };                                   // 4-1 雾
+    if (lv === 41) return { lines: D.roof_5_1, gift: null };                                  // 5-1 屋顶
+    return null;
+  },
+
   daveLines() {
-    return [
-      '嘿！邻居！我是疯狂戴夫！',
-      '看看这些坚果墙！又硬又圆，',
-      '把它们滚向僵尸——就像保龄球一样！',
-      '僵尸是球瓶，坚果就是保龄球！',
-      '哦对了，差点忘了——这把铲子送给你！',
-      '拿起铲子就能把植物挖出来啦！我走了，僵尸让我紧张！',
-    ];
+    const d = this.daveDialog;
+    if (!d) return [];
+    return d.gift ? [...d.lines, ...d.gift] : d.lines;
   },
 
   updateDave(dt) {
@@ -373,10 +418,11 @@ const Cutscene = {
       this.daveT += dt;
       if (this.daveAnim) this.daveAnim.update(dt);
       if (this.daveT >= 0.62) {
-        // 离场完成 → 恢复主时间轴
+        // 离场完成 → 恢复主时间轴 + 标记已看过
         this.davePhase = null;
         this.daveAnim = null;
         this.daveMode = false;
+        if (this.board.game && this.board.game.markDaveSeen) this.board.game.markDaveSeen(this.board.level.id);
       }
     }
   },
@@ -387,9 +433,10 @@ const Cutscene = {
     if (this.davePhase === 'enter') { this.daveT = Math.max(this.daveT, 0.74); return true; }
     if (this.davePhase === 'talk') {
       const lines = this.daveLines();
+      const giftLines = this.daveDialog && this.daveDialog.gift ? this.daveDialog.gift.length : 0;
       this.daveLine++;
-      if (this.daveLine >= lines.length - 1) {
-        // 末句前: 赠送铲子 (原版 2406: "拿起铲子开始挖吧")
+      if (giftLines && this.daveLine >= lines.length - giftLines) {
+        // 进入赠送阶段 (原版 2406: "拿起铲子开始挖吧" — 仅 1-5 首次)
         game.shovelUnlocked = true;
         game.audio.play('dave_crazy');
         if (this.daveAnim) this.daveAnim.play('anim_crazy', RE.PLAY_ONCE_HOLD, 20);
@@ -397,14 +444,26 @@ const Cutscene = {
         this.daveT = 0;
         return true;
       }
+      if (this.daveLine >= lines.length) {
+        // 无赠礼: 直接离场
+        if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
+        this.davePhase = 'leave';
+        this.daveT = 0;
+        game.audio.play('dave_short');
+        return true;
+      }
       game.audio.play(Math.random() < 0.5 ? 'dave_short' : 'dave_medium');
       return true;
     }
     if (this.davePhase === 'gift') {
-      // 点击 → 戴夫离场
-      if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
-      this.davePhase = 'leave';
-      this.daveT = 0;
+      // 点击推进赠礼台词 → 最后离场
+      const lines = this.daveLines();
+      this.daveLine++;
+      if (this.daveLine >= lines.length) {
+        if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
+        this.davePhase = 'leave';
+        this.daveT = 0;
+      }
       game.audio.play('dave_short');
       return true;
     }
@@ -418,7 +477,7 @@ const Cutscene = {
     // 对话框 (原版风格: 羊皮纸圆角框 + 底部文字)
     if (this.davePhase === 'talk' || this.davePhase === 'gift') {
       const lines = this.daveLines();
-      const text = this.davePhase === 'gift' ? lines[lines.length - 1] : lines[this.daveLine];
+      const text = lines[Math.min(this.daveLine, lines.length - 1)] || '';
       const bx = 400, by = 470, bw = 560, bh = 88;
       ctx.save();
       ctx.globalAlpha = 0.96;
@@ -488,12 +547,8 @@ const Cutscene = {
     }
     // 1.5 戴夫过场 (1-5 赠铲子)
     this.drawDave(ctx);
-    // 2. READY-SET-PLANT (reanim, 居中)
-    if (this.rspAnim) {
-      this.rspAnim.update(1 / 60);
-      this.rspAnim.draw(ctx);
-      if (this.rspAnim.animTime >= 1) this.rspAnim = null;
-    }
+    // 2. READY-SET-PLANT (reanim, 居中; 推进已在 update 中按 dt 进行)
+    if (this.rspAnim) this.rspAnim.draw(ctx);
   },
 };
 
@@ -502,7 +557,7 @@ let ZOMBIES_DEF = {};
 function setZombieDefs(z) { ZOMBIES_DEF = z; }
 
 // ============================================================
-// 场内横幅系统 (一大波僵尸/最后一波 — 原版图片横幅)
+// 场内横幅系统 (一大波僵尸/最后一波 — 原版 FinalWave.reanim 动画 / APPROACHING 静图)
 // ============================================================
 const Banners = {
   list: [],
@@ -510,12 +565,38 @@ const Banners = {
     this.list.push({ img: imgName, t: 0, dur, sound });
     if (sound && audio) audio.play(sound);
   },
+  // 原版: 最后一波用 REANIM_FINALWAVE reanim (23帧@12fps); 一大波用 APPROACHING 静图
+  showFinalWave(dur = 3.4, audio = null) {
+    if (RE.hasDef('FinalWave')) {
+      const r = Assets.reanim('FinalWave');
+      r.x = 400; r.y = 240;
+      r.frameStart = 0; r.frameCount = r.def ? r.def.n : 23;
+      r.animRate = 12;
+      r.loopType = RE.LOOP;
+      this.list.push({ reanim: r, t: 0, dur, sound: 'finalwave' });
+    } else {
+      this.show('finalwave.png', dur, 'finalwave', audio);
+      return;
+    }
+    if (audio) audio.play('finalwave');
+  },
   update(dt) {
-    for (const b of this.list) b.t += dt;
+    for (const b of this.list) { b.t += dt; if (b.reanim) b.reanim.update(dt); }
     this.list = this.list.filter(b => b.t < b.dur);
   },
   draw(ctx) {
     for (const b of this.list) {
+      // reanim 横幅 (原版 FinalWave)
+      if (b.reanim) {
+        const p = b.t / b.dur;
+        let alpha = 1;
+        if (p > 0.85) alpha = (1 - p) / 0.15;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        b.reanim.draw(ctx);
+        ctx.restore();
+        continue;
+      }
       const im = img(b.img);
       if (!im) continue;
       const p = b.t / b.dur;

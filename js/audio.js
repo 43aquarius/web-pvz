@@ -23,7 +23,7 @@ const Audio2 = (function () {
   };
 
   const SFX_MAP = {
-    throw: 'SFX/plant/throw1.ogg', throw2: 'SFX/plant/throw2.ogg',
+    throw: 'SFX/plant/throw1.ogg', throw2: 'SFX/plant/throw2.ogg', plantgrow: 'SFX/plant/plantgrow.ogg',
     puff: 'SFX/plant/puff.ogg', fume: 'SFX/plant/fume.ogg',
     splat: 'SFX/bullet/splat1.ogg', splat2: 'SFX/bullet/splat2.ogg', splat3: 'SFX/bullet/splat3.ogg',
     snowpea_splat: 'SFX/bullet/plastichit.ogg', firepea: 'SFX/bullet/firepea.ogg',

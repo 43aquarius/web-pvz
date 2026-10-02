@@ -83,8 +83,8 @@ window.require = function (name) {
     const r = await fetch('assets/reanim/_list.json', { cache: 'no-store' });
     if (r.ok) window.__REANIM_LIST__ = await r.json();
   } catch (e) {}
-  // 3. 模块 (依赖顺序: data/reanim 先, zombie 在 board 前)
-  const files = ['reanim', 'data', 'assets', 'audio', 'cutscene', 'projectiles', 'zombie', 'plants', 'board', 'render', 'ui', 'screens', 'main'];
+  // 3. 模块 (依赖顺序: strings/data 先, garden 在 screens 后)
+  const files = ['reanim', 'strings', 'data', 'assets', 'audio', 'cutscene', 'projectiles', 'zombie', 'plants', 'board', 'render', 'ui', 'screens', 'garden', 'main'];
   for (const f of files) {
     try {
       const res = await fetch(`js/${f}.js?v=${window.__BUILD__ || Date.now()}`, { cache: 'no-store' });

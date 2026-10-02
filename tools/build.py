@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """build.py — 打包构建 (单script块架构, 保证执行顺序)
-  python3 tools/build.py dev   -> dev.html (js+reanim内联, 图片音频相对路径, file://可玩)
-  python3 tools/build.py dist  -> dist/web-pvz.html (全内嵌base64, 单文件发布)
-  python3 tools/build.py pack  -> assets/pack.bin + assets/reanim.json (网络部署单请求资产包)
+  python3 tools/build.py dev   -> dev.html (js+reanim内联, 图片音频相对路径, 本地迭代)
+  python3 tools/build.py dist  -> dist/web-pvz.html (全内嵌base64, 离线单文件发布)
+  网络部署: python3 tools/packs.py -> assets/packs/*.wpz + assets/lazy.json (按需分包)
 """
 import base64, json, os, struct, sys
 
@@ -10,7 +10,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = ROOT
 MODE = sys.argv[1] if len(sys.argv) > 1 else 'dev'
 
-MODULES = ['reanim', 'data', 'assets', 'audio', 'cutscene', 'projectiles', 'zombie', 'plants', 'board', 'render', 'ui', 'screens', 'main']
+MODULES = ['reanim', 'strings', 'data', 'assets', 'audio', 'cutscene', 'projectiles', 'zombie', 'plants', 'board', 'render', 'ui', 'screens', 'garden', 'main']
 
 HTML_HEAD = '''<!DOCTYPE html>
 <html lang="zh-CN">
@@ -142,34 +142,6 @@ def audio_list():
     return sorted(out)
 
 
-def build_pack():
-    """生成网络部署资产包: assets/pack.bin (全部图片单文件) + assets/reanim.json (全部reanim合一)"""
-    img_dir = os.path.join(WEB, 'assets/images')
-    keys = sorted(os.listdir(img_dir))
-    index = {"images": {}}
-    blobs = []
-    offset = 0
-    for k in keys:
-        data = open(os.path.join(img_dir, k), 'rb').read()
-        mime = 'image/jpeg' if k.lower().endswith(('.jpg', '.jpeg')) else 'image/png'
-        index["images"][k] = [offset, len(data), mime]
-        blobs.append(data)
-        offset += len(data)
-    idx_bytes = json.dumps(index, separators=(',', ':')).encode('utf-8')
-    with open(os.path.join(WEB, 'assets/pack.bin'), 'wb') as f:
-        f.write(b'WPZ1')
-        f.write(struct.pack('<I', len(idx_bytes)))
-        f.write(idx_bytes)
-        for b in blobs:
-            f.write(b)
-    # reanim 合一 (文本 JSON, 服务端可 gzip)
-    rd = load_reanim_data()
-    with open(os.path.join(WEB, 'assets/reanim.json'), 'w', encoding='utf-8') as f:
-        json.dump(rd, f, separators=(',', ':'))
-    print(f'assets/pack.bin -> {os.path.getsize(os.path.join(WEB, "assets/pack.bin")) / 1e6:.1f} MB ({len(keys)} 张图片)')
-    print(f'assets/reanim.json -> {os.path.getsize(os.path.join(WEB, "assets/reanim.json")) / 1e6:.1f} MB ({len(rd)} 个动画)')
-
-
 def build(mode):
     parts = [HTML_HEAD, '<script>\n', LOADER_PRE]
     # 数据前置
@@ -251,7 +223,4 @@ def build(mode):
 
 
 if __name__ == '__main__':
-    if MODE == 'pack':
-        build_pack()
-    else:
-        build(MODE if MODE in ('dev', 'dist') else 'dev')
+    build(MODE if MODE in ('dev', 'dist') else 'dev')
