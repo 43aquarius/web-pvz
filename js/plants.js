@@ -7,6 +7,7 @@
 const { CONST, PLANTS, MUSHROOMS, AQUATIC, GROUNDCOVER } = require('./data');
 const RE = require('./reanim');
 const { Projectile } = require('./projectiles');
+const { PH } = require('./zombie');   // 大嘴花 miss 判定用 (撑杆跳阶段)
 // Sun 类延迟获取 (board 在 plants 之后加载)
 const getSunClass = () => { const m = (window.__mods && window.__mods['board']) || require('./board'); return m && m.Sun; };
 
@@ -141,10 +142,22 @@ class Plant {
         break;
       case 'CHERRYBOMB': case 'DOOMSHROOM': case 'JALAPENO': case 'ICESHROOM': case 'BLOVER':
         this.state = 'fuse'; this.fuseT = d.fuse || 1;
-        // 樱桃炸弹: 种下后快速膨胀变大 (原版 1.05s 待机 + scale 脉冲) — #15
-        if (this.type === 'CHERRYBOMB') {
-          this.fuseT = 1.05;   // 原版 mPlantAge >= 105tick 引爆
-          for (const L of this.anims) if (L.r.animExists('anim_idle')) L.r.play('anim_idle', RE.LOOP, 26);
+        // 原版 Plant 构造 (Plant.cpp 320): 樱桃/辣椒 SetFramesForLayer("anim_explode") PLAY_ONCE_AND_HOLD
+        // + mDoSpecialCountdown=100tick(1.67s); Animate() 每帧 ±1px 抖动 (#17)
+        if (this.type === 'CHERRYBOMB' || this.type === 'JALAPENO') {
+          this.fuseT = 1.0;    // 原版 mDoSpecialCountdown = 100 tick @100Hz
+          for (const L of this.anims) {
+            const r = L.r;
+            if (r.def && r.def.anims && r.def.anims.anim_explode && r.def.anims.anim_explode[1] > 0) {
+              r.play('anim_explode', RE.PLAY_ONCE_HOLD, 30);
+            } else if (r.def && r.def.n >= 14) {
+              // anim_explode 轨道无显式 f 帧 (转换器丢区间): 帧区 0..13 = 膨胀序列 (anim_idle 从帧14起)
+              r.frameStart = 0; r.frameCount = 14; r.loopType = RE.PLAY_ONCE_HOLD;
+              r.animRate = 30; r.animTime = 0; r.loopCount = 0;
+            } else if (r.animExists('anim_idle')) {
+              r.play('anim_idle', RE.LOOP, 26);
+            }
+          }
         }
         break;
       case 'SUNSHROOM':
@@ -192,6 +205,11 @@ class Plant {
     this.butterStun = Math.max(0, this.butterStun - dt);
     this.frozen = Math.max(0, this.frozen - dt);
     if (this.buildT < 0.25) this.buildT += dt;
+    // 原版 Animate(): 樱桃/辣椒待爆期间每帧 ±1px 抖动 (#17)
+    if (this.state === 'fuse' && (this.type === 'CHERRYBOMB' || this.type === 'JALAPENO')) {
+      this.shakeX = Math.random() * 2 - 1;
+      this.shakeY = Math.random() * 2 - 1;
+    } else { this.shakeX = 0; this.shakeY = 0; }
     if (this.sleeping) {
       if (this.zzz) this.zzz.t += dt;
       return;
@@ -395,20 +413,65 @@ class Plant {
         break;
       }
       case 'CHOMPER': {
-        if (this.chew > 0) {
-          this.chew -= dt;
-          if (this.chew <= 0) {
-            for (const L of this.anims) L.r.play(L.base, RE.LOOP, 12);
+        // 原版 UpdateChomper 状态机 (Plant.cpp 1751): READY → BITING(70tick判定) → GOT_ONE/MISS
+        //   → 播 chew 消化 4000tick → swallow → READY; 巨人/Boss 只咬 40 伤; pogo/撑杆跳中 miss
+        const body = this.anims[0].r;
+        const biteFind = () => {
+          // 原版攻击矩形 Rect(mX+80, mY, 40, mH) × 僵尸盒~90px 重叠 → 锚点窗口 (mX-10, mX+120)
+          let best = null;
+          for (const z of board.zombies) {
+            if (z.dead || z.row !== this.row || z.hittable === false || z.boss) continue;
+            if (z.underground || z.underwater || z.flyingHigh) continue;
+            if (z.x > this.x - 10 && z.x < this.x + 120) {
+              if (!best || z.x < best.x) best = z;
+            }
           }
-        } else {
-          // 咬前方僵尸
-          const z = board.zombies.find(z => !z.dead && z.row === this.row && !z.underwater &&
-            Math.abs(z.hitX() - (this.x + 70)) < 55 && z.hittable !== false && !z.boss && !z.isGargantuar);
-          if (z && !z.underground) {
+          return best;
+        };
+        if (this.state === 'idle' || this.state === 'ready') {
+          if (biteFind()) {
             for (const L of this.anims) L.r.play('anim_bite', RE.PLAY_ONCE_HOLD, 24);
-            this.chew = d.chew;
-            z.devoured(board);
+            this.state = 'biting';
+            this.timer = 0.7;   // 原版 mStateCountdown = 70 tick (100Hz)
+          }
+        } else if (this.state === 'biting') {
+          this.timer -= dt;
+          if (this.timer <= 0) {
             board.game.audio.play('bigchomp');
+            const z = biteFind();
+            let heavy = false, miss = false;
+            if (!z) miss = true;
+            else if (z.type === 'GARGANTUAR' || z.type === 'REDEYE' || z.boss) heavy = true;
+            else if (!z.isImmobilized && (z.isBouncingPogo ||
+              z.phase === PH.POLEVAULTER_IN_VAULT || z.phase === PH.POLEVAULTER_PRE_VAULT)) miss = true;
+            if (heavy) {
+              board.game.audio.play('splat1');
+              z.takeDamage(40, board, {});
+              this.state = 'bite_miss';
+            } else if (miss) {
+              this.state = 'bite_miss';
+            } else {
+              z.dieWithLoot();          // 原版 DieWithLoot 吞噬
+              this.state = 'got_one';
+            }
+          }
+        } else if (this.state === 'got_one') {
+          if (body.loopCount > 0) {     // bite 播完 → 咀嚼
+            for (const L of this.anims) L.r.play('anim_chew', RE.LOOP, 15);
+            if (board.mode === 'izombie') body.animRate = 0;
+            this.state = 'digesting';
+            this.timer = 40;            // 原版 4000 tick @100Hz
+          }
+        } else if (this.state === 'digesting') {
+          this.timer -= dt;
+          if (this.timer <= 0) {
+            for (const L of this.anims) L.r.play('anim_swallow', RE.PLAY_ONCE_HOLD, 12);
+            this.state = 'swallowing';
+          }
+        } else if (this.state === 'swallowing' || this.state === 'bite_miss') {
+          if (body.loopCount > 0) {
+            for (const L of this.anims) L.r.play(L.base, RE.LOOP, 12);
+            this.state = 'idle';
           }
         }
         break;
@@ -526,7 +589,7 @@ class Plant {
     const d = this.def;
     this.timer -= dt;
     const mouthY = this.y + 30;
-    const inRow = (row) => board.zombiesInRow(row, this.x + 20, this.x + d.range * 80 + 80).length > 0;
+    const inRow = (row) => board.zombiesInRow(row, this.x + 20, 900).length > 0;  // 原版攻击矩形: mX+60 → 屏幕右缘
 
     let hasTarget = false;
     switch (this.type) {
@@ -676,10 +739,21 @@ class Plant {
         break;
       }
       case 'CABBAGEPULT': case 'KERNELPULT': case 'MELONPULT': case 'WINTERMELON': {
-        // 抛射: 目标行内最前僵尸 (原版: 起点mX+10/mY+5, 前置量 ZombieTargetLeadX(50)-30)
-        const z = board.firstZombieInRow(this.row, this.x + 80, this.x + 9 * 80);
-        const tx = z ? (z.hitX() + 20) : this.x + 400;
-        const ty = z ? (z.y + 35) : (board.gridY(this.row) + 40);
+        // 原版 Plant::Fire (Plant.cpp 4688): 攻击矩形 Rect(mX+60, mY, BOARD_WIDTH, mH) — 全屏找本行最左僵尸
+        // 瞄准: ZombieTargetLeadX(50) - aOriginX - 30 = 僵尸中心 - 速度×50tick - 30px (120tick 飞行落点补偿)
+        const z = board.firstZombieInRow(this.row, this.x + 60, this.x + 900);
+        let tx, ty;
+        if (z) {
+          let spd = z.velX || 0;   // px/frame (原版 tick 单位同语义)
+          if (z.isMovingAtChilledSpeed) spd *= 0.5;
+          if (z.isEating || z.butter > 0 || z.frozen > 0 || z.stunTimer > 0) spd = 0;  // 原版 ZombieNotWalking
+          tx = z.hitX() - spd * 50 - 30;
+          ty = z.y + 35;
+        } else {
+          tx = this.x + 400;
+          ty = board.gridY(this.row) + 40;
+        }
+        if (tx < this.x + 10 + 40) tx = this.x + 10 + 40;   // 原版 aRangeX >= 40
         const isButter = this.type === 'KERNELPULT' && Math.random() < d.butterChance;
         const projType = isButter ? 'butter' : d.proj;
         board.projectiles.push(new Projectile(projType, this.x + 10, this.y + 5, this.row, this, { tx, ty }));
@@ -717,11 +791,11 @@ class Plant {
         board.game.audio.play('jalapeno');
         break;
       case 'ICESHROOM':
+        // 原版 Plant::DoSpecial → IceZombies: 全场僵尸 HitIceTrap (内部 ApplyChill+CanBeFrozen 守卫)
         board.addEffect('screen_flash', 0, 0, { hold: 0.5 });
         for (const z of board.zombies) {
-          if (!z.dead && !z.boss) z.freeze(CONST.FREEZE_TIME, board);
+          if (!z.dead) z.hitIceTrap();
         }
-        board.game.audio.play('iceshroom');
         break;
       case 'BLOVER':
         // 原版: 吹走浓雾 (mFogBlownCountDown=2000 tick=20s) + 气球/被抛小鬼
@@ -897,7 +971,7 @@ class Plant {
     }
     for (const L of this.anims) {
       if (L.attached) continue;   // 已由身体轨道挂载绘制 (完整矩阵跟随: 旋转/缩放/位移)
-      L.r.setPosition(this.x, dy);
+      L.r.setPosition(this.x + (this.shakeX || 0), dy + (this.shakeY || 0));   // 樱桃/辣椒待爆抖动 (#17)
       L.r.overrideScale(sc, sc);
       // 坚果保龄球滚动: 旋转由 reanim _ground 帧区间自带 (脸绕圆周) — 无需手动 overlay 旋转
       L.r.refreshAttachments();   // 头部等附件立即同步 (消除一帧滞后)

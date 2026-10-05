@@ -115,6 +115,13 @@ Screens.menu = {
   buttons: [],
   state: 'open',       // open(滑入) → sign(木牌) → idle
   hover: null,
+  lockMsg: null,       // 模式锁定消息框 (原版 MODE_LOCKED LawnMessageBox) (#6)
+
+  // 原版 GameSelector::ButtonDepress: 锁定时弹 [MODE_LOCKED] 消息框 (#6)
+  showLockMsg(game, name) {
+    game.audio.play('gravebutton');
+    this.lockMsg = { name, t0: Date.now() };
+  },
 
   // ---- 初始化 reanim 实例 (原版 GameSelector 构造) ----
   enter() {
@@ -431,21 +438,77 @@ Screens.menu = {
     if (hover === 'locked') {
       pvzText(ctx, '尚未开放', 400, 240, 18, '#cfcfcf');
     }
+    // ---- 三模式入口锁定态 (原版 GameSelector: SetBkgColor(128,128,128) 灰底) (#6) ----
+    if (game) {
+      const MODE_LOCKED = { minigames: '玩玩小游戏', puzzle: '解谜模式', survival: '生存模式' };
+      for (const k of Object.keys(MODE_LOCKED)) {
+        if (game.modeUnlocked && !game.modeUnlocked(k)) {
+          const b = (this.buttons || []).find(b => b.k === k);
+          if (b) {
+            ctx.save();
+            ctx.fillStyle = 'rgba(110,110,110,0.42)';
+            ctx.fillRect(b.x + 6, b.y + 6, b.w - 12, b.h - 12);
+            ctx.restore();
+          }
+        }
+      }
+    }
     // 未解锁模式的悬停提示 (原版 MODE_LOCKED)
     if (game) {
       if (hover === 'minigames' || hover === 'puzzle') {
-        if (game.progress.unlocked <= 11) pvzText(ctx, '通关冒险模式 1-1 后开放', 400, 560, 15, '#cfe0ff');
+        if (game.modeUnlocked && !game.modeUnlocked(hover)) pvzText(ctx, '通关冒险模式后开放', 400, 560, 15, '#cfe0ff');
       } else if (hover === 'survival') {
-        if (game.progress.unlocked <= 12) pvzText(ctx, '通关冒险模式后开放', 400, 560, 15, '#cfe0ff');
+        if (game.modeUnlocked && !game.modeUnlocked('survival')) pvzText(ctx, '通关冒险模式后开放', 400, 560, 15, '#cfe0ff');
       } else if (hover === 'zengarden') {
         if (!game.zenGardenUnlocked()) pvzText(ctx, '通关 5-4 ( level 44 ) 后开放', 400, 560, 15, '#cfe0ff');
       } else if (hover === 'shop') {
         if (!game.shopUnlocked()) pvzText(ctx, '通关 3-4 后开放', 400, 560, 15, '#cfe0ff');
       }
     }
+    // ---- 模式锁定消息框 (原版 MODE_LOCKED LawnMessageBox: 木牌+文字+确认) (#6) ----
+    if (this.lockMsg) {
+      const el = Math.min(1, (Date.now() - this.lockMsg.t0) / 200);
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0, 0, 800, 600);
+      const W = 430, H = 165, X = 400 - W / 2, Y = (600 - H) / 2 - 20;
+      ctx.translate(400, Y + H / 2);
+      ctx.scale(0.85 + 0.15 * el, 0.85 + 0.15 * el);
+      ctx.translate(-400, -(Y + H / 2));
+      // 木牌底
+      const wood = img && img('SelectorScreen_WoodSign3');
+      if (wood) {
+        ctx.drawImage(wood, X, Y, W, H);
+      } else {
+        ctx.fillStyle = '#8a6434';
+        ctx.fillRect(X, Y, W, H);
+        ctx.strokeStyle = '#5c3f1c'; ctx.lineWidth = 4;
+        ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
+      }
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffe9b0';
+      ctx.font = 'bold 24px "Noto Sans SC", sans-serif';
+      ctx.fillText('模式尚未解锁', 400, Y + 52);
+      ctx.font = '16px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#ffe9c8';
+      ctx.fillText(`要解锁「${this.lockMsg.name}」模式`, 400, Y + 86);
+      ctx.fillText('请先通关冒险模式！', 400, Y + 110);
+      const blink = Math.sin((Date.now() % 900) / 900 * Math.PI * 2) > -0.2;
+      if (blink) {
+        ctx.fillStyle = '#c8f542';
+        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+        ctx.fillText('点击任意处继续', 400, Y + 142);
+      }
+      ctx.restore();
+    }
   },
 
   click(p, game) {
+    // 锁定消息框打开时: 点击任意处关闭 (原版 DIALOG_BUTTON_OK) (#6)
+    if (this.lockMsg) {
+      if (Date.now() - this.lockMsg.t0 > 250) { this.lockMsg = null; game.audio.play('buttonclick'); }
+      return;
+    }
     for (const b of (this.buttons || [])) {
       if (!inRect(p, b.x, b.y, b.w, b.h)) continue;
       if (b.disabled) { game.audio.play('buzzer'); return; }
@@ -454,20 +517,20 @@ Screens.menu = {
         this.inst && this.inst.setImageOverride('SelectorScreen_StartAdventure_button', null);
         game.startAdventure();
       } else if (b.k === 'minigames') {
-        // 玩玩小游戏 (原版 mMinigameButton → ChallengeScreen(PAGE_CHALLENGE), 通关解锁)
-        if (game.progress.unlocked <= 11) { game.audio.play('buzzer'); return; }
+        // 玩玩小游戏 (原版: 通关冒险模式解锁; 锁定时弹 MODE_LOCKED 消息框) (#6)
+        if (!game.modeUnlocked('minigames')) { this.showLockMsg(game, '玩玩小游戏'); return; }
         game.audio.play('gravebutton');
         game.state = 'modeselect';
         Screens.modeSelect.enter('minigames');
       } else if (b.k === 'puzzle') {
         // 解谜模式 (原版 mPuzzleButton → ChallengeScreen(PAGE_PUZZLE))
-        if (game.progress.unlocked <= 11) { game.audio.play('buzzer'); return; }
+        if (!game.modeUnlocked('puzzle')) { this.showLockMsg(game, '解谜模式'); return; }
         game.audio.play('gravebutton');
         game.state = 'modeselect';
         Screens.modeSelect.enter('puzzle');
       } else if (b.k === 'survival') {
         // 生存模式 (原版 mSurvivalButton → ChallengeScreen(PAGE_SURVIVAL))
-        if (game.progress.unlocked <= 12) { game.audio.play('buzzer'); return; }
+        if (!game.modeUnlocked('survival')) { this.showLockMsg(game, '生存模式'); return; }
         game.audio.play('gravebutton');
         game.state = 'modeselect';
         Screens.modeSelect.enter('survival');
@@ -487,6 +550,10 @@ Screens.menu = {
       } else if (b.k === 'almanac') {
         game.audio.play('gravebutton');
         game.state = 'almanac'; game.almanac.selected = null; game.almanac.tab = 'index';
+        // 索引页模型素材预载 (SUNFLOWER/普通僵尸 reanim; 缺此则两展示窗空白) (#10)
+        if (Assets.ensurePacks) {
+          Assets.ensurePacks(['plant_SUNFLOWER', 'zombie_core', 'ui']).catch(() => { });
+        }
       } else if (b.k === 'options') {
         game.audio.play('buttonclick');
         game.state = 'options';
@@ -1051,18 +1118,22 @@ Screens.modeSelect = {
   hover: null,
   _cells: null,
   enter(group) { this.group = group || 'minigames'; },
-  // 原版 ChallengeScreen 按钮布局: (38+col*155, 93+row*119) 104x115
+  // 原版 ChallengeScreen 构造: 挑战/解谜页 (38+col*155, 93+row*119); 生存页 (38+col*155, 125+row*145)
   cells() {
     const g = MODE_GROUPS[this.group];
+    const isSurvival = this.group === 'survival';
     const cells = [];
     g.items.forEach((it, i) => {
-      cells.push({ ...it, x: 38 + (i % 5) * 155, y: 93 + Math.floor(i / 5) * 119, w: 104, h: 115 });
+      const col = i % 5, row = Math.floor(i / 5);
+      const y = isSurvival ? 125 + row * 145 : 93 + row * 119;
+      cells.push({ ...it, x: 38 + col * 155, y, w: 104, h: 115 });
     });
     return cells;
   },
   draw(ctx) {
     const g = MODE_GROUPS[this.group];
-    // 背景 (原版 Challenge_Background)
+    const game = Screens.game;
+    // 背景 (原版 IMAGE_CHALLENGE_BACKGROUND @ 0,0)
     const bg = img('challenge_background.jpg');
     if (bg) {
       ctx.drawImage(bg, 0, 0, 800, 600);
@@ -1072,62 +1143,96 @@ Screens.modeSelect = {
       if (bg1) { ctx.globalAlpha = 0.25; ctx.drawImage(bg1, -220, 0); ctx.globalAlpha = 1; }
       ctx.fillStyle = 'rgba(10,6,2,0.6)'; ctx.fillRect(0, 0, 800, 600);
     }
-    // 标题 (原版挑战页标题木牌位置)
-    pvzText(ctx, g.title, 400, 52, 36, '#ffe36a');
-    pvzText(ctx, '点击选择一个玩法', 400, 86, 14, '#e8d9b5');
+    // 标题 (原版: PvzpDrawString 400,58 居中 HouseOfTerror28 Color(220,220,220))
+    pvzText(ctx, g.title, 400, 62, 30, '#e4e4e4');
+    // 奖杯计数 (原版: TROPHY 0.5x @718,26 + "N/M" @739,73 黄色)
+    const trophy = img('trophy_hi_res.png');
+    if (trophy) ctx.drawImage(trophy, 718, 26, trophy.width * 0.5, trophy.height * 0.5);
+    const total = g.items.length;
+    const got = 0;
+    ctx.save();
+    ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgb(255,240,0)';
+    ctx.fillText(`${got}/${total}`, 739, 83);
+    ctx.restore();
+    // 格子 (原版 DrawButton: CHALLENGE_WINDOW@(-6,-2) + thumbnail@(+13,+4) + 名字)
     const cells = this.cells();
     this._cells = cells;
     const hover = Screens.hover;
+    const UIm = __getUI();
+    const win = img('challenge_window.png');
+    const winHl = img('challenge_window_highlight.png');
+    const lockImg = img('lock.png');
+    const miniTrophy = img('minigame_trophy.png');
     cells.forEach((c, i) => {
       const hov = hover === 'mode' + i;
-      ctx.save();
-      // 按钮 (原版风格: 悬停亮框; 未实作项灰显)
       const locked = !c.key;
-      ctx.fillStyle = locked ? 'rgba(40,30,16,0.55)' : hov ? 'rgba(120,90,40,0.62)' : 'rgba(60,44,20,0.55)';
-      ctx.strokeStyle = locked ? 'rgba(70,54,30,0.6)' : hov ? '#ffe9a8' : 'rgba(90,70,40,0.8)';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath(); ctx.roundRect(c.x, c.y, c.w, c.h, 10);
-      ctx.fill(); ctx.stroke();
-      // 图标 (植物缩略/僵尸头)
-      const UIm = __getUI();
+      // 窗口框 (原版 118x120 图 @ -6,-2)
+      const wimg = hov && !locked ? winHl : win;
+      if (wimg) {
+        ctx.save();
+        if (locked) { ctx.globalAlpha = 0.55; }
+        ctx.drawImage(wimg, c.x - 6, c.y - 2);
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.fillStyle = locked ? 'rgba(40,30,16,0.55)' : hov ? 'rgba(120,90,40,0.62)' : 'rgba(60,44,20,0.55)';
+        ctx.strokeStyle = locked ? 'rgba(70,54,30,0.6)' : hov ? '#ffe9a8' : 'rgba(90,70,40,0.8)';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.roundRect(c.x, c.y, c.w, c.h, 10);
+        ctx.fill(); ctx.stroke();
+        ctx.restore();
+      }
+      // 图标 (原版 thumbnails @ +13,+4 ~78px; 此处用植物/僵尸缩略图)
       let icon = null;
       if (c.icon && UIm) {
         icon = PLANTS[c.icon] ? UIm.getThumb(c.icon) : UIm.getZombieThumb(c.icon);
       }
       if (icon) {
         ctx.save();
-        if (locked) ctx.globalAlpha = 0.35;
-        ctx.drawImage(icon, c.x + (c.w - 56) / 2, c.y + 10, 56, 56);
-        ctx.restore();
-      } else if (locked) {
-        // 未实作: 锁图标
-        ctx.save();
-        ctx.globalAlpha = 0.6;
-        ctx.strokeStyle = '#c8b28a'; ctx.lineWidth = 3;
-        const lx = c.x + c.w / 2, ly = c.y + 30;
-        ctx.strokeRect(lx - 12, ly - 4, 24, 18);
-        ctx.beginPath(); ctx.arc(lx, ly - 4, 8, Math.PI, 0); ctx.stroke();
+        if (locked) { ctx.globalAlpha = 0.35; }
+        else if (hov) { ctx.globalAlpha = 1; ctx.filter = 'brightness(1.15)'; }
+        // 等比适配到 72x86 区域 (原版 cel 区)
+        const s = Math.min(72 / icon.width, 86 / icon.height);
+        ctx.drawImage(icon, c.x + 13 + (78 - icon.width * s) / 2, c.y + 6 + (86 - icon.height * s) / 2, icon.width * s, icon.height * s);
         ctx.restore();
       }
-      // 名称 + 简述
+      // 锁定: LOCK 图 0.7x @ (+24,+9) (原版未解锁项)
+      if (locked && lockImg) {
+        ctx.save();
+        ctx.globalAlpha = 0.85;
+        ctx.drawImage(lockImg, c.x + 24, c.y + 9, lockImg.width * 0.7, lockImg.height * 0.7);
+        ctx.restore();
+      }
+      // 名称 (原版 ButtonWidget label: 居中格下部)
+      ctx.save();
       ctx.textAlign = 'center';
-      ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
-      ctx.fillStyle = locked ? '#8a7a5a' : '#fff4d0';
-      ctx.fillText(c.label, c.x + c.w / 2, c.y + 84);
-      ctx.font = '11px "Noto Sans SC", sans-serif';
-      ctx.fillStyle = locked ? '#6a5a3a' : '#c8b28a';
-      ctx.fillText(c.desc.slice(0, 9), c.x + c.w / 2, c.y + 102);
+      ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = locked ? '#8a7a5a' : (hov ? '#fff8e0' : '#f0e0b8');
+      ctx.fillText(c.label.length > 7 ? c.label.slice(0, 7) : c.label, c.x + c.w / 2, c.y + 102);
       ctx.restore();
     });
-    // 返回按钮 (原版 BACK_TO_MENU @ 左下; 各页独立, 无互切按钮)
-    this._back = { x: 18, y: 560, w: 120, h: 34 };
-    ctx.save();
-    ctx.fillStyle = '#a03a3a';
-    ctx.beginPath(); ctx.roundRect(18, 560, 120, 34, 6); ctx.fill();
-    ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
-    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
-    ctx.fillText('返回主菜单', 78, 582);
-    ctx.restore();
+    // 返回按钮 (原版 mBackButton: SEEDCHOOSER_BUTTON2 @18,568 111x26 "回到菜单")
+    this._back = { x: 18, y: 568, w: 111, h: 26 };
+    const backBtn = img('seedchooser_button2.png');
+    if (backBtn) {
+      ctx.drawImage(backBtn, 18, 568);
+      ctx.save();
+      ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgb(42,42,90)';
+      ctx.fillText('回到菜单', 18 + 55, 568 + 18);
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.fillStyle = '#a03a3a';
+      ctx.beginPath(); ctx.roundRect(18, 568, 111, 26, 5); ctx.fill();
+      ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+      ctx.fillText('回到菜单', 73, 586);
+      ctx.restore();
+    }
   },
   click(p, game) {
     if (this._back && inRect(p, this._back.x, this._back.y, this._back.w, this._back.h)) {
@@ -1186,10 +1291,11 @@ Screens.shop = {
       }
       this.firstVisitDone = true;
     }
-    // 戴夫 reanim (原版 StoreScreen::Draw: gCrazyDave 偏移 (-42,+68) → 最终位置约 (158,248) 站在车左侧)
+    // 戴夫 reanim (原版 StoreScreen::Draw: gCrazyDave mTransX-=42 mTransY+=68 → (-42,68);
+    // Dave_body1 轨道 y≈228 自带偏移, 身体落在车库地面; 旧值(158,278)致下半身出界截断) (#11)
     if (!this.daveAnim && RE.hasDef('CrazyDave')) {
       const d = Assets.reanim('CrazyDave');
-      d.x = 158; d.y = 278;
+      d.x = -42; d.y = 68;
       d.play('anim_idle', RE.LOOP, 18);
       this.daveAnim = d;
     }
@@ -1289,50 +1395,50 @@ Screens.shop = {
     ctx.fillStyle = 'rgb(180,255,90)';
     ctx.fillText('$' + (game ? game.coins : 0), 762, 584);
     ctx.restore();
-    // ---- 翻页按钮 (原版 Prev/Next) ----
+    // ---- 翻页按钮 (原版 mPrevButton @252,402 / mNextButton @596,402 原尺寸) (#12) ----
     const prev = img('store_prevbutton.png');
     const next = img('store_nextbutton.png');
     const prevHov = img('store_prevbuttonhighlight.png');
     const nextHov = img('store_nextbuttonhighlight.png');
-    this._prev = { x: 380, y: 425, w: 48, h: 44 };
-    this._next = { x: 560, y: 425, w: 48, h: 44 };
+    this._prev = { x: 252, y: 402, w: prev ? prev.width : 96, h: prev ? prev.height : 75 };
+    this._next = { x: 596, y: 402, w: next ? next.width : 136, h: next ? next.height : 83 };
     const pages = this.PAGES();
     const hasPrev = this.page > 0;
     const hasNext = this.page < pages.length - 1;
     const hovPrev = this._hoverBtn === 'prev', hovNext = this._hoverBtn === 'next';
     if (hasPrev) {
       const p = (hovPrev && prevHov) ? prevHov : prev;
-      if (p) ctx.drawImage(p, this._prev.x, this._prev.y, 48, 44);
+      if (p) ctx.drawImage(p, this._prev.x, this._prev.y);
     }
     if (hasNext) {
       const p = (hovNext && nextHov) ? nextHov : next;
-      if (p) ctx.drawImage(p, this._next.x, this._next.y, 48, 44);
+      if (p) ctx.drawImage(p, this._next.x, this._next.y);
     }
     // 页码 (原版 [STORE_PAGE] @ 470,500)
     ctx.save();
     ctx.font = '13px "Noto Sans SC", sans-serif';
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgb(80,80,80)';
-    ctx.fillText(`第 ${this.page + 1} 页 / 共 ${pages.length} 页`, 470, 512);
+    ctx.fillText(`第 ${this.page + 1} 页 / 共 ${pages.length} 页`, 470, 500);
     ctx.restore();
-    // ---- 主菜单按钮 (原版 Store_MainMenuButton) ----
+    // ---- 主菜单按钮 (原版 mBackButton @366,512 原尺寸 138x80, 底部中央; 旧(40,545)挡车尾) (#12) ----
     const mmb = img(this._hoverBtn === 'mainmenu' ? 'store_mainmenubuttonhighlight.png' : 'store_mainmenubutton.png');
-    this._mainmenu = { x: 40, y: 545, w: 150, h: 42 };
-    if (mmb) ctx.drawImage(mmb, this._mainmenu.x, this._mainmenu.y, 150, 42);
+    this._mainmenu = { x: 366, y: 512, w: mmb ? mmb.width : 138, h: mmb ? mmb.height : 80 };
+    if (mmb) ctx.drawImage(mmb, this._mainmenu.x, this._mainmenu.y);
     else {
       ctx.fillStyle = '#5a4a2a';
-      ctx.beginPath(); ctx.roundRect(this._mainmenu.x, this._mainmenu.y, 150, 42, 8); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(this._mainmenu.x, this._mainmenu.y, 138, 80, 8); ctx.fill();
       ctx.font = 'bold 16px "Noto Sans SC", sans-serif';
       ctx.textAlign = 'center'; ctx.fillStyle = '#f4e6b0';
-      ctx.fillText('返回主菜单', 115, 572);
+      ctx.fillText('返回主菜单', 435, 556);
     }
-    // ---- 戴夫气泡 (原版 IMAGE_STORE_SPEECHBUBBLE @ 戴夫头右上 (285-180, 20-78)=(105,-58) → 实际放 (240,28)) ----
+    // ---- 戴夫气泡 (原版 DrawCrazyDave: IMAGE_STORE_SPEECHBUBBLE2 @ (285,20) 原尺寸 280x183) ----
     if (this.bubble) {
       const bubbleImg = img('store_speechbubble2.png') || img('store_speechbubble.png');
-      const bx = 240, by = 28, bw = 320, bh = 110;
+      const bx = 285, by = 20, bw = bubbleImg ? bubbleImg.width : 280, bh = bubbleImg ? bubbleImg.height : 183;
       ctx.save();
       if (bubbleImg) {
-        ctx.drawImage(bubbleImg, bx, by, bw, bh);
+        ctx.drawImage(bubbleImg, bx, by);
       } else {
         ctx.fillStyle = '#f8f4e0';
         ctx.strokeStyle = '#8a8a7a'; ctx.lineWidth = 2;
@@ -1342,7 +1448,7 @@ Screens.shop = {
       ctx.fillStyle = '#3a3222';
       ctx.font = '15px "Noto Sans SC", sans-serif';
       ctx.textAlign = 'left';
-      this._wrapText(ctx, txt, bx + 24, by + 32, bw - 48, 20);
+      this._wrapText(ctx, txt, bx + 25, by + 30, bw - 50, 20);
       // 继续指示
       const a = 0.5 + 0.5 * Math.sin(Screens.t * 4);
       ctx.globalAlpha = a;
@@ -1605,6 +1711,19 @@ Screens.zengarden = {
     this._models[key] = r;
     return r;
   },
+  // 花盆模型 (原版 REANIM_POT: Pot.reanim 完整陶盆; 旧实现误用 pot_bottom 小条) (#9)
+  potModel() {
+    if (this._potM !== undefined) return this._potM;
+    this._potM = null;
+    try {
+      if (RE.hasDef('Pot')) {
+        const r = Assets.reanim('Pot');
+        r.play(r.animExists('anim_idle') ? 'anim_idle' : 'anim_idle', RE.LOOP, 6);
+        this._potM = r;
+      }
+    } catch (e) { this._potM = null; }
+    return this._potM;
+  },
   // ---------- 更新 ----------
   update(dt) {
     if (!this.data) return;
@@ -1633,6 +1752,7 @@ Screens.zengarden = {
       const m = this._models[k];
       if (m && m.update) m.update(dt);
     }
+    if (this._potM && this._potM.update) this._potM.update(dt);   // 花盆动画 (#9)
     // 植物开心计时
     for (let r = 0; r < 4; r++) for (let c = 0; c < 8; c++) {
       const p = this.data.plants[r][c];
@@ -1657,18 +1777,32 @@ Screens.zengarden = {
     pvzText(ctx, '禅 镜 花 园', 400, 40, 30, '#ffe9a8');
     // 花盆 + 植物
     const potImg = img('pot_bottom.png');
+    const potM = this.potModel();   // 原版 REANIM_POT 完整花盆 (#9)
     const sproutImg = img('anim_sprout.png');
     const mouse = Screens.mouse || { x: -1, y: -1 };
     for (let r = 0; r < 4; r++) {
       for (let c = 0; c < 8; c++) {
         const p = this.data.plants[r][c];
         const pos = this.cellPos(c, r);
-        // 花盆
-        if (potImg) {
+        // 花盆 (原版 REANIM_POT @ 格中心; 尺寸 ~83x85)
+        if (potM) {
           ctx.save();
-          ctx.globalAlpha = 0.95;
-          ctx.drawImage(potImg, pos.x + 8, pos.y + 26, 54, 40);
+          potM.setPosition(pos.x + 33, pos.y + 14);
+          potM.draw(ctx);
           ctx.restore();
+        } else if (potImg) {
+          // 回退: pot_top(83x64 盆身) + pot_bottom(67x21 盆底)
+          const potTop = img('pot_top.png');
+          if (potTop) {
+            ctx.save();
+            ctx.drawImage(potTop, pos.x + 33 - potTop.width / 2, pos.y + 40 - potTop.height / 2);
+            ctx.restore();
+          } else {
+            ctx.save();
+            ctx.globalAlpha = 0.95;
+            ctx.drawImage(potImg, pos.x + 8, pos.y + 26, 54, 40);
+            ctx.restore();
+          }
         } else {
           ctx.fillStyle = '#a05a28';
           ctx.beginPath(); ctx.roundRect(pos.x + 10, pos.y + 34, 50, 30, 6); ctx.fill();

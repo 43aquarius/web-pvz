@@ -309,7 +309,9 @@ const GARDEN_PLANTS = [
 function makeLevels() {
   const L = [];
   for (let lv = 1; lv <= 50; lv++) {
-    const scene = lv === 50 ? 'boss' : lv <= 10 ? 'day' : lv <= 20 ? 'night' : lv <= 30 ? 'pool' : lv <= 40 ? 'fog' : 'roof';
+    const scene0 = lv === 50 ? 'boss' : lv <= 10 ? 'day' : lv <= 20 ? 'night' : lv <= 30 ? 'pool' : lv <= 40 ? 'fog' : 'roof';
+    // 原版 Board::PickBackground: 4-5 ScaryPotter 在 fog 区间前特判 → BACKGROUND_2_NIGHT (#20)
+    const scene = lv === 35 ? 'night' : scene0;
     const sub = ((lv - 1) % 10) + 1;
     const level = {
       id: lv, scene, sub,
@@ -322,10 +324,10 @@ function makeLevels() {
       startSun: lv === 1 ? 150 : 50,
       unlock: awardPlantForLevel(lv),
       fixed: null,
-      graves: scene === 'night' ? gravesForLevel(lv) : [],
+      graves: scene === 'night' && lv !== 35 ? gravesForLevel(lv) : [],   // 4-5 罸子关无墓碑
       bgm: scene === 'day' ? 'front_day' : (scene === 'night' || scene === 'boss') ? 'front_night' : scene === 'pool' ? 'pool' : scene === 'fog' ? 'fog' : 'roof',
       skySun: !(scene === 'night' || scene === 'fog' || scene === 'boss'),
-      potColumns: lv === 41 ? 5 : lv === 42 ? 4 : (lv >= 43 && lv !== 50) ? 3 : 0,
+      potColumns: lv === 41 ? 5 : lv === 42 ? 4 : (lv >= 43) ? 3 : 0,   // 原版 CutScene: 5-1→5列, 5-2→4列, 5-3~5-10→3列(含Boss关)
       sodRoll: lv === 1 || lv === 2 || lv === 4,       // 草皮扩展关: 开场铺草皮动画
       chooseSeeds: lv > 7,                              // 1-8 起需要选卡
       bankSlots: Math.min(6 + Math.max(0, Math.floor((lv - 8) / 12)), 10), // 6槽起步, 后期最多10
@@ -386,10 +388,10 @@ const MODE_LEVELS = {
   seeing_stars:  { id: 108, label: '看见星星', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'seeing_stars', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '用杨桃点亮五个阵点' },
   little_trouble:{ id: 109, label: '小麻烦',   mode: 'minigame', fixed: 'conveyor', conveyorPool: 'little_trouble', scene: 'pool', waves: 20, grassRows: [0, 1, 4, 5], rows: 6, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'pool', desc: '泳池边的大麻烦' },
   portal_combat:{ id: 110, label: '传送门战斗', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'portal_combat', scene: 'pool', waves: 20, grassRows: [0, 1, 4, 5], rows: 6, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'pool', desc: '穿越传送门夹击僵尸' },
-  column:    { id: 111, label: '列队僵尸',     mode: 'minigame', fixed: 'conveyor', conveyorPool: 'column', scene: 'roof', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'roof', potColumns: 4, desc: '一列一列打过去' },
+  column:    { id: 111, label: '列队僵尸',     mode: 'minigame', fixed: 'conveyor', conveyorPool: 'column', scene: 'roof', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'roof', potColumns: 8, desc: '一列一列打过去' },
   invisighoul: { id: 112, label: '隐形僵尸',   mode: 'minigame', fixed: 'conveyor', conveyorPool: 'invisighoul', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '看不见的僵尸最可怕' },
   stormy_night: { id: 113, label: '暴风雨夜', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'stormy_night', scene: 'fog', stormy: true, waves: 20, grassRows: [0, 1, 4, 5], rows: 6, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'fog', desc: '风雨交加的浓雾夜' },
-  bungee_blitz: { id: 114, label: '蹦极闪电战', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'bungee_blitz', scene: 'roof', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'roof', potColumns: 4, desc: '蹦极僵尸从天而降' },
+  bungee_blitz: { id: 114, label: '蹦极闪电战', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'bungee_blitz', scene: 'roof', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'roof', potColumns: 3, desc: '蹦极僵尸从天而降' },
   bobsled_bonanza: { id: 115, label: '雪橇大丰收', mode: 'minigame', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [[6, 1], [7, 1], [8, 2]], skySun: false, chooseSeeds: true, bankSlots: 6, bgm: 'front_night', zombieTypes: ['BOBSLED', 'NORMAL', 'CONE'], desc: '冰车僵尸组团来袭' },
   pogo_party: { id: 116, label: '跳跳派对',   mode: 'minigame', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: true, bankSlots: 6, bgm: 'front_night', zombieTypes: ['POGO', 'NORMAL', 'CONE'], desc: '跳跳僵尸的狂欢' },
   zombies_speed: { id: 117, label: '高速僵尸', mode: 'minigame', scene: 'day', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: true, chooseSeeds: true, bankSlots: 6, bgm: 'front_day', speedMul: 2, desc: '僵尸们都喝了红牛' },
@@ -399,20 +401,20 @@ const MODE_LEVELS = {
   vasebreaker: { id: 201, label: '花瓶终结者 I', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '打碎罐子, 释放植物或僵尸', vaseRecipe: 'sp1' },
   vasebreaker2: { id: 202, label: '花瓶终结者 II', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '更凶险的罐子阵', vaseRecipe: 'sp2' },
   vasebreaker3: { id: 203, label: '花瓶终结者 III', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '终极罐子考验', vaseRecipe: 'sp3' },
-  izombie:     { id: 204, label: '我是僵尸 I', mode: 'puzzle', fixed: 'izombie', scene: 'day',   waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '指挥僵尸吃到脑子' },
+  izombie:     { id: 204, label: '我是僵尸 I', mode: 'puzzle', fixed: 'izombie', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '指挥僵尸吃到脑子' },
   izombie2:    { id: 205, label: '我是僵尸 II', mode: 'puzzle', fixed: 'izombie', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '夜晚的僵尸指挥官', izLayout: 'hard1' },
-  izombie3:    { id: 206, label: '我是僵尸 III', mode: 'puzzle', fixed: 'izombie', scene: 'day',   waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 200, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '铜墙铁壁的植物防线', izLayout: 'hard2' },
+  izombie3:    { id: 206, label: '我是僵尸 III', mode: 'puzzle', fixed: 'izombie', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 200, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '铜墙铁壁的植物防线', izLayout: 'hard2' },
   // ---- 生存模式 (原版 CHALLENGE_PAGE_SURVIVAL: 普通 5 + 困难 5) ----
   survival_day:   { id: 301, label: '白天生存',   mode: 'survival', scene: 'day',   waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true,  chooseSeeds: true, bankSlots: 9, bgm: 'front_day', endless: true, desc: '白天草坪无尽挑战' },
   survival_night: { id: 302, label: '黑夜生存',   mode: 'survival', scene: 'night', waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [[5, 1], [6, 1], [7, 2], [8, 3]], skySun: false, chooseSeeds: true, bankSlots: 9, bgm: 'front_night', endless: true, desc: '黑夜墓园无尽挑战' },
   survival_pool:  { id: 303, label: '泳池生存',   mode: 'survival', scene: 'pool',  waves: 999, grassRows: [0, 1, 4, 5], rows: 6, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 9, bgm: 'pool', endless: true, desc: '泳池派对无尽挑战' },
   survival_fog:   { id: 304, label: '浓雾生存',   mode: 'survival', scene: 'fog',   waves: 999, grassRows: [0, 1, 4, 5], rows: 6, startSun: 50, graves: [], skySun: false, chooseSeeds: true, bankSlots: 9, bgm: 'fog', endless: true, desc: '浓雾迷局无尽挑战' },
-  survival_roof:  { id: 305, label: '屋顶生存',   mode: 'survival', scene: 'roof',  waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 9, bgm: 'roof', endless: true, potColumns: 4, desc: '屋顶决战无尽挑战' },
+  survival_roof:  { id: 305, label: '屋顶生存',   mode: 'survival', scene: 'roof',  waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 9, bgm: 'roof', endless: true, potColumns: 3, desc: '屋顶决战无尽挑战' },
   survival_day_hard:   { id: 306, label: '白天生存·难', mode: 'survival', scene: 'day',   waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true,  chooseSeeds: true, bankSlots: 10, bgm: 'front_day', endless: true, hard: true, desc: '硬仗: 全兵种僵尸' },
   survival_night_hard: { id: 307, label: '黑夜生存·难', mode: 'survival', scene: 'night', waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [[4, 1], [5, 2], [6, 2], [7, 3], [8, 3]], skySun: false, chooseSeeds: true, bankSlots: 10, bgm: 'front_night', endless: true, hard: true, desc: '硬仗: 黑夜重甲军团' },
   survival_pool_hard:  { id: 308, label: '泳池生存·难', mode: 'survival', scene: 'pool',  waves: 999, grassRows: [0, 1, 4, 5], rows: 6, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 10, bgm: 'pool', endless: true, hard: true, desc: '硬仗: 海豚雪橇齐上阵' },
   survival_fog_hard:   { id: 309, label: '浓雾生存·难', mode: 'survival', scene: 'fog',   waves: 999, grassRows: [0, 1, 4, 5], rows: 6, startSun: 50, graves: [], skySun: false, chooseSeeds: true, bankSlots: 10, bgm: 'fog', endless: true, hard: true, desc: '硬仗: 矿工气球夜袭' },
-  survival_roof_hard:  { id: 310, label: '屋顶生存·难', mode: 'survival', scene: 'roof',  waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 10, bgm: 'roof', endless: true, potColumns: 4, hard: true, desc: '硬仗: 投石车与巨人' },
+  survival_roof_hard:  { id: 310, label: '屋顶生存·难', mode: 'survival', scene: 'roof',  waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 10, bgm: 'roof', endless: true, potColumns: 3, hard: true, desc: '硬仗: 投石车与巨人' },
 };
 
 // 原版波次生成常量

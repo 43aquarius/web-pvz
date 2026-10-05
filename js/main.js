@@ -43,15 +43,62 @@ const Game = {
     this.ctx = cv.getContext('2d');
     UI.init(this);
     this.audio = require('./audio');
-    // 极简加载提示 (无全屏加载动画): 网络慢(>3s)才显示底部小字, 加载完成即隐藏
+    // ---- 原版风格加载页 (LoadBar: 泥土槽 + 草条进度 + 僵尸头拉杆) (#8) ----
+    const drawLoading = (p) => {
+      const ctx = this.ctx;
+      if (!ctx) return;
+      ctx.save();
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, 800, 600);
+      const cx = 400, cy = 300;
+      // 泥土槽 (原版 LoadBar_dirt 321x53)
+      const dirt = Assets.image('loadbar_dirt.png');
+      if (dirt) {
+        ctx.drawImage(dirt, cx - dirt.width / 2, cy - dirt.height / 2);
+        // 草条进度 (原版 LoadBar_grass 314x33, 从左向右生长)
+        const grass = Assets.image('loadbar_grass.png');
+        if (grass) {
+          const gw = Math.max(1, Math.floor(grass.width * p));
+          ctx.drawImage(grass, 0, 0, gw, grass.height, cx - grass.width / 2, cy - grass.height / 2 - 6, gw, grass.height);
+        }
+      } else {
+        // 兜底: 简易进度条
+        ctx.fillStyle = '#3a2c14'; ctx.fillRect(cx - 160, cy - 10, 320, 20);
+        ctx.fillStyle = '#8fd63a'; ctx.fillRect(cx - 158, cy - 8, 316 * p, 16);
+      }
+      // 僵尸头 (原版 LoadBar_Zombiehead reanim, 进度驱动帧)
+      try {
+        const REl = require('./reanim');
+        if (REl.hasDef && REl.hasDef('LoadBar_Zombiehead')) {
+          if (!this._loadHead) {
+            this._loadHead = Assets.reanim('LoadBar_Zombiehead');
+          }
+          const h = this._loadHead;
+          h.play('anim_zombie', REl.PLAY_ONCE_HOLD, 0);
+          h.animTime = Math.min(0.999, p);
+          h.setPosition(cx + 150, cy - 8);
+          h.draw(ctx);
+        }
+      } catch (e) { }
+      // LOADING 文字 (原版 LoadBar 下方)
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 16px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#e8d9b0';
+      ctx.fillText('正在加载…', cx, cy + 52);
+      ctx.restore();
+    };
+    drawLoading(0.03);
+    // 网络慢提示兜底 (>6s)
     const hint = document.getElementById('loadhint');
     let hintShown = false;
     const hintTimer = setTimeout(() => {
       if (hint && !this._assetsReady) { hint.style.display = 'block'; hintShown = true; }
-    }, 3000);
+    }, 6000);
     await Assets.load((p, msg) => {
+      drawLoading(Math.max(0.03, Math.min(1, p)));
       if (hint && hintShown) hint.textContent = `正在进入游戏 ${(p * 100).toFixed(0)}%`;
     });
+    drawLoading(1);
     clearTimeout(hintTimer);
     if (hint) { hint.style.display = 'none'; hint.textContent = ''; }
     this._assetsReady = true;
@@ -252,6 +299,15 @@ const Game = {
     if (p.x > 681 && p.x < 798 && p.y > 0 && p.y < 36) { this.openMenuDialog(); return; }
     // ---- 特殊模式点击路由 (打僵尸/罐子/我不是僵尸/雨天种子) ----
     if (board.modeClick && board.modeClick(this, p)) return;
+    // 传送带: 点击左侧槽位卡 → 拿起/放下 (原版 RefreshSeedPacketFromCursor ↔ Activate) (#15)
+    if (board.mode === 'conveyor' && board.belt && board.seedCards[0]) {
+      const bankY = Cutscene.active ? Cutscene.seedBankY : 0;
+      if (p.x > 14 && p.x < 74 && p.y > bankY + 2 && p.y < bankY + 80) {
+        this.selectedCard = this.selectedCard >= 0 ? -1 : 0;
+        this.audio.play('seedlift');
+        return;
+      }
+    }
     // 传送带: 点击带上卡片 → 取卡 (原版 MouseHitTest: x = 91+i*50+offset)
     if (board.mode === 'conveyor' && board.belt) {
       for (let i = 0; i < board.belt.items.length; i++) {
@@ -368,7 +424,9 @@ const Game = {
           }
           return;
         }
-        this.tryPlant(cards[this.selectedCard].type, row, col, board);
+        const plantedOk = this.tryPlant(cards[this.selectedCard].type, row, col, board);
+        // 传送带: 点击无效位置 → 卡回最左槽位 (原版 RefreshSeedPacketFromCursor, #15)
+        if (board.mode === 'conveyor' && !plantedOk) this.selectedCard = -1;
         return;
       }
       // 罐子解谜: 免费植物种植 (原版 CURSOR_TYPE_PLANT_FROM_USABLE_COIN, 不扣阳光)
@@ -434,14 +492,14 @@ const Game = {
     // 咖啡豆必须种在睡着的蘑菇上
     if (type === 'COFFEEBEAN') {
       const target = board.grid[row][col];
-      if (!target || !target.sleeping) { this.audio.play('buzzer'); return; }
+      if (!target || !target.sleeping) { this.audio.play('buzzer'); return false; }
       target.setSleep(false);
       this.audio.play('coffee');
       if (!conveyor) board.sun -= def.cost;
       if (card) card.cd = def.cd / 1000;
       if (conveyor) board.seedCards = [];
       this.selectedCard = -1;
-      return;
+      return true;
     }
     // 墓碑吞噬者必须种在墓碑上
     if (type === 'GRAVEBUSTER') {
@@ -478,6 +536,7 @@ const Game = {
     if (free) this.freePlant = null;      // 免费植物用后清空
     this.selectedCard = -1;
     this.audio.play(board.isWater(row, col) ? 'plant_water' : (Math.random() < 0.5 ? 'plant' : 'plant2'));
+    return true;
   },
 
   fireCob(cannon, col, row, board) {
@@ -626,6 +685,13 @@ const Game = {
   shopUnlocked() { return this.progress.unlocked > 24 || this.debugUnlocked; },
   // ---------- 禅镜花园 (通关 5-4 解锁) ----------
   zenGardenUnlocked() { return this.progress.unlocked > 44 || this.debugUnlocked; },
+  // ---------- 三模式入口 (原版 GameSelector: HasFinishedAdventure 通关冒险后解锁, #6) ----------
+  modeUnlocked(k) {
+    if (k === 'minigames' || k === 'puzzle' || k === 'survival') {
+      return this.progress.unlocked > 50 || this.debugUnlocked;
+    }
+    return true;
+  },
   buyItem(key) {
     const it = SHOP_ITEMS.find(s => s.key === key);
     if (!it || this.purchased[key]) return false;

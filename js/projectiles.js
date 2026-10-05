@@ -35,6 +35,15 @@ class Projectile {
       this.velZ = (ty - y) / 1.2 - 700;        // 初速 -700px/s 向上
       this.accZ = 1150;                        // 重力 (0.115/tick²)
       this.arcH = this.def.arcH || 180;
+      // 原版 Projectile 构造旋转 (#2): cabbage/butter -50.4° 慢转, melon -72° 慢转, kernel 快转
+      const rs = () => -(0.08 - Math.random() * 0.06);   // rand(-0.08,-0.02) rad/frame
+      if (this.type === 'cabbage' || this.type === 'butter') {
+        this.spin = -50.4; this.spinSpeed = rs() * 60;
+      } else if (this.type === 'melon' || this.type === 'wintermelon') {
+        this.spin = -72; this.spinSpeed = rs() * 60;
+      } else if (this.type === 'kernel') {
+        this.spin = 0; this.spinSpeed = -(0.2 - Math.random() * 0.12) * 60;
+      }
     }
     // 追踪弹
     if (this.def.homing && opts.target) {
@@ -91,14 +100,20 @@ class Projectile {
       this.velZ += this.accZ * dt;
       this.x += this.velX * dt;
       this.y = this.baseY + this.z;
-      // 原版: 上升中不判定碰撞, 下落中开始命中检测
-      if (this.velZ > 0) {
+      if (this.spinSpeed) this.spin = (this.spin || 0) + this.spinSpeed * dt;
+      // 原版 UpdateLobMotion: 上升中不判定; mProjectileAge>20 且下落中, z 高于 aMinCollisionZ 才检测
+      if (this.velZ > 0 && this.t > 0.33) {
+        // 原版 aMinCollisionZ: butter -32 / melon -35 / cabbage-kernel -30, 池子行 +40
+        let minColZ = this.type === 'butter' ? -32
+          : (this.type === 'melon' || this.type === 'wintermelon') ? -35 : -30;
+        if (board.isPoolRow(this.row)) minColZ += 40;
         const groundZ = (board.gridY(this.row) + 30) - this.baseY;
-        // 落点行僵尸碰撞 (命中窗口: 距地面 30px 内)
-        if (this.z >= groundZ - 32) {
+        // 命中高度窗口 (z 相对发射点)
+        if (this.z >= minColZ) {
           for (const z of board.zombies) {
             if (z.dead || z.row !== this.row || z.hittable === false || z.boss || z.underground || z.underwater) continue;
-            if (Math.abs(z.hitX() - this.x) < 50) {
+            // 原版碰撞盒重叠: 僵尸盒~90px宽 × 子弹盒~40px宽 → 中心距<62
+            if (Math.abs(z.hitX() - this.x) < 62) {
               const flags = { chill: this.def.chill };
               z.takeDamage(this.def.dmg, board, flags);
               if (this.def.stun) z.butter = this.def.stun;

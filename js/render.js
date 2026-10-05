@@ -73,6 +73,20 @@ const Renderer = {
   },
 
   drawScene(ctx, board) {
+    // ---- I, Zombie 红线 (原版 Challenge::DrawBackdrop: IMAGE_WALLNUT_BOWLINGSTRIPE 背景层) ----
+    // 层级在草地/僵尸之下、cutscene 戴夫之下, 且随 camera pan 移动 (#4a)
+    if (board.mode === 'izombie') {
+      const stripe = Assets.image('wallnut_bowlingstripe.png');
+      const lineX = 40 + (board.izombieLimit || 4) * 80 - 8;
+      if (stripe) {
+        ctx.drawImage(stripe, lineX, 73);
+      } else {
+        ctx.save();
+        ctx.fillStyle = 'rgba(216,48,40,0.85)';
+        ctx.fillRect(lineX, 90, 6, 400);
+        ctx.restore();
+      }
+    }
     // ---- 泳池水面 (原版 PoolEffect: 水面波动 + 波光端端) ----
     if (board.waterRows.length) this.drawPoolWater(ctx, board);
     // ---- 冰道 (Zamboni/Bobsled) ----
@@ -215,10 +229,14 @@ const Renderer = {
       }
     }
     if (a.type === 'seed' && a.plant && UI) {
-      const packet = Assets.image('seedpacket_larger.png');
-      if (packet) ctx.drawImage(packet, -40, -50, 80, 100);
+      // 原版 DrawSeedPacket: 掉落奖励用 IMAGE_SEEDS 卡槽尺寸 (50×70) — 非大包 (#16)
       const thumb = UI.getThumb(a.plant);
-      if (thumb) ctx.drawImage(thumb, -25, -40, 50, 70);
+      const tw = thumb ? thumb.width : 60, th = thumb ? thumb.height : 60;
+      const s = Math.min(36 / tw, 44 / th);   // 包内植物缩略图 (原版 scale 0.5)
+      // 卡槽种子包底 (50×70) — 从 seedpacket_larger 等比缩放绘制
+      const packet = Assets.image('seedpacket_larger.png');
+      if (packet) ctx.drawImage(packet, -25, -35, 50, 70);
+      if (thumb) ctx.drawImage(thumb, -tw * s / 2, -35 + 8 + (44 - th * s) / 2, tw * s, th * s);
     } else {
       // 道具/纸条/奖杯奖励图
       const map = {

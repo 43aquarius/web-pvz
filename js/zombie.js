@@ -2828,9 +2828,11 @@ class Zombie {
   }
 
   hitIceTrap() {
+    // 原版 Zombie::HitIceTrap: 先 ApplyChill(true), CanBeFrozen 守卫后才冻结动画
+    this.applyChill(true);
+    if (!this.canBeFrozen) return;
     this.iceTrapCounter = 1000;
     this.butteredCounter = Math.min(this.butteredCounter, 0);
-    this.chilledCounter = 1000;
     this.playZombieReanim('anim_frozen', RE.LOOP, 0, 0);
     this.board.game.audio.play('frozen');
     this.updateAnimSpeed();

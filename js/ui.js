@@ -91,6 +91,8 @@ const UI = {
       }
       // 像素级包围盒 (probe: 植物原点置于 (150,150), 含挂载头)
       const body = layers[0];
+      // 爆炸坚果: 卡面红色 tint (原版同场上渲染色) (#5)
+      if (type === 'EXPLODEONUT') for (const r of layers) r.colorOverride = [255, 96, 80, 255];
       body.setPosition(150, 150);
       body.refreshAttachments();
       const probe = document.createElement('canvas');
@@ -139,11 +141,13 @@ const UI = {
     // 缩略图
     const thumb = this.getThumb(type);
     if (thumb) ctx.drawImage(thumb, x, y, w, h);
-    // 费用 (原版: 黑色, 包底部)
-    ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#000';
-    ctx.fillText(String(def.cost), x + 25 + 1, y + h - 8);
+    // 费用 (原版: 黑色, 包底部; 传送带关卡 theDrawCost=false 不显示) (#4b)
+    if (!opts.noCost) {
+      ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#000';
+      ctx.fillText(String(def.cost), x + 25 + 1, y + h - 8);
+    }
     // 冷却遮罩 (原版: 从顶部往下变暗, 深灰64)
     if (opts.cooldown > 0) {
       const cd = opts.cooldown / (def.cd / 1000);
@@ -225,14 +229,14 @@ const UI = {
           const it = board.belt.items[i];
           const x = 91 + i * 50 + it.offset;
           ctx.save();
-          this.drawSeedCard(ctx, it.type, x, 8 + bankY, {});
+          this.drawSeedCard(ctx, it.type, x, 8 + bankY, { noCost: true });   // 原版传送带不画价格 (#4b)
           ctx.restore();
         }
         ctx.restore();
-        // 已取卡 (选中的那一张)
-        if (game.selectedCard >= 0 && board.seedCards[0]) {
+        // 最左槽位: 当前持有的传送带卡 (放下时也常显, 点击可重新拿起) (#15)
+        if (board.seedCards && board.seedCards[0]) {
           ctx.save();
-          this.drawSeedCard(ctx, board.seedCards[0].type, 20, 8 + bankY, { selected: true });
+          this.drawSeedCard(ctx, board.seedCards[0].type, 20, 8 + bankY, { selected: game.selectedCard >= 0, noCost: true });
           ctx.restore();
         }
       }
@@ -629,17 +633,7 @@ const UI = {
         break;
       }
       case 'izombie': {
-        // 红线 (原版 Challenge::DrawBackdrop: IMAGE_WALLNUT_BOWLINGSTRIPE @ 352,73, IZ1-5=前4列)
-        const stripe = Assets.image('wallnut_bowlingstripe.png');
-        const lineX = 40 + board.izombieLimit * 80 - 8;
-        if (stripe) {
-          ctx.drawImage(stripe, lineX, 73);
-        } else {
-          ctx.save();
-          ctx.fillStyle = 'rgba(216,48,40,0.85)';
-          ctx.fillRect(lineX, 90, 6, 400);
-          ctx.restore();
-        }
+        // 红线已移至 Renderer.drawScene 背景层 (草地之上/僵尸与戴夫之下, 随 camera) — #4a
         // 脑子 (原版 GRIDITEM_IZOMBIE_BRAIN: 每行最左)
         const brainImg = Assets.image('brain.png');
         for (const b of board.brains) {
@@ -877,72 +871,71 @@ const UI = {
   drawAlmanac(ctx) {
     const game = this.game;
     const a = game.almanac;
-    // ---- 索引页 (原版 ALMANAC_PAGE_INDEX: 左向日葵/右僵尸 站在草地上) ----
+    // ---- 索引页 (原版 DrawIndex: INDEXBACK 自带展示窗; 向日葵@(167,255) 僵尸@(535,215)) ----
     if (a.tab === 'index') {
       const bg = Assets.image('almanac_indexback.jpg');
       if (bg) ctx.drawImage(bg, 0, 0, 800, 600);
       else { ctx.fillStyle = '#4a3720'; ctx.fillRect(0, 0, 800, 600); }
-      // 标题 (原版 [SUBURBAN_ALMANAC_INDEX])
+      // 标题 (原版 [SUBURBAN_ALMANAC_INDEX] @ 400,60 居中 白色)
       ctx.save();
-      ctx.font = 'bold 34px "Noto Sans SC", sans-serif';
+      ctx.font = 'bold 28px "Noto Sans SC", sans-serif';
       ctx.textAlign = 'center';
-      ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(60,40,10,0.85)'; ctx.lineJoin = 'round';
-      ctx.strokeText('城郊植物大图鉴', 400, 78);
-      ctx.fillStyle = '#ffe9a8';
-      ctx.fillText('城郊植物大图鉴', 400, 78);
+      ctx.fillStyle = '#e6e6e6';
+      ctx.fillText('城郊植物大图鉴', 400, 70);
       ctx.restore();
-      // 左右两侧草地地面 (原版索引页: 向日葵与僵尸各自站在 almanac_groundday 上) — #5
-      const groundL = Assets.image('almanac_groundday.jpg');
-      if (groundL) {
-        ctx.save();
-        ctx.drawImage(groundL, 90, 300, 240, 170);
-        ctx.drawImage(groundL, 470, 300, 240, 170);
-        ctx.restore();
-      }
-      // 左: 向日葵模型 / 右: 普通僵尸模型 (原版真实模型, 站在地面中央)
+      // 左: 向日葵 (原版 ALMANAC_INDEXPLANT_POSITION (167,255), 格区 80x100)
       const sunflower = this.almanacModel('plants', 'SUNFLOWER');
       if (sunflower) {
         sunflower.update(1 / 60);
-        ctx.save(); ctx.translate(210, 385); ctx.scale(1.15, 1.15);
-        sunflower.setPosition(0, 0); sunflower.draw(ctx);
+        ctx.save();
+        sunflower.setPosition(207, 265);
+        sunflower.draw(ctx);
         ctx.restore();
       }
+      // 右: 普通僵尸 (原版 ALMANAC_INDEXZOMBIE_POSITION (535,215))
       const norm = this.almanacModel('zombies', 'NORMAL');
       if (norm) {
         norm.update(1 / 60);
-        ctx.save(); ctx.translate(590, 390); ctx.scale(1.05, 1.05);
-        norm.setPosition(0, 0); norm.draw(ctx);
+        ctx.save();
+        norm.setPosition(535, 215);
+        norm.draw(ctx);
         ctx.restore();
       }
-      // 两大按钮 (原版 VIEW_PLANTS / VIEW_ZOMBIES 木牌按钮, 位于两侧下方)
-      this._almIndexBtns = [
-        { k: 'plants', x: 100, y: 470, w: 230, h: 56, label: '查看植物', c: '#5a9a3a' },
-        { k: 'zombies', x: 470, y: 470, w: 230, h: 56, label: '查看僵尸', c: '#a05a3a' },
-      ];
+      // 两大按钮 (原版 PlantButton @130,345 156x42 SEEDCHOOSER_BUTTON / ZombieButton @487,345 210x48)
       const hover = this._screens() ? this._screens().hover : null;
+      const pb = Assets.image('seedchooser_button.png');
+      const pbg = Assets.image('seedchooser_button_glow.png');
+      this._almIndexBtns = [
+        { k: 'plants', x: 130, y: 345, w: 156, h: 42, label: '查看植物' },
+        { k: 'zombies', x: 487, y: 345, w: 210, h: 48, label: '查看僵尸' },
+      ];
       for (const b of this._almIndexBtns) {
         const hov = hover === 'alm_' + b.k;
         ctx.save();
-        ctx.fillStyle = hov ? '#7ac85a' : b.c;
-        ctx.strokeStyle = '#2a1f0a'; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 12); ctx.fill(); ctx.stroke();
-        ctx.font = 'bold 24px "Noto Sans SC", sans-serif';
+        if (pb) {
+          ctx.drawImage(hov && pbg ? pbg : pb, b.x, b.y);
+        } else {
+          ctx.fillStyle = hov ? '#7ac85a' : '#5a9a3a';
+          ctx.strokeStyle = '#2a1f0a'; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 10); ctx.fill(); ctx.stroke();
+        }
+        ctx.font = 'bold 20px "Noto Sans SC", sans-serif';
         ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
-        ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 8);
+        ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 7);
         ctx.restore();
       }
-      // 返回按钮 (原版右上 CLOSE (676,567))
-      this._almClose = { x: 700, y: 552, w: 84, h: 36 };
+      // 关闭按钮 (原版 mCloseButton @676,567 89x26 ALMANAC_CLOSEBUTTON)
+      this._almClose = { x: 676, y: 567, w: 89, h: 26 };
       const cb = Assets.image('almanac_closebutton.png');
       if (cb) {
         const cbh = Assets.image('almanac_closebuttonhighlight.png');
-        ctx.drawImage(hover === 'alm_close' && cbh ? cbh : cb, 676, 548);
+        ctx.drawImage(hover === 'alm_close' && cbh ? cbh : cb, 676, 567);
       } else {
         ctx.fillStyle = '#a03a3a';
-        ctx.beginPath(); ctx.roundRect(700, 552, 84, 36, 6); ctx.fill();
-        ctx.font = 'bold 16px "Noto Sans SC", sans-serif';
+        ctx.beginPath(); ctx.roundRect(676, 567, 89, 26, 5); ctx.fill();
+        ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
         ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
-        ctx.fillText('关 闭', 742, 576);
+        ctx.fillText('关 闭', 720, 586);
       }
       return;
     }
@@ -1071,24 +1064,30 @@ const UI = {
       }
       ctx.restore();
     }
-    // ---- 返回索引按钮 (原版左下 (32,567)) ----
-    this._almBack = { x: 20, y: 548, w: 150, h: 42 };
+    // ---- 返回索引按钮 (原版 mIndexButton @32,567 164x26 ALMANAC_INDEXBUTTON) ----
+    this._almBack = { x: 32, y: 567, w: 164, h: 26 };
     const hov = (this._screens() ? this._screens().hover : null) === 'alm_back';
     ctx.save();
-    ctx.fillStyle = hov ? '#8a6a3a' : '#6a5230';
-    ctx.strokeStyle = '#2a1f0a'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.roundRect(20, 548, 150, 42, 8); ctx.fill(); ctx.stroke();
-    ctx.font = 'bold 16px "Noto Sans SC", sans-serif';
-    ctx.textAlign = 'center'; ctx.fillStyle = '#f4e6b0';
-    ctx.fillText('返 回 目 录', 95, 575);
+    const ib = Assets.image('almanac_indexbutton.png');
+    if (ib) {
+      const ibh = Assets.image('almanac_indexbuttonhighlight.png');
+      ctx.drawImage(hov && ibh ? ibh : ib, 32, 567);
+    } else {
+      ctx.fillStyle = hov ? '#8a6a3a' : '#6a5230';
+      ctx.strokeStyle = '#2a1f0a'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.roundRect(32, 567, 164, 26, 8); ctx.fill(); ctx.stroke();
+      ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center'; ctx.fillStyle = '#f4e6b0';
+      ctx.fillText('返 回 目 录', 114, 586);
+    }
     ctx.restore();
-    // 关闭
-    this._almClose = { x: 700, y: 552, w: 84, h: 36 };
+    // 关闭 (原版 @676,567)
+    this._almClose = { x: 676, y: 567, w: 89, h: 26 };
     const cb2 = Assets.image('almanac_closebutton.png');
     if (cb2) {
       const cb2h = Assets.image('almanac_closebuttonhighlight.png');
       const hovC = (this._screens() ? this._screens().hover : null) === 'alm_close';
-      ctx.drawImage(hovC && cb2h ? cb2h : cb2, 676, 548);
+      ctx.drawImage(hovC && cb2h ? cb2h : cb2, 676, 567);
     }
   },
   _almWrap(ctx, text, x, y, maxW, lineH) {

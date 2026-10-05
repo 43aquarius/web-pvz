@@ -738,8 +738,8 @@ class Board {
   checkWinLose() {
     // 我不是僵尸: 僵尸进屋 = 吃到脑子 = 胜利 (由 updateMode 判定)
     if (this.mode === 'izombie') return;
-    // 打僵尸模式: 僵尸走到左边直接消失 (不计失败, 原版 whack 无失败判定只有清场胜利)
-    if (this.mode === 'whack') {
+    // 打僵尸/砸罐子模式: 僵尸走到左边直接消失 (原版无失败判定, 只有清场胜利)
+    if (this.mode === 'whack' || this.mode === 'vasebreaker') {
       for (const z of this.zombies) {
         if (!z.dead && z.x < -70) z.dieNoLoot();
       }
@@ -1538,6 +1538,7 @@ class Effect {
       case 'chomper_bite': if (this.t > 0.3) this.dead = true; break;
       case 'zag': if (this.t > 0.4) this.dead = true; break;
       case 'text': if (this.t > (this.opts.hold || 2)) this.dead = true; break;
+      case 'screen_flash': if (this.t > 0.7) this.dead = true; break;
       case 'vase_shatter': {
         // 碎片物理: 重力500, 弹跳0.5, 5s清理 (原版 pot_vase_chunks)
         for (const p of this.parts || []) {
