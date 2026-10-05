@@ -525,8 +525,13 @@ const RE = (function () {
       ctx.save();
       ctx.transform(M[0], M[1], M[2], M[3], M[4], M[5]);
       ctx.globalAlpha *= alpha;
-      // 主绘制 (色调覆盖: 减速蓝/魅惑紫/灼烧黑)
-      if (r !== 255 || g !== 255 || b !== 255) {
+      // 纯色剪影模式 (我是僵尸纸牌植物: 原版 FILTER_EFFECT_WHITE + Colorize)
+      if (this.solidColor) {
+        const sc = this.solidColor;
+        const sil = Reanimation._silhouette(img, sc[0], sc[1], sc[2]);
+        ctx.drawImage(sil, -w / 2, -h / 2);
+      } else if (r !== 255 || g !== 255 || b !== 255) {
+        // 主绘制 (色调覆盖: 减速蓝/魅惑紫/灼烧黑)
         const src = Reanimation._tint(img, r, g, b);
         ctx.drawImage(src, -w / 2, -h / 2);
       } else {
@@ -564,6 +569,23 @@ const RE = (function () {
       cx.drawImage(img, 0, 0);
       cx.globalCompositeOperation = 'source-over';
       img.__tints[k] = c;
+      return c;
+    }
+    // 纯色剪影缓存 (我是僵尸纸牌效果: 原版 FILTER_EFFECT_WHITE + SetColorizeImages)
+    static _silhouette(img, r, g, b) {
+      if (!img.__sils) img.__sils = {};
+      const k = r + '_' + g + '_' + b;
+      let c = img.__sils[k];
+      if (c) return c;
+      const w = img.width || img.naturalWidth, h = img.height || img.naturalHeight;
+      c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const cx = c.getContext('2d');
+      cx.drawImage(img, 0, 0);
+      cx.globalCompositeOperation = 'source-in';
+      cx.fillStyle = `rgb(${r},${g},${b})`;
+      cx.fillRect(0, 0, w, h);
+      img.__sils[k] = c;
       return c;
     }
     // 轨道当前显示状态 (IsTrackShowing)

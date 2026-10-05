@@ -75,6 +75,7 @@ const Audio2 = (function () {
     squish: 'SFX/zombie/squish.ogg',
     zombiesplash: 'sounds/zombiesplash.ogg',
     swing: 'SFX/item/swing.ogg', bonk: 'SFX/item/bonk.ogg',
+    bowling: 'SFX/plant/bowling.ogg', bowlingpin: 'SFX/bullet/bowlingimpact.ogg', bowlingpin2: 'SFX/bullet/bowlingimpact2.ogg',
     coffee: 'sounds/coffee.ogg',
     coblauncher: 'sounds/coblaunch.ogg', coblaunch: 'sounds/coblaunch.ogg',
     bossintro: 'sounds/evillaugh.ogg', bossdie: 'sounds/bossexplosion.ogg',

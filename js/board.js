@@ -389,6 +389,10 @@ class Board {
     for (const s of this.suns) s.update(dt, this);
     for (const c of this.coins) c.update(dt, this);
     for (const m of this.mowers) this.updateMower(m, dt);
+    // 墓碑升起动画 (原版 mGridItemCounter 0→100; 打僵尸中途补墓也走此动画)
+    for (const g of this.graves) {
+      if (g.rise !== undefined && g.rise < 1) g.rise = Math.min(1, g.rise + dt * 1.6);
+    }
     this.updateMode(dt);
     this.updateVisuals(dt);
     // 清理
@@ -453,7 +457,10 @@ class Board {
   updateWaves(dt) {
     if (this.state !== 'playing') return;
     if (!this.wavesStarted) return;
-    if (!this.waves.length) return;   // 无波次模式 (打僵尸/罐子/我不是僵尸): 胜利由 updateMode 判定
+    if (!this.waves.length) return;
+    // 原版 Challenge::UpdateZombieSpawning 返回 true 阻断常规刷怪:
+    // 我不是僵尸/罐子解谜/打僵尸 由 updateMode 全权管理出怪
+    if (this.mode === 'izombie' || this.mode === 'vasebreaker' || this.mode === 'whack') return;
     if (this.wave >= this.totalWaves) {
       if (this.zombies.filter(z => z.fromWave !== -2 && !z.dead).length === 0) this.triggerWin();
       return;
@@ -466,16 +473,21 @@ class Board {
       }
     }
     const nextW = this.wave;
+    // 原版: 旗波(含最后一波)前 750tick 显示"一大波僵尸正在接近"红字, 停留至出怪
     if (this.waveTimer <= WAVE.HUGE_WAVE_WARN && this.waveTimer > 0 && !this.hugeWaveWarned) {
       const isFlagNext = this.waves[nextW] && this.waves[nextW].flag;
-      const isFinalNext = this.waves[nextW] && this.waves[nextW].final;
-      if (isFlagNext || isFinalNext) {
+      if (isFlagNext) {
         this.hugeWaveWarned = true;
-        if (isFinalNext) Banners.showFinalWave(3.6, this.game.audio);
-        else Banners.show('approaching.png', 3.6, 'hugewave', this.game.audio);
+        Banners.show('approaching.png', WAVE.HUGE_WAVE_WARN, 'hugewave', this.game.audio);
       }
     }
     if (this.waveTimer <= 0) {
+      // 原版 NextWaveComing: 最后一波出怪瞬间显示 FinalWave reanim + finalwave 音效(延迟0.6s)
+      // (生存重选/最后 Stand/连续挑战不显示 — 对应 endless 关卡跳过)
+      const spawning = this.waves[nextW];
+      if (spawning && spawning.final && !this.level.endless) {
+        Banners.showFinalWave(2.1, this.game.audio);
+      }
       this.spawnWave();
     }
   }
@@ -493,6 +505,9 @@ class Board {
     const w = this.waves[this.wave - 1];
     this.lastWaveTime = this.time;
     this.hugeWaveWarned = false;
+    // 原版 NextWaveComing 音效: 首波 AWOOGA, 旗波 SIREN
+    if (this.wave === 1) this.game.audio.play('awooga');
+    else if (w.flag) this.game.audio.play('siren');
     const next = this.waves[this.wave];
     if (next && next.flag) { this.waveTimer = WAVE.BEFORE_FLAG; this._waveTimerStart = this.waveTimer; }
     else { this.waveTimer = WAVE.WAVE_DELAY + Math.random() * WAVE.WAVE_DELAY_RANGE; this._waveTimerStart = this.waveTimer; }
@@ -574,7 +589,7 @@ class Board {
       z.zombieHeight = H.FALLING;
       z.altitude = 400;
       z.velX = 0;
-      try { z.playZombieReanim('anim_falling', RE.PLAY_ONCE_HOLD, 20); } catch (e) { }
+      try { z.playZombieReanim('anim_falling', RE.PLAY_ONCE_HOLD, 0, 20); } catch (e) { }
     }
   }
 
@@ -582,6 +597,73 @@ class Board {
     const col = Math.floor(Math.random() * 9);
     const targetY = this.gridY(Math.floor(Math.random() * this.rows)) + 40 + Math.random() * 30;
     this.suns.push(new Sun(this.gridX(col) + Math.random() * 40, -60, targetY, 'sky'));
+  }
+
+  // ---------- 打僵尸模式 (原版 WhackAZombie 系列) ----------
+  // 原版 WhackAZombiePlaceGraves: 列3..8 随机格, 避开已有墓碑
+  whackPlaceGraves(count) {
+    const cells = [];
+    for (let c = 3; c < 9; c++) {
+      for (const r of this.grassRows) {
+        if (this.graves.some(g => g.row === r && g.col === c)) continue;
+        cells.push([r, c]);
+      }
+    }
+    for (let i = 0; i < count && cells.length; i++) {
+      const [r, c] = cells.splice(Math.floor(Math.random() * cells.length), 1)[0];
+      this.graves.push({ row: r, col: c, rise: 0 });
+      this.addEffect('dust', this.gridX(c) + 40, this.cellY(r, c) + 60);
+      this.game.audio.play('gravebuttonchime');
+    }
+  }
+  // 原版 WhackAZombieSpawning 组生成: 相位权重 + 墓碑随机 + 快速奔跑
+  whackSpawnGroup() {
+    const wave = this.whackWave;
+    const isFinal = wave === this.whackWaves;
+    // 相位 (原版 aPhase = clamp((wave-1)*6/12, 0, 5))
+    const phase = Math.max(0, Math.min(5, Math.floor((wave - 1) * 6 / 12)));
+    const doubleChance = [0, 30, 10, 10, 15, 18][phase];
+    const tripleChance = [0, 0, 0, 0, 10, 13][phase];
+    const pailChance = [0, 0, 0, 10, 15, 15][phase];
+    const coneChance = [0, 0, 30, 30, 30, 30][phase];
+    let count = 1;
+    let type = 'NORMAL';
+    if (isFinal) {
+      count = 20;                       // 原版终波: 20 只倾巢而出
+    } else {
+      const numHit = Math.random() * 100;
+      if (numHit < tripleChance) count = 3;
+      else if (numHit < tripleChance + doubleChance) count = 2;
+      const typeHit = Math.random() * 100;
+      if (typeHit < pailChance && count < 3) type = 'BUCKET';
+      else if (typeHit < pailChance + coneChance) type = 'CONE';
+    }
+    // 从现有墓碑中随机挑选 (原版 weighted array)
+    const graves = this.graves.slice();
+    count = Math.min(count, graves.length);
+    // 原版 aMaxSpeed = PvzpAnimateCurve(1,12,wave, 1,3, EASE_IN) → 快速奔跑
+    const maxSpeed = 1 + (Math.min(wave, 12) - 1) / 11 * 2;
+    for (let i = 0; i < count; i++) {
+      const g = graves.splice(Math.floor(Math.random() * graves.length), 1)[0];
+      let ty = type, spd = maxSpeed;
+      if (isFinal) { ty = Math.random() < 0.5 ? 'CONE' : 'BUCKET'; spd = 2; }
+      const z = this.spawnZombieForWave(ty, g.row, wave);
+      if (!z) continue;
+      z.riseFromGrave(g.col, g.row);
+      // 原版 RandRangeFloat(0.5, aMaxSpeed) — 破土后按此速度奔跑 (pickRandomSpeed 尊重)
+      z.whackSpeed = 0.5 + Math.random() * Math.max(0, spd - 0.5);
+      try { z.updateAnimSpeed(); } catch (e) { }
+    }
+    // 组间隔 (原版 aStateCounterMin/Max: 100..200 → 30..60 tick 随 wave 线性)
+    if (isFinal) {
+      this.whackFinalSpawned = true;
+      this.whackCountdown = 0;          // 原版: 终波后停止出怪
+      this.whackSpawnCounter = 0x7fffffff;
+    } else {
+      const minC = 100 + (Math.min(wave, 12) - 1) / 11 * -70;
+      const maxC = 200 + (Math.min(wave, 12) - 1) / 11 * -140;
+      this.whackSpawnCounter = Math.round(minC + Math.random() * (maxC - minC));
+    }
   }
 
   // ---------- 割草机 ----------
@@ -759,27 +841,36 @@ class Board {
       // 传送带种子银行 (原版 HasConveyorBeltSeedBank: 无阳光经济, 卡从右侧滚动而来)
       this.mode = 'conveyor';
       const world = Math.ceil((this.level.id || 1) / 10) || 1;
-      // 原版保龄球: WALLNUT 85% / EXPLODE_O_NUT 15% (Bowling2 加 GIANT 15%)
-      this.beltPool = f === 'bowling' ? (this.level.mode === 'minigame'
-        ? ['WALLNUT', 'WALLNUT', 'WALLNUT', 'WALLNUT', 'EXPLODEONUT', 'GIANTWALLNUT']
-        : ['WALLNUT', 'WALLNUT', 'WALLNUT', 'WALLNUT', 'WALLNUT', 'WALLNUT', 'EXPLODEONUT'])
+      // 原版保龄球: WALLNUT 85% / EXPLODE_O_NUT 15% (Bowling2 加 GIANT_WALLNUT 15%)
+      // 原版权重数组 (Challenge.cpp): WALLNUT_BOWLING_2 = 85/15/15
+      this.beltPool = f === 'bowling'
+        ? [['WALLNUT', 85], ['EXPLODEONUT', 15], ['GIANTWALLNUT', 15]]
         : f === 'boss'
           // 原版 Boss 关卡卡池 (Challenge.cpp 1614-1612): 花盆55/西瓜10/辣椒12/卷心菜10/玉米5/寒冰8
-          ? ['FLOWERPOT', 'FLOWERPOT', 'FLOWERPOT', 'FLOWERPOT', 'FLOWERPOT', 'FLOWERPOT',
-             'MELONPULT', 'JALAPENO', 'JALAPENO', 'CABBAGEPULT', 'CABBAGEPULT',
-             'KERNELPULT', 'ICESHROOM', 'ICESHROOM']
+          ? [['FLOWERPOT', 55], ['MELONPULT', 10], ['JALAPENO', 12], ['CABBAGEPULT', 10], ['KERNELPULT', 5], ['ICESHROOM', 8]]
           : (this.level.id <= 50 ? availablePlants(this.level.id, game && game.purchasedSet) : availablePlants(50, game && game.purchasedSet));
       // 原版 SeedBank::AddSeed/UpdateConveyorBelt: 卡片 offsetX 从右侧 515-(51)*n 起, 每4tick左移1px(25px/s)
       // 槽位 x = 91 + i*50; Boss关 ×0.875 发卡间隔
-      this.belt = { items: [], counter: 0, spawnT: 0.8, isBoss: f === 'boss' };
+      this.belt = { items: [], counter: 0, spawnT: 0.1, isBoss: f === 'boss' };
+      // 原版 Challenge::StartLevel: 保龄球开局立即发一张 WALLNUT + counter=400 (4s 后下一张)
+      if (f === 'bowling') {
+        this.belt.items.push({ type: 'WALLNUT', offset: 515 });
+        this.belt.spawnT = 4;
+      }
       this.sun = 0;
       this.seedCards = [];
     } else if (f === 'whack') {
-      // 打僵尸: 无种子无阳光, 僵尸从地里冒头, 点击捶击 (原版 2-5)
+      // 打僵尸 (原版 2-5): 无种子无阳光, 墓碑出僵尸, 点击捶击
+      // 原版 Challenge::StartLevel: mZombieCountDown=200 (2s 后第一波), 锤子光标
       this.mode = 'whack';
       this.whackScore = 0;
       this.sun = 0;
       this.seedCards = [];
+      this.whackWaves = 12;          // 原版 12 波
+      this.whackWave = 0;
+      this.whackCountdown = 200;     // 原版 StartLevel: 200tick
+      this.whackSpawnCounter = 0;
+      this.whackFinalSpawned = false;
     } else if (f === 'vasebreaker') {
       // 罐子解谜 (原版 ScaryPotter): 右侧棋盘摆罐子, 点击锤碎 → 植物/僵尸
       // 原版 SP1 配方: 碗豆5 雪碗豆5 倭瓜5 普僵6 铁桶3 小丑1 + 2个叶子罐(植物预揭示)
@@ -895,19 +986,21 @@ class Board {
             // 原版 AddSeed: 新卡 offsetX = 515-(51)*n, 不得与左卡重叠 (前卡offset+51)
             let offset = 515 - 51 * n;
             if (n > 0 && offset < b.items[n - 1].offset) offset = b.items[n - 1].offset + 51;
+            // 权重池: [type, weight] 对或纯 type (默认权重 10)
+            const entries = pool.map(e => Array.isArray(e) ? e : [e, 10]);
             // 原版动态权重: 同类型≥4张权重→1, ≥3张→5, 与上一张同类减半
-            const weights = pool.map(t => {
-              let w = 10;
+            const weights = entries.map(([t, base]) => {
+              let w = base;
               const cnt = b.items.filter(o => o.type === t).length;
-              if (cnt >= 4) w = 1; else if (cnt >= 3) w = 5;
+              if (cnt >= 4) w = Math.min(w, 1); else if (cnt >= 3) w = Math.min(w, 5);
               if (n > 0 && t === b.items[n - 1].type) w = Math.max(1, w >> 1);
               return w;
             });
             let total = weights.reduce((a, c) => a + c, 0);
             let roll = Math.random() * total;
             let pick = 0;
-            for (let i = 0; i < pool.length; i++) { roll -= weights[i]; if (roll <= 0) { pick = i; break; } }
-            b.items.push({ type: pool[pick], offset });
+            for (let i = 0; i < entries.length; i++) { roll -= weights[i]; if (roll <= 0) { pick = i; break; } }
+            b.items.push({ type: entries[pick][0], offset });
           }
           const mult = b.isBoss ? 0.875 : 1;
           const interval = (n > 8 ? 10 : n > 6 ? 5 : n > 4 ? 4.25 : 4) * mult;
@@ -916,21 +1009,38 @@ class Board {
         break;
       }
       case 'whack': {
-        // 僵尸冒头波次 (借用波次系统; 僵尸从地里钻出)
-        if (this.zombies.length < 3 + Math.floor(this.wave / 2) && this.time > 2) {
-          if (!this._whackT) this._whackT = 0;
-          this._whackT -= dt;
-          if (this._whackT <= 0) {
-            this._whackT = 1.6 - Math.min(1.1, this.wave * 0.06);
-            const rows = this.grassRows;
-            const r = rows[Math.floor(Math.random() * rows.length)];
-            const z = this.spawnZombieForWave(Math.random() < 0.3 ? 'CONE' : 'NORMAL', r, this.wave);
-            if (z) { z.posX = 140 + Math.random() * 500; z.x = Math.floor(z.posX); }
-            this.whackSpawned = (this.whackSpawned || 0) + 1;
+        // ---- 原版 Challenge::WhackAZombieSpawning 完整移植 (100Hz tick) ----
+        const tk = Math.max(1, Math.round(dt * 100));
+        if (this.whackWave >= this.whackWaves && this.whackCountdown <= 0) {
+          // 终波放完: 僵尸清空即胜利 (原版标准 UpdateWin)
+          if (this.whackFinalSpawned && this.zombies.filter(z => !z.dead).length === 0) this.triggerWin();
+          break;
+        }
+        if (this.whackCountdown > 0) {
+          const prev = this.whackCountdown;
+          this.whackCountdown -= tk;
+          // 原版: 倒计时 100tick 且已有波次 → 补墓碑至 5
+          if (prev > 100 && this.whackCountdown <= 100 && this.whackWave > 0) {
+            this.whackPlaceGraves(Math.max(1, 5 - this.graves.length));
+          }
+          // 原版: 倒计时 5tick → NextWaveComing 音效
+          if (prev > 5 && this.whackCountdown <= 5) {
+            if (this.whackWave === 0) this.game.audio.play('awooga');
+            else if (this.whackWave === this.whackWaves - 1) this.game.audio.play('siren');
+          }
+          if (this.whackCountdown <= 0) {
+            this.whackCountdown = 2000;      // 原版: 波间隔 2000tick
+            if (this.whackWave < this.whackWaves) this.whackWave++;
+            this.whackSpawnCounter = this.whackWave === this.whackWaves ? 300 : 1;
+          } else if (this.whackCountdown < 300) {
+            break;   // 原版: 计数 <300tick 不出怪
           }
         }
-        // 胜利: 打满 30 只且场上无僵尸
-        if (this.whackScore >= 30 && this.zombies.filter(z => !z.dead).length === 0) this.triggerWin();
+        // 组生成: counter 递减到 0 触发一次
+        this.whackSpawnCounter -= tk;
+        if (this.whackSpawnCounter <= 0 && this.whackWave > 0) {
+          this.whackSpawnGroup();
+        }
         break;
       }
       case 'vasebreaker': {
@@ -962,9 +1072,11 @@ class Board {
         break;
       }
       case 'izombie': {
-        // 脑子被吃 (原版 IZombieEatBrain: 僵尸到最左侧 x≤20 开始啃脑, 70口)
+        // 脑子被吃 (原版 IZombieEatBrain: 攻击矩形 x≤20 开始啃脑, 70口)
         for (const z of this.zombies) {
           if (z.dead || z.isDeadOrDying) continue;
+          // 离场清理: 吃完脑子的僵尸继续向左走出屏幕 (原版越界移除)
+          if (z.x < -80) { z.dieNoLoot(); continue; }
           const brain = this.brains.find(b => b.row === z.row && !b.eaten);
           if (brain && z.x <= 20) {
             z.velX = 0;
@@ -981,6 +1093,9 @@ class Board {
                 brain.eaten = true;
                 this.brainsEaten++;
                 this.game.audio.play('gulp');
+                // 原版: 吃完后僵尸继续向左离场
+                z.velX = 0.25 + Math.random() * 0.12;
+                try { z.updateAnimSpeed(); } catch (e) { }
                 break;
               }
             }
@@ -988,9 +1103,10 @@ class Board {
         }
         // 胜利: 吃完 5 个脑子 (原版 I_ZOMBIE_WINNING_SCORE=5)
         if (this.brainsEaten >= 5) { this.triggerWin(); return; }
-        // 失败: 没僵尸且阳光不够最便宜卡 (原版 IZombieUpdate)
+        // 失败: 没僵尸且阳光不够最便宜卡 (原版 IZombieUpdate: 含场上待拾阳光)
         const minCost = Math.min(...this.zombieCards.map(c => c.cost));
-        if (this.zombies.filter(z => !z.dead && !z.isDeadOrDying).length === 0 && this.sun < minCost) {
+        const availSun = this.sun + this.suns.filter(s => !s.collected && !s.dead).reduce((t, s) => t + s.value, 0);
+        if (this.zombies.filter(z => !z.dead && !z.isDeadOrDying).length === 0 && availSun < minCost) {
           this.triggerLose(0);
         }
         break;
@@ -1020,13 +1136,18 @@ class Board {
     if (this.state !== 'playing') return false;
     switch (this.mode) {
       case 'whack': {
-        // 锤击僵尸 (大命中区)
+        // 锤子挥击动画 (原版光标 Hammer anim_whack_zombie)
+        if (game._whackMallet) {
+          try { game._whackMallet.play('anim_whack_zombie', RE.PLAY_ONCE_HOLD, 24); } catch (e) { }
+        }
+        // 锤击僵尸 (原版 MouseDownWhackAZombie: 命中矩形)
         for (const z of this.zombies) {
           if (z.dead || z.isDeadOrDying) continue;
           if (p.x > z.x && p.x < z.x + 100 && p.y > z.y - 20 && p.y < z.y + 120) {
             z.takeDamage(9999, this, { mowed: true });
             this.whackScore += 1;
             this.addEffect('squish', z.x + 40, z.y + 40);
+            game.audio.play('bonk');
             game.audio.play('squash_hmm');
             return true;
           }
@@ -1034,6 +1155,8 @@ class Board {
         return true;   // 模式下吞掉点击
       }
       case 'vasebreaker': {
+        // 免费植物种植中 → 放行给 gameClick 的种植逻辑 (原版 CursorObject PLANT_FROM_USABLE_COIN)
+        if (game.freePlant) return false;
         // 可用种子包拾取 (原版: 点击 → 光标变免费植物)
         for (const pk of this.vasePackets) {
           if (pk.taken) continue;

@@ -616,7 +616,7 @@ class Zombie {
     const r = this.bodyReanim;
     if (!r) return;
     if (blendTime > 0) r.startBlend(blendTime);
-    if (rate !== 0) {
+    if (rate !== 0 && rate != null) {
       r.animRate = rate;
       this.originalAnimRate = rate;   // 原版: PlayZombieReanim 记录 mOriginalAnimRate
     }
@@ -627,6 +627,12 @@ class Zombie {
 
   // ---------------- 速度 ----------------
   pickRandomSpeed() {
+    // 打僵尸模式: 原版 WhackAZombieSpawning 指定速度 (0.5..maxSpeed, 快速奔跑)
+    if (this.whackSpeed) {
+      this.velX = this.whackSpeed;
+      this.updateAnimSpeed();
+      return;
+    }
     if (this.phase === PH.SNORKEL_WALKING_IN_POOL) {
       this.velX = 0.3;
     } else if (this.phase === PH.DIGGER_WALKING) {
@@ -1255,7 +1261,7 @@ class Zombie {
       // 泥土粒子 + 音效 (原版 PARTICLE_DIRT_RISE / FOLEY_DIRT_RISE)
       this.board.addEffect('dust', this.posX + 50, this.posY + 100);
       this.board.game.audio.play('dirt_rise');
-      try { this.playZombieReanim('anim_idle', RE.LOOP, 8); } catch (e) { }
+      try { this.playZombieReanim('anim_idle', RE.LOOP, 0, 8); } catch (e) { }
     }
     this.updateReanim();
   }

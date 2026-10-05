@@ -345,11 +345,11 @@ const Game = {
         return;
       }
       if (this.selectedCard >= 0) {
-        // 雨天种子: 持有卡
+        // 雨天种子: 持有卡 (捡到的种子免费种植, 原版 CURSOR_TYPE_PLANT_FROM_COIN)
         if (board.mode === 'raining') {
           const held = board.heldCards[this.selectedCard];
           if (held) {
-            this.tryPlant(held.type, row, col, board);
+            this.tryPlant(held.type, row, col, board, { free: true });
             if (board.plants[board.plants.length - 1] && board.plants[board.plants.length - 1].row === row && board.plants[board.plants.length - 1].col === col) {
               board.heldCards.splice(this.selectedCard, 1);
               this.selectedCard = -1;
@@ -558,6 +558,9 @@ const Game = {
     this.selectedCard = -1;
     this.selectedZombieCard = -1;
     this.shovelMode = false;
+    this.freePlant = null;         // 免费植物 (罐子种子包) — 跨关清理
+    this._freePlantPos = null;
+    this._whackMallet = null;      // 打僵尸锤子光标 — 跨关重建
     this.menuDialog = null;
     Banners.clear();
     // 选卡方式 (原版): 1-7 固定卡槽(全部解锁植物), 1-8+ 手动选卡; 传送带/特殊玩法无选卡
@@ -664,7 +667,10 @@ const Game = {
       // 模式胜利 → 回模式选择屏
       this.audio.playBGM(null);
       this.audio.play('winmusic');
-      this.winStats = { waves: this.board.wave, score: this.board.whackScore || 0, mode: this.modeKey };
+      this.winStats = {
+        waves: this.board.mode === 'whack' ? (this.board.whackWave || 0) : this.board.wave,
+        score: this.board.whackScore || this.board.brainsEaten || 0, mode: this.modeKey,
+      };
       Transition.to(() => { this.state = 'modewin'; Screens.t = 0; }, 0.8);
       return;
     }
@@ -913,27 +919,16 @@ const Game = {
         ctx.restore();
       }
     }
-    // 打僵尸模式: 锤子光标
-    if (board.mode === 'whack' && m) {
-      ctx.save();
-      ctx.globalAlpha = 0.9;
-      ctx.translate(m.x, m.y);
-      ctx.rotate(-0.5);
-      ctx.fillStyle = '#8a6642';
-      ctx.fillRect(-4, -6, 8, 34);
-      ctx.fillStyle = '#a8926a';
-      ctx.fillRect(-16, -22, 32, 20);
-      ctx.restore();
-    }
-    // 打僵尸模式: 锤子光标 (原版 Hammer.reanim anim_whack_zombie)
+    // 打僵尸模式: 锤子光标 (原版 Challenge::StartLevel: Hammer.reanim anim_whack_zombie 挂光标)
     if (board.mode === 'whack' && m) {
       const RE = require('./reanim');
       if (!this._whackMallet && RE.hasDef('Hammer')) {
         this._whackMallet = Assets.reanim('Hammer');
-        this._whackMallet.play('anim_whack_zombie', RE.LOOP, 0);
+        this._whackMallet.play('anim_whack_zombie', RE.PLAY_ONCE_HOLD, 24);
+        this._whackMallet.animTime = 1;   // 原版: 初始停在末帧
       }
       if (this._whackMallet) {
-        this._whackMallet.setPosition(m.x - 20, m.y - 30);
+        this._whackMallet.setPosition(m.x - 25, m.y - 16);   // 原版 (-25,16) 偏移
         this._whackMallet.draw(ctx);
       } else {
         ctx.save();

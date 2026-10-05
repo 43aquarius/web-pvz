@@ -747,15 +747,24 @@ const UI = {
         });
         break;
       }
+      case 'conveyor': {
+        // 坚果保龄球: 出球线 (原版 Challenge::DrawBackdrop: BOWLINGSTRIPE @ (268,77))
+        if (board.level.fixed === 'bowling') {
+          const stripe = Assets.image('wallnut_bowlingstripe.png');
+          if (stripe) ctx.drawImage(stripe, 268, 77);
+        }
+        break;
+      }
       case 'whack': {
-        // 分数
+        // 波次进度 (原版底部进度条语义; 顶部提示)
         ctx.save();
         ctx.font = 'bold 20px "Noto Sans SC", sans-serif';
         ctx.textAlign = 'center';
         ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(20,12,0,0.8)';
-        ctx.strokeText(`击杀 ${board.whackScore || 0} / 30`, 400, 120);
+        const label = `第 ${Math.min(board.whackWave || 0, board.whackWaves || 12)} / ${board.whackWaves || 12} 波 · 击杀 ${board.whackScore || 0}`;
+        ctx.strokeText(label, 400, 120);
         ctx.fillStyle = '#ffe9a8';
-        ctx.fillText(`击杀 ${board.whackScore || 0} / 30`, 400, 120);
+        ctx.fillText(label, 400, 120);
         ctx.restore();
         break;
       }

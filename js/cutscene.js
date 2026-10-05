@@ -587,41 +587,47 @@ function range(a, b) { const r = []; for (let i = a; i <= b; i++) r.push(i); ret
 
 // ============================================================
 // 场内横幅系统 (一大波僵尸/最后一波 — 原版 FinalWave.reanim 动画 / APPROACHING 静图)
+// 原版锚点: FinalWave reanim AddReanimation(0,30); 静止位图像中心 ≈(390,330)
+//   (矩阵合成 Overlay∘T∘T(+w/2) → 图像中心 = overlay + tx + sx*w/2)
+//   一大波文字 MESSAGE_STYLE_HUGE_WAVE: aPosX=400, aPosY=330 → 静图中心 (400,330)
 // ============================================================
 const Banners = {
   list: [],
   show(imgName, dur = 3.4, sound = null, audio = null) {
-    this.list.push({ img: imgName, t: 0, dur, sound });
-    if (sound && audio) audio.play(sound);
+    this.list.push({ img: imgName, t: 0, dur, sound, soundDelay: 0.25, soundPlayed: false, audio });
+    // 原版: 文字出现 25tick 后播 hugewave 音效 — 由 update() 按 soundDelay 触发
   },
-  // 原版: 最后一波用 REANIM_FINALWAVE reanim (23帧@12fps); 一大波用 APPROACHING 静图
-  showFinalWave(dur = 3.4, audio = null) {
+  // 原版: 最后一波用 REANIM_FINALWAVE reanim (23帧@12fps, 含自带淡出); reanim 挂在 (0,30)
+  showFinalWave(dur = 2.1, audio = null) {
     if (RE.hasDef('FinalWave')) {
       const r = Assets.reanim('FinalWave');
-      r.x = 400; r.y = 240;
+      r.x = 0; r.y = 30;              // 原版 AddReanimation(0, 30) — 勿改, 换算后静止中心 (390.6, 330.1)
       r.frameStart = 0; r.frameCount = r.def ? r.def.n : 23;
       r.animRate = 12;
-      r.loopType = RE.LOOP;
-      this.list.push({ reanim: r, t: 0, dur, sound: 'finalwave' });
+      r.loopType = RE.PLAY_ONCE;      // 原版动画自带淡出, 单次播放
+      this.list.push({ reanim: r, t: 0, dur, sound: 'finalwave', soundDelay: 0.6, soundPlayed: false, audio });
     } else {
       this.show('finalwave.png', dur, 'finalwave', audio);
       return;
     }
-    if (audio) audio.play('finalwave');
   },
   update(dt) {
-    for (const b of this.list) { b.t += dt; if (b.reanim) b.reanim.update(dt); }
-    this.list = this.list.filter(b => b.t < b.dur);
+    for (const b of this.list) {
+      b.t += dt;
+      // 原版: 横幅出现 60tick(0.6s) 后才播放 finalwave 音效 (一大波为 25tick)
+      if (!b.soundPlayed && b.t >= (b.soundDelay || 0)) {
+        b.soundPlayed = true;
+        if (b.sound && b.audio) b.audio.play(b.sound);
+      }
+      if (b.reanim) b.reanim.update(dt);
+    }
+    this.list = this.list.filter(b => b.t < b.dur && !(b.reanim && b.reanim.dead && b.t > 0.1));
   },
   draw(ctx) {
     for (const b of this.list) {
-      // reanim 横幅 (原版 FinalWave)
+      // reanim 横幅 (原版 FinalWave, 自带缩放飞入+淡出)
       if (b.reanim) {
-        const p = b.t / b.dur;
-        let alpha = 1;
-        if (p > 0.85) alpha = (1 - p) / 0.15;
         ctx.save();
-        ctx.globalAlpha = alpha;
         b.reanim.draw(ctx);
         ctx.restore();
         continue;
@@ -629,13 +635,13 @@ const Banners = {
       const im = img(b.img);
       if (!im) continue;
       const p = b.t / b.dur;
-      // 原版: 弹入 → 停留 → 淡出
+      // 原版: 弹入 → 停留 → 淡出 (淡出固定 ~0.5s)
       let sc = 1, alpha = 1;
       if (p < 0.12) { const q = p / 0.12; sc = 0.5 + 0.5 * easeIO(q); alpha = q; }
-      else if (p > 0.85) { alpha = (1 - p) / 0.15; }
+      else if (b.dur - b.t < 0.5) { alpha = Math.max(0, (b.dur - b.t) / 0.5); }
       ctx.save();
       ctx.globalAlpha = alpha;
-      ctx.translate(400, 240);
+      ctx.translate(400, 330);        // 原版 MESSAGE_STYLE_HUGE_WAVE: (BOARD_WIDTH/2, 330)
       ctx.scale(sc, sc);
       const w = im.width, h = im.height;
       ctx.drawImage(im, -w / 2, -h / 2, w, h);

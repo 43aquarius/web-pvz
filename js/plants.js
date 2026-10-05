@@ -171,17 +171,15 @@ class Plant {
 
   update(dt, board) {
     if (this.dead) return;
-    // 我不是僵尸: 植物定格 (原版 mAnimRate=0, 纸牌植物不动画不生产)
-    if (board.mode === 'izombie') {
-      this.eatFlash = Math.max(0, this.eatFlash - dt);
-      return;
-    }
+    // 我不是僵尸: 待机动画定格 (构造时 animRate=0), 射手仍开火 (原版 UpdateShooter 无 IZ 守卫)
+    const iz = board.mode === 'izombie';
     for (const L of this.anims) {
-      L.r.update(dt);
-      // 头部射击动画播完 → 回到基础待机 (原版 UpdatePlant: mHeadReanim 播完重置)
+      L.r.update(dt);   // animRate=0 时自然静止; 射击动画(rate>0)正常推进
+      // 头部射击动画播完 → 回到基础待机 (izombie 下保持定格: 原版 PLAY_ONCE_AND_HOLD 末帧)
       if (L.head && L.shooting && L.r.loopCount > 0) {
         L.shooting = false;
-        L.r.play(L.base, RE.LOOP, 12);
+        if (iz) { L.r.play(L.base, RE.PLAY_ONCE_HOLD, 0); }
+        else L.r.play(L.base, RE.LOOP, 12);
       }
     }
     this.eatFlash = Math.max(0, this.eatFlash - dt);
@@ -245,6 +243,8 @@ class Plant {
       }
       // ---- 生产植物 ----
       case 'SUNFLOWER': case 'SUNSHROOM': case 'TWINSUNFLOWER': case 'MARIGOLD': {
+        // 原版 UpdateProductionPlant: IZombie 关卡不产阳光 (阳光只来自吃掉的向日葵)
+        if (board.mode === 'izombie') break;
         this.timer -= dt;
         if (this.timer <= 0) {
           const rate = d.sunRate + Math.random() * 2;
@@ -304,37 +304,78 @@ class Plant {
         break;
       }
       case 'WALLNUT': case 'EXPLODEONUT': case 'GIANTWALLNUT': {
-        // 坚果保龄球: 滚动撞飞僵尸 (原版 Wall-nut Bowling; 爆炸坚果命中即爆)
+        // ---- 坚果保龄球 (原版 Plant::UpdateBowling 完整移植) ----
+        // 原版: mX -= _ground 轨道速度(负值) → 向右滚; mX>800 消失; 撞僵尸后换行弹跳
         if (this.rolling) {
-          const rollSpeed = this.type === 'GIANTWALLNUT' ? 150 : 170;
-          this.x -= rollSpeed * dt;
+          const rollSpeed = this.type === 'GIANTWALLNUT' ? 300 : 170;   // 原版巨型 ×2
+          this.x += rollSpeed * dt;
           this.rollSpin = (this.rollSpin || 0) + dt * (this.type === 'GIANTWALLNUT' ? 300 : 500);
+          // 撞僵尸判定 (原版 FindTargetZombie 同行)
+          let hitZombie = null;
           for (const z of board.zombies) {
             if (z.dead || z.row !== this.row || z.isDeadOrDying || z.boss) continue;
-            if (Math.abs(z.hitX() - (this.x + 40)) < 42) {
-              // 连续命中不同僵尸需间隔 (防同帧多次伤害)
-              if (!z._bowlHitT || board.time - z._bowlHitT > 0.1) {
-                z._bowlHitT = board.time;
-                if (this.type === 'EXPLODEONUT') {
-                  // 原版: 爆炸坚果命中即 3x3 爆炸
-                  board.addEffect('powie', this.x + 40, this.y + 40);
-                  for (const z2 of board.zombies) {
-                    if (z2.dead || z2.boss) continue;
-                    if (Math.abs(z2.hitX() - (this.x + 40)) < 115 && Math.abs(z2.row - this.row) <= 1) {
-                      z2.takeDamage(1800, board, { exploded: true });
-                    }
-                  }
-                  board.game.audio.play('cherrybomb');
-                  this.dead = true;
-                  break;
+            if (Math.abs(z.hitX() - (this.x + 40)) < 42) { hitZombie = z; break; }
+          }
+          if (hitZombie) {
+            const zx = this.x + 40, zy = this.y + 40;
+            if (this.type === 'EXPLODEONUT') {
+              // 原版: 爆炸坚果 90 半径 3x3 清场 + ShakeBoard
+              board.addEffect('powie', zx, zy);
+              for (const z2 of board.zombies) {
+                if (z2.dead || z2.boss) continue;
+                if (Math.abs(z2.hitX() - zx) < 115 && Math.abs(z2.row - this.row) <= 1) {
+                  z2.takeDamage(1800, board, { exploded: true });
                 }
-                z.takeDamage(this.type === 'GIANTWALLNUT' ? 800 : 400, board, { bowling: true });
-                board.addEffect('squish', z.x + 40, z.y + 30);
-                board.game.audio.play('bowling');
+              }
+              board.game.audio.play('cherrybomb');
+              board.game.audio.play('bowlingpin');
+              board.shakeX += 3; board.shakeY -= 2;
+              this.dead = true;
+              break;
+            }
+            // 原版伤害: 门盾直伤 1800; 其他盾 400 盾伤; 头盔 900 盔伤; 无防具 1800
+            if (hitZombie.shield) {
+              hitZombie.takeShieldDamage && hitZombie.takeShieldDamage(400, board);
+              hitZombie.takeDamage(400, board, { bowling: true });
+            } else if (hitZombie.helm > 0) {
+              hitZombie.takeDamage(this.type === 'GIANTWALLNUT' ? 1800 : 900, board, { bowling: true });
+            } else {
+              hitZombie.takeDamage(1800, board, { bowling: true });
+            }
+            board.addEffect('squish', hitZombie.x + 40, hitZombie.y + 30);
+            board.game.audio.play('bowling');
+            board.game.audio.play('bowlingpin');
+            board.shakeX += 1; board.shakeY -= 1;
+            // 原版: 巨型不换行, 普通坚果连击奖励 (第2/3/4/5+次命中掉银/金币)
+            if (this.type !== 'GIANTWALLNUT') {
+              this.bowlHits = (this.bowlHits || 0) + 1;
+              if (this.bowlHits >= 2 && board.addCoin) {
+                const n = this.bowlHits >= 5 ? 1 : this.bowlHits - 1;
+                for (let ci = 0; ci < n; ci++) board.addCoin(zx + (ci - (n - 1) / 2) * 10, zy, this.bowlHits >= 5 ? 25 : 10);
+                board.game.audio.play('points');
+              }
+              // 换行弹跳 (原版: row4/向下走 → 向上; row0/向上走 → 向下; 否则随机)
+              let newRow;
+              if (this.row === board.rows - 1 || this.bowlDir === -1) newRow = this.row - 1;
+              else if (this.row === 0 || this.bowlDir === 1) newRow = this.row + 1;
+              else newRow = this.row + (Math.random() < 0.5 ? 1 : -1);
+              if (newRow >= 0 && newRow < board.rows) {
+                this.bowlDir = newRow > this.row ? 1 : -1;
+                this.bowlFromY = this.y;
+                this.row = newRow;
+                this.bowlLerp = 0;   // 行间过渡 (原版 mY ±2/tick 滑至对齐)
               }
             }
           }
-          if (this.x < -90) this.dead = true;
+          // 行间滑动至目标行
+          if (this.bowlLerp !== undefined && this.bowlLerp < 1) {
+            this.bowlLerp = Math.min(1, this.bowlLerp + dt * 3.2);
+            const targetY = board.cellY(this.row, this.col);
+            this.y = this.bowlFromY + (targetY - this.bowlFromY) * this.bowlLerp;
+          } else {
+            this.y = board.cellY(this.row, this.col);
+          }
+          if (this.x > 810) this.dead = true;   // 原版: mX > 800 消失
         }
         break;
       }
@@ -795,6 +836,40 @@ class Plant {
   draw(ctx, board) {
     if (this.dead) return;
     const dy = this.drawY(board);
+    // ---- 我不是僵尸: 纸牌植物 (原版 IZombieDrawPlant 四层纸版画效果) ----
+    // 白剪影+4px 深棕偏移 → +2/-2 中棕偏移 → 本体肉色调 (255,201,160)
+    // 原版用 g 平移整幅绘制 render group (含头部附件), 此处同步设置所有层 solidColor/tint
+    if (board.mode === 'izombie') {
+      if (this.type !== 'LILYPAD' && !GROUNDCOVER.has(this.type)) {
+        const sh = Assets.image('plantshadow');
+        if (sh) { ctx.globalAlpha = 0.35; ctx.drawImage(sh, this.x + 40 - sh.width / 2, dy + 72 - sh.height / 2); ctx.globalAlpha = 1; }
+      }
+      const sc = (this.def.scale || 1);
+      const passes = [
+        [4, 4, [122, 86, 58], true],
+        [2, 2, [171, 135, 107], true],
+        [-2, -2, [171, 135, 107], true],
+        [0, 0, [255, 201, 160], false],
+      ];
+      for (const [ox, oy, color, solid] of passes) {
+        for (const L of this.anims) {
+          L.r.solidColor = solid ? color : null;
+          if (!solid) L.r.colorOverride = [color[0], color[1], color[2], 255];
+        }
+        for (const L of this.anims) {
+          if (L.attached) continue;   // 附件随宿主轨道矩阵绘制
+          L.r.setPosition(this.x + ox, dy + oy);
+          L.r.overrideScale(sc, sc);
+          L.r.refreshAttachments();
+          L.r.draw(ctx);
+        }
+      }
+      for (const L of this.anims) {
+        L.r.solidColor = null;
+        L.r.colorOverride = [255, 255, 255, 255];
+      }
+      return;
+    }
     // 阴影
     if (this.type !== 'LILYPAD' && !GROUNDCOVER.has(this.type)) {
       const sh = Assets.image('plantshadow');
