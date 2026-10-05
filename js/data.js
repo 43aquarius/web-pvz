@@ -258,7 +258,7 @@ function availablePlants(level, purchased) {
 // X-4 → 功能道具; X-9 → 纸条; 5-10 → 奖杯; 其余 → 新植物种子包
 function awardForLevel(level) {
   if (level === 50) return { type: 'trophy' };
-  if ([9, 19, 29, 39, 49].includes(level)) return { type: 'note', note: (level - 1) / 10 + 1 };
+  if ([9, 19, 29, 39, 49].includes(level)) return { type: 'note', note: Math.floor((level - 1) / 10) + 1 };
   if (level === 4) return { type: 'shovel' };
   if (level === 14) return { type: 'almanac' };
   if (level === 24) return { type: 'carkeys' };
@@ -352,20 +352,67 @@ const LEVELS = makeLevels();
 
 // ---------- 额外模式 (玩玩小游戏 / 解谜 / 生存) ----------
 // id: 100+ 独立于冒险关卡; 通过 Game.startMode(modeId) 进入
+// 原版 Challenge.cpp 传送带卡池 (PvzpWeightedArray 精确权重)
+const CONVEYOR_POOLS = {
+  10:  [['PEASHOOTER', 20], ['CHERRYBOMB', 20], ['WALLNUT', 15], ['REPEATER', 20], ['SNOWPEA', 10], ['CHOMPER', 5], ['POTATOMINE', 10]],
+  20:  [['GRAVEBUSTER', 20], ['ICESHROOM', 15], ['DOOMSHROOM', 15], ['HYPNOSHROOM', 10], ['SCAREDYSHROOM', 15], ['FUMESHROOM', 15], ['PUFFSHROOM', 10]],
+  25:  [['LILYPAD', 25], ['WALLNUT', 15], ['PEASHOOTER', 25], ['CHERRYBOMB', 35]],
+  30:  [['LILYPAD', 25], ['SQUASH', 5], ['THREEPEATER', 25], ['TANGLEKELP', 5], ['JALAPENO', 10], ['SPIKEWEED', 10], ['TORCHWOOD', 10], ['TALLNUT', 10]],
+  40:  [['LILYPAD', 25], ['SEASHROOM', 10], ['MAGNETSHROOM', 5], ['BLOVER', 5], ['CACTUS', 15], ['STARFRUIT', 25], ['SPLITPEA', 5], ['PUMPKIN', 10]],
+  45:  [['FLOWERPOT', 50], ['CHOMPER', 25], ['PUMPKIN', 15], ['CHERRYBOMB', 10]],
+  50:  [['FLOWERPOT', 55], ['MELONPULT', 10], ['JALAPENO', 12], ['CABBAGEPULT', 10], ['KERNELPULT', 5], ['ICESHROOM', 8]],
+  // 小游戏变体 (原版 Challenge.cpp)
+  war_and_peas:  [['PEASHOOTER', 25], ['REPEATER', 20], ['SNOWPEA', 20], ['WALLNUT', 20], ['CHERRYBOMB', 15]],
+  war_and_peas_2: [['REPEATER', 25], ['SNOWPEA', 20], ['WALLNUT', 20], ['CHERRYBOMB', 15], ['POTATOMINE', 20]],
+  slot_machine:  [['PEASHOOTER', 20], ['SUNFLOWER', 15], ['CHERRYBOMB', 10], ['WALLNUT', 15], ['SNOWPEA', 15], ['REPEATER', 15], ['POTATOMINE', 10]],
+  little_trouble: [['LILYPAD', 25], ['WALLNUT', 15], ['PEASHOOTER', 25], ['CHERRYBOMB', 35]],
+  stormy_night:  [['LILYPAD', 30], ['CACTUS', 10], ['PEASHOOTER', 20], ['PUFFSHROOM', 15], ['CHERRYBOMB', 25]],
+  bungee_blitz:  [['FLOWERPOT', 50], ['CHOMPER', 25], ['PUMPKIN', 15], ['CHERRYBOMB', 10]],
+  portal_combat: [['PEASHOOTER', 25], ['REPEATER', 20], ['TORCHWOOD', 10], ['CACTUS', 15], ['WALLNUT', 15], ['CHERRYBOMB', 15]],
+  column:        [['FLOWERPOT', 155], ['MELONPULT', 5], ['CHOMPER', 5], ['PUMPKIN', 15], ['JALAPENO', 10], ['SQUASH', 10]],
+  invisighoul:   [['PEASHOOTER', 25], ['WALLNUT', 15], ['KERNELPULT', 5], ['SQUASH', 15], ['LILYPAD', 30], ['ICESHROOM', 10]],
+  seeing_stars:  [['STARFRUIT', 100]],
+};
+
 const MODE_LEVELS = {
-  // ---- 玩玩小游戏 ----
+  // ---- 玩玩小游戏 (原版 CHALLENGE_PAGE_CHALLENGE 顺序) ----
   bowling:   { id: 101, label: '坚果保龄球',   mode: 'minigame', fixed: 'bowling', scene: 'day',   waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', endless: true, desc: '用传送带上的坚果滚翻僵尸' },
-  whack:     { id: 102, label: '打僵尸',       mode: 'minigame', fixed: 'whack', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '冒头的僵尸, 敲! 敲! 敲!' },
-  raining:   { id: 103, label: '雨天种子',     mode: 'minigame', fixed: 'raining', scene: 'day', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: false, bgm: 'front_day', rainingSeeds: true, desc: '天上掉下随机种子包' },
-  // ---- 解谜模式 ----
-  vasebreaker: { id: 201, label: '罐子僵尸',   mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '打碎罐子, 释放植物或僵尸' },
-  izombie:     { id: 202, label: '我是僵尸',   mode: 'puzzle', fixed: 'izombie', scene: 'day',   waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '指挥僵尸吃到脑子' },
-  // ---- 生存模式 (无尽) ----
+  bowling2:  { id: 102, label: '坚果保龄球·极', mode: 'minigame', fixed: 'bowling2', scene: 'day',   waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', endless: true, desc: '加入巨型坚果的保龄球' },
+  whack:     { id: 103, label: '打僵尸',       mode: 'minigame', fixed: 'whack', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '冒头的僵尸, 敲! 敲! 敲!' },
+  raining:   { id: 104, label: '雨天种子',     mode: 'minigame', fixed: 'raining', scene: 'day', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: false, bgm: 'front_day', rainingSeeds: true, desc: '天上掉下随机种子包' },
+  war_and_peas: { id: 105, label: '豌豆大战',  mode: 'minigame', fixed: 'conveyor', conveyorPool: 'war_and_peas', scene: 'day', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '豌豆射手大阅兵' },
+  war_and_peas_2: { id: 106, label: '豌豆大战2', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'war_and_peas_2', scene: 'day', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '更密集的豌豆大军' },
+  slot_machine:  { id: 107, label: '老虎机',   mode: 'minigame', fixed: 'conveyor', conveyorPool: 'slot_machine', scene: 'day', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '随机发放神秘种子' },
+  seeing_stars:  { id: 108, label: '看见星星', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'seeing_stars', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '用杨桃点亮五个阵点' },
+  little_trouble:{ id: 109, label: '小麻烦',   mode: 'minigame', fixed: 'conveyor', conveyorPool: 'little_trouble', scene: 'pool', waves: 20, grassRows: [0, 1, 4, 5], rows: 6, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'pool', desc: '泳池边的大麻烦' },
+  portal_combat:{ id: 110, label: '传送门战斗', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'portal_combat', scene: 'pool', waves: 20, grassRows: [0, 1, 4, 5], rows: 6, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'pool', desc: '穿越传送门夹击僵尸' },
+  column:    { id: 111, label: '列队僵尸',     mode: 'minigame', fixed: 'conveyor', conveyorPool: 'column', scene: 'roof', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'roof', potColumns: 4, desc: '一列一列打过去' },
+  invisighoul: { id: 112, label: '隐形僵尸',   mode: 'minigame', fixed: 'conveyor', conveyorPool: 'invisighoul', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '看不见的僵尸最可怕' },
+  stormy_night: { id: 113, label: '暴风雨夜', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'stormy_night', scene: 'fog', stormy: true, waves: 20, grassRows: [0, 1, 4, 5], rows: 6, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'fog', desc: '风雨交加的浓雾夜' },
+  bungee_blitz: { id: 114, label: '蹦极闪电战', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'bungee_blitz', scene: 'roof', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'roof', potColumns: 4, desc: '蹦极僵尸从天而降' },
+  bobsled_bonanza: { id: 115, label: '雪橇大丰收', mode: 'minigame', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [[6, 1], [7, 1], [8, 2]], skySun: false, chooseSeeds: true, bankSlots: 6, bgm: 'front_night', zombieTypes: ['BOBSLED', 'NORMAL', 'CONE'], desc: '冰车僵尸组团来袭' },
+  pogo_party: { id: 116, label: '跳跳派对',   mode: 'minigame', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: true, bankSlots: 6, bgm: 'front_night', zombieTypes: ['POGO', 'NORMAL', 'CONE'], desc: '跳跳僵尸的狂欢' },
+  zombies_speed: { id: 117, label: '高速僵尸', mode: 'minigame', scene: 'day', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: true, chooseSeeds: true, bankSlots: 6, bgm: 'front_day', speedMul: 2, desc: '僵尸们都喝了红牛' },
+  last_stand: { id: 118, label: '最后防线',   mode: 'minigame', scene: 'day', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 5000, sunBonus: false, graves: [], skySun: false, chooseSeeds: true, bankSlots: 9, bgm: 'front_day', desc: '一次性巨额阳光守到底' },
+  final_boss: { id: 119, label: '最终Boss',    mode: 'minigame', fixed: 'boss', scene: 'boss', waves: 10, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'roof', desc: '与僵王博士决一死战' },
+  // ---- 解谜模式 (原版 CHALLENGE_PAGE_PUZZLE: 花瓶终结者 + 我是僵尸) ----
+  vasebreaker: { id: 201, label: '花瓶终结者 I', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '打碎罐子, 释放植物或僵尸', vaseRecipe: 'sp1' },
+  vasebreaker2: { id: 202, label: '花瓶终结者 II', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '更凶险的罐子阵', vaseRecipe: 'sp2' },
+  vasebreaker3: { id: 203, label: '花瓶终结者 III', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '终极罐子考验', vaseRecipe: 'sp3' },
+  izombie:     { id: 204, label: '我是僵尸 I', mode: 'puzzle', fixed: 'izombie', scene: 'day',   waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '指挥僵尸吃到脑子' },
+  izombie2:    { id: 205, label: '我是僵尸 II', mode: 'puzzle', fixed: 'izombie', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '夜晚的僵尸指挥官', izLayout: 'hard1' },
+  izombie3:    { id: 206, label: '我是僵尸 III', mode: 'puzzle', fixed: 'izombie', scene: 'day',   waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 200, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '铜墙铁壁的植物防线', izLayout: 'hard2' },
+  // ---- 生存模式 (原版 CHALLENGE_PAGE_SURVIVAL: 普通 5 + 困难 5) ----
   survival_day:   { id: 301, label: '白天生存',   mode: 'survival', scene: 'day',   waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true,  chooseSeeds: true, bankSlots: 9, bgm: 'front_day', endless: true, desc: '白天草坪无尽挑战' },
   survival_night: { id: 302, label: '黑夜生存',   mode: 'survival', scene: 'night', waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [[5, 1], [6, 1], [7, 2], [8, 3]], skySun: false, chooseSeeds: true, bankSlots: 9, bgm: 'front_night', endless: true, desc: '黑夜墓园无尽挑战' },
   survival_pool:  { id: 303, label: '泳池生存',   mode: 'survival', scene: 'pool',  waves: 999, grassRows: [0, 1, 4, 5], rows: 6, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 9, bgm: 'pool', endless: true, desc: '泳池派对无尽挑战' },
   survival_fog:   { id: 304, label: '浓雾生存',   mode: 'survival', scene: 'fog',   waves: 999, grassRows: [0, 1, 4, 5], rows: 6, startSun: 50, graves: [], skySun: false, chooseSeeds: true, bankSlots: 9, bgm: 'fog', endless: true, desc: '浓雾迷局无尽挑战' },
   survival_roof:  { id: 305, label: '屋顶生存',   mode: 'survival', scene: 'roof',  waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 9, bgm: 'roof', endless: true, potColumns: 4, desc: '屋顶决战无尽挑战' },
+  survival_day_hard:   { id: 306, label: '白天生存·难', mode: 'survival', scene: 'day',   waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true,  chooseSeeds: true, bankSlots: 10, bgm: 'front_day', endless: true, hard: true, desc: '硬仗: 全兵种僵尸' },
+  survival_night_hard: { id: 307, label: '黑夜生存·难', mode: 'survival', scene: 'night', waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [[4, 1], [5, 2], [6, 2], [7, 3], [8, 3]], skySun: false, chooseSeeds: true, bankSlots: 10, bgm: 'front_night', endless: true, hard: true, desc: '硬仗: 黑夜重甲军团' },
+  survival_pool_hard:  { id: 308, label: '泳池生存·难', mode: 'survival', scene: 'pool',  waves: 999, grassRows: [0, 1, 4, 5], rows: 6, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 10, bgm: 'pool', endless: true, hard: true, desc: '硬仗: 海豚雪橇齐上阵' },
+  survival_fog_hard:   { id: 309, label: '浓雾生存·难', mode: 'survival', scene: 'fog',   waves: 999, grassRows: [0, 1, 4, 5], rows: 6, startSun: 50, graves: [], skySun: false, chooseSeeds: true, bankSlots: 10, bgm: 'fog', endless: true, hard: true, desc: '硬仗: 矿工气球夜袭' },
+  survival_roof_hard:  { id: 310, label: '屋顶生存·难', mode: 'survival', scene: 'roof',  waves: 999, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 50, graves: [], skySun: true, chooseSeeds: true, bankSlots: 10, bgm: 'roof', endless: true, potColumns: 4, hard: true, desc: '硬仗: 投石车与巨人' },
 };
 
 // 原版波次生成常量
@@ -379,4 +426,4 @@ const WAVE = {
   ACCEL_DELAY: 2,              // 加速后2秒刷下一波
 };
 
-if (typeof module !== 'undefined') module.exports = { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, PROJECTILES, LEVELS, MODE_LEVELS, WAVE_COUNTS, SEED_ORDER, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, UPGRADE_ORDER, SHOP_ITEMS, availablePlants, seedsAvailableCount, awardPlantForLevel, awardForLevel, gravesForLevel };
+if (typeof module !== 'undefined') module.exports = { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, PROJECTILES, LEVELS, MODE_LEVELS, CONVEYOR_POOLS, WAVE_COUNTS, SEED_ORDER, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, UPGRADE_ORDER, SHOP_ITEMS, availablePlants, seedsAvailableCount, awardPlantForLevel, awardForLevel, gravesForLevel };

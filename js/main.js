@@ -246,6 +246,8 @@ const Game = {
     // ---- 游戏内菜单对话框 (打开时仅响应对话框) ----
     if (this.menuDialog) { this.menuDialogClick(p); return; }
     if (board.paused) { board.paused = false; return; }
+    // ---- 奖励掉落物点击 (原版 LevelAwardClicked → 卡飞向屏幕中央) ----
+    if (board.levelAward && board.clickLevelAward && board.clickLevelAward(p)) return;
     // ---- 菜单按钮 (原版: 打开选项菜单 = 暂停; 选卡期间同样可用 #15) ----
     if (p.x > 681 && p.x < 798 && p.y > 0 && p.y < 36) { this.openMenuDialog(); return; }
     // ---- 特殊模式点击路由 (打僵尸/罐子/我不是僵尸/雨天种子) ----
@@ -295,14 +297,16 @@ const Game = {
         return;
       }
     }
-    // 金币
+    // 金币 (原版: 点击 → 金币飞向左上角计数器 + "+N"浮字 #13)
     for (const c of board.coins) {
       if (!c.collected && Math.abs(p.x - c.x) < 30 && Math.abs(p.y - c.y) < 30) {
         c.collected = true;
         this.coins += c.value;
         this.coinsEarned = (this.coinsEarned || 0) + c.value;
         this.saveShop();
-        this.audio.play('points');
+        this.audio.play('coin');
+        // 原版 Coin 点击反馈: 浮动 "+25" 金额文字 (TextFadeOn 风格)
+        board.addEffect('text', c.x, c.y - 12, { hold: 1.1, txt: '+' + c.value, c: '#ffe36a', size: 17 });
         return;
       }
     }
@@ -410,7 +414,7 @@ const Game = {
     const card = board.seedCards[this.selectedCard];
     if (!conveyor && !free && !card) { this.audio.play('buzzer'); return; }
     if (!conveyor && !free && (card.cd > 0 || board.sun < def.cost)) { this.audio.play('buzzer'); return; }
-    const bowling = board.level.fixed === 'bowling';
+    const bowling = board.level.fixed === 'bowling' || board.level.fixed === 'bowling2';
     // 只能种在草地行或水行 (1-1~1-3 单/三行关的泥地不可种植)
     if (!board.grassRows.includes(row) && !board.isWater(row, col)) { this.audio.play('buzzer'); return; }
     // 种植规则
@@ -555,7 +559,7 @@ const Game = {
     await this._preloadLevel(level);
     const lv = this.levelId;
     // 铲子解锁 (特殊玩法关卡无铲子)
-    const specialNoShovel = ['bowling', 'whack', 'vasebreaker', 'izombie'].includes(level.fixed);
+    const specialNoShovel = ['bowling', 'bowling2', 'whack', 'vasebreaker', 'izombie'].includes(level.fixed);
     const firstTime = this.progress.unlocked <= lv;
     if (specialNoShovel) this.shovelUnlocked = false;
     else if (lv === 5 && firstTime) this.shovelUnlocked = false;   // 1-5 首次: 由戴夫对话解锁
@@ -686,6 +690,10 @@ const Game = {
     this.justUnlocked = this.levelAward && this.levelAward.type === 'seed' ? this.levelAward.plant : null;
     this.audio.playBGM(null);
     this.audio.play('winmusic');
+    // 纸条/奖励素材分包预载 (misc 包: note1-5.png / notefinal.png)
+    if (Assets.ensurePacks && Assets.hasLazy && !Assets.state.embedMode) {
+      Assets.ensurePacks(['misc', 'ui', 'fx']);
+    }
     Transition.to(() => {
       if (this.levelAward && this.levelAward.type !== 'note') { this.state = 'award'; }
       else { this.state = 'note'; }         // 纸条关 / 无奖励

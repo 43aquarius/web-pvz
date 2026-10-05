@@ -184,8 +184,71 @@ const Renderer = {
     // ---- 阳光/金币 ----
     for (const s of board.suns) s.draw ? s.draw(ctx, board) : this.drawSun(ctx, s, board);
     for (const c of board.coins) this.drawCoin(ctx, c);
+    // ---- 关卡奖励掉落物 (原版 LevelAward: 种子包/道具/纸条) ----
+    if (board.levelAward) this.drawLevelAward(ctx, board.levelAward);
     // ---- 浓雾 (原版 Board::DrawFog: 逐格 8-cel + 呼吸波动) ----
     if (board.scene === 'fog') this.drawFog(ctx, board);
+  },
+
+  // ---- 奖励掉落物 (掉落弹跳 + 待点击提示光效; 飞行阶段在 fly 渲染) ----
+  drawLevelAward(ctx, a) {
+    if (a.phase === 'done') return;
+    const UIm = (window.__mods && window.__mods['ui']) || require('./ui');
+    const UI = UIm && UIm.UI;
+    ctx.save();
+    if (a.phase === 'fly') {
+      // 飞向屏幕中央: 放大 + 旋转 (原版 COIN_MOTION_LEVEL_TARGET)
+      ctx.translate(a.fx, a.fy);
+      ctx.rotate(a.frot);
+      ctx.scale(a.fscale, a.fscale);
+    } else {
+      const bob = a.phase === 'wait' ? Math.sin((a.t || 0) * 5) * 4 : 0;
+      ctx.translate(a.x, a.y + bob);
+      // 待拾取光效 (原版 SeedPacketFlash)
+      if (a.phase === 'wait') {
+        ctx.save();
+        const t = (Date.now() % 900) / 900;
+        ctx.globalAlpha = 0.35 + 0.3 * Math.sin(t * Math.PI * 2);
+        const rays = Assets.image('awardrays1');
+        if (rays) ctx.drawImage(rays, -70, -70, 140, 140);
+        ctx.restore();
+      }
+    }
+    if (a.type === 'seed' && a.plant && UI) {
+      const packet = Assets.image('seedpacket_larger.png');
+      if (packet) ctx.drawImage(packet, -40, -50, 80, 100);
+      const thumb = UI.getThumb(a.plant);
+      if (thumb) ctx.drawImage(thumb, -25, -40, 50, 70);
+    } else {
+      // 道具/纸条/奖杯奖励图
+      const map = {
+        shovel: 'shovel_hi_res', note: 'zombienote', almanac: 'selectorscreen_almanac',
+        carkeys: 'carkeys', taco: 'taco', wateringcan: 'wateringcan', trophy: 'trophy_hi_res',
+      };
+      const im = Assets.image(map[a.type]);
+      if (im) {
+        const s = Math.min(80 / im.width, 80 / im.height);
+        if (a.type === 'note') { ctx.scale(0.35, 0.35); ctx.drawImage(im, -im.width / 2, -im.height / 2); }
+        else ctx.drawImage(im, -im.width * s / 2, -im.height * s / 2, im.width * s, im.height * s);
+      } else {
+        ctx.fillStyle = '#ffe36a';
+        ctx.beginPath(); ctx.arc(0, 0, 20, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.restore();
+    // 待点击提示文字
+    if (a.phase === 'wait') {
+      const t = (Date.now() % 1200) / 1200;
+      ctx.save();
+      ctx.globalAlpha = 0.5 + 0.5 * Math.sin(t * Math.PI * 2);
+      ctx.font = 'bold 15px "Noto Sans SC", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(30,18,0,0.85)'; ctx.lineJoin = 'round';
+      ctx.strokeText('点击拾取奖励', a.x, a.y - 58);
+      ctx.fillStyle = '#ffe9a8';
+      ctx.fillText('点击拾取奖励', a.x, a.y - 58);
+      ctx.restore();
+    }
   },
 
   // ---- 泳池水 (原版 PoolEffect.cpp 移植) ----
@@ -240,6 +303,28 @@ const Renderer = {
     }
   },
 
+  // ---- 浓雾 tint 预烘焙缓存 (8 cel × 8 明暗档 = 最多 64 张离屏小图) ----
+  _fogTint(fog, celCol, bucket) {
+    if (!fog.__fogTints) fog.__fogTints = {};
+    const k = celCol + '_' + bucket;
+    let c = fog.__fogTints[k];
+    if (c) return c;
+    const celW = fog.width / 8, celH = fog.height;
+    const v = Math.max(0.4, (40 + bucket * 27) / 100);   // 40%..100% 亮度
+    c = document.createElement('canvas');
+    c.width = Math.ceil(celW); c.height = Math.ceil(celH);
+    const cc = c.getContext('2d');
+    cc.drawImage(fog, celCol * celW, 0, celW, celH, 0, 0, c.width, c.height);
+    cc.globalCompositeOperation = 'multiply';
+    const g = Math.round(v * 255);
+    cc.fillStyle = `rgb(${g},${g},${g})`;
+    cc.fillRect(0, 0, c.width, c.height);
+    cc.globalCompositeOperation = 'destination-in';
+    cc.drawImage(fog, celCol * celW, 0, celW, celH, 0, 0, c.width, c.height);
+    fog.__fogTints[k] = c;
+    return c;
+  },
+
   // ---- 浓雾 (原版 Board::DrawFog 逐格移植) ----
   // fog.png 1680x190 = 8 cel × 210; 每格 celLook%8 选图, 颜色随 celLook+motion 变暗
   drawFog(ctx, board) {
@@ -270,11 +355,13 @@ const Renderer = {
         const phaseY = 6 * Math.PI * y / 7;
         const motion = 13 + 4 * Math.sin(time / 900 + phaseY) + 8 * Math.sin(time / 500 + phaseX);
         const cVariant = 255 - look * 1.5 - motion * 1.5;
+        // 性能: 明暗量化 8 档 → 预烘焙 tint 缓存 (替代逐格 ctx.filter 的 GPU 大开销)
+        const bucket = Math.max(0, Math.min(7, Math.round((cVariant - 40) / 27)));
+        const img2 = this._fogTint(fog, celCol, bucket);
         ctx.save();
         ctx.globalAlpha = Math.min(1, fade / 255);
-        ctx.filter = `brightness(${Math.max(40, cVariant / 2.55) / 100})`;
-        ctx.drawImage(fog, celCol * celW, 0, celW, celH, posX, posY, celW, celH);
-        if (x === 8) ctx.drawImage(fog, celCol * celW, 0, celW, celH, posX + 80, posY, celW, celH);
+        ctx.drawImage(img2, posX, posY, celW, celH);
+        if (x === 8) ctx.drawImage(img2, posX + 80, posY, celW, celH);
         ctx.restore();
       }
     }
@@ -284,12 +371,18 @@ const Renderer = {
     const name = m.type === 'pool' ? 'PoolCleaner' : m.type === 'roof' ? 'RoofCleaner' : 'LawnMower';
     if (!m.reanim) {
       m.reanim = Assets.reanim(name);
-      m.reanim.play('anim_normal', 0, 0);
+      // 原版割草机 reanim: LawnMower 动画区间名 'a' (非 anim_normal);
+      // RoofCleaner 无 anims 区间 → 全帧播放 (reanim.play 兼容无区间时整体播放)
+      const def = m.reanim.def;
+      const animName = def && def.anims && def.anims.length && def.anims.some(a => a[0] === 'anim_normal') ? 'anim_normal' : (def && def.anims && def.anims.length ? def.anims[0][0] : null);
+      if (animName) m.reanim.play(animName, RE.LOOP, 0);
+      else { m.reanim.frameStart = 0; m.reanim.frameCount = def ? def.n : 1; m.reanim.loopType = RE.LOOP; m.reanim.animRate = 0; }
     }
     const my = board.gridY(m.row) + (m.type === 'pool' ? 33 : 19);
     m.reanim.setPosition(m.x + (m.type === 'pool' ? 25 : 12), my);
     const sc = m.type === 'pool' ? 0.8 : 0.85;
     m.reanim.overrideScale(sc, sc);
+    // 原版: 待机静止; 触发后 animRate=70 播放 (轮子与机身同步滚动)
     m.reanim.animRate = m.state === 'running' ? 70 : 0;
     m.reanim.update(1 / 60);
     m.reanim.draw(ctx);
@@ -326,10 +419,18 @@ const Renderer = {
   },
 
   drawLimb(ctx, e) {
-    // 掉落肢体 (断臂/掉头/掉盔)
-    const img = Assets.image(e.kind === 'head' ? 'zombie_head' : e.kind === 'arm' ? 'zombie_arm' :
-      e.kind === 'cone' ? 'zombie_cone' : e.kind === 'bucket' ? 'zombie_bucket' :
-        e.kind === 'helm' ? 'zombie_football_helmet' : 'zombie_screendoor');
+    // 掉落肢体 (断臂/掉头/掉盔) — 原版独立贴图 (Zombie_head / Zombie_hand_arm / 原具分级图)
+    const imgMap = {
+      head: 'zombie_head',
+      arm: 'zombie_hand_arm',
+      cone: 'zombie_cone1',
+      bucket: 'zombie_bucket1',
+      door: 'zombie_screendoor1',
+      helm: e.imgName || 'zombie_football_helmet',
+      newspaper: 'zombie_paper_paper1',
+      ladder: 'zombie_ladder_2',
+    };
+    const img = Assets.image(e.imgName || imgMap[e.kind] || 'zombie_head');
     ctx.save();
     ctx.globalAlpha = Math.min(1, 1.6 - e.t);
     ctx.translate(e.x, e.y);

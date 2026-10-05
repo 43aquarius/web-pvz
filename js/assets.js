@@ -40,7 +40,11 @@ const Assets = (function () {
   }
 
   async function fetchPack(pack) {
-    const res = await fetch(packURL(pack));
+    // 30s 超时保护: 服务器异常时不至于永久卡住加载流程
+    const res = await Promise.race([
+      fetch(packURL(pack)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('pack ' + pack + ' timeout')), 30000)),
+    ]);
     if (!res.ok) throw new Error('pack ' + pack + ' HTTP ' + res.status);
     const buf = await res.arrayBuffer();
     if (buf.byteLength < 8) throw new Error('pack too small');
@@ -75,6 +79,21 @@ const Assets = (function () {
     }
   }
 
+  // 包存在性预检: lazy.json 的 img2pack/reanim2pack 反查全部包名 (缺失包跳过请求)
+  function packFileExists(p) {
+    if (!state._packSet) {
+      const s = new Set();
+      const idx = state.lazyIdx;
+      if (idx) {
+        for (const m of [idx.img2pack, idx.reanim2pack]) {
+          if (m) for (const v of Object.values(m)) s.add(v);
+        }
+      }
+      state._packSet = s;
+    }
+    return state._packSet.has(p);
+  }
+
   function ensurePacks(packs) {
     if (state.embedMode || window.__NO_PACK__ && window.__REANIM_DATA__) {
       // dev/dist: 全量已载
@@ -87,6 +106,11 @@ const Assets = (function () {
     const todo = [];
     for (const p of packs) {
       if (!p || state.packLoaded.has(p) || state.pending.has(p)) continue;
+      // 清单预检: lazy.json 未收录的包直接跳过 (防止请求不存在文件导致挂起/404)
+      if (state.lazyIdx && state.lazyIdx.img2pack && !packFileExists(p)) {
+        console.warn('分包不存在, 跳过:', p);
+        continue;
+      }
       const pr = fetchPack(p)
         .then(() => {
           state.packLoaded.add(p);
@@ -127,7 +151,8 @@ const Assets = (function () {
   function packsForLevel(level, purchasedSet) {
     const packs = new Set(['ui', 'fx']);
     const scene = level.scene || 'day';
-    packs.add('bg_' + scene);
+    // boss 场景背景 (background6boss.jpg) 实际归 bg_roof 包; boss 关同时补 roof 屋顶素材
+    packs.add(scene === 'boss' ? 'bg_roof' : 'bg_' + scene);
     const lv = level.id && level.id <= 50 ? level.id : (level.mode ? 50 : 50);
     // 僵尸: 该关允许的全部类型
     for (const t of Object.keys(ZOMBIES)) {
@@ -142,7 +167,7 @@ const Assets = (function () {
     const pool = availablePlants(lv, purchasedSet || new Set());
     for (const t of pool) packs.add('plant_' + t);
     // 特殊玩法植物 (EXPLODEONUT/GIANTWALLNUT 共享 Wallnut reanim → 归 plant_WALLNUT 包)
-    if (level.fixed === 'bowling') { packs.add('plant_WALLNUT'); }
+    if (level.fixed === 'bowling' || level.fixed === 'bowling2') { packs.add('plant_WALLNUT'); }
     if (level.fixed === 'izombie') {
       for (const t of ['SUNFLOWER', 'PEASHOOTER', 'SNOWPEA', 'REPEATER', 'WALLNUT']) packs.add('plant_' + t);
       for (const t of ['NORMAL', 'CONE', 'POLEVAULTER', 'BUCKET']) for (const p of zombiePacksFor(t)) packs.add(p);

@@ -654,6 +654,10 @@ class Zombie {
     } else {
       this.velX = 0.23 + Math.random() * 0.14;
     }
+    // 高速僵尸小游戏 (Zombies on Speed): 速度倍率
+    if (this.board && this.board.level && this.board.level.speedMul && this.velX > 0) {
+      this.velX *= this.board.level.speedMul;
+    }
     this.updateAnimSpeed();
   }
 
@@ -2468,10 +2472,17 @@ class Zombie {
     }
     if (remaining > 0) {
       const wasAlive = this.bodyHealth > 0;
-      this.takeBodyDamage(remaining, flags);
-      // 火系致命伤害 → 烧焦僵尸 (原版 ApplyBurn: PHASE_ZOMBIE_BURNED + 焦黑reanim)
-      if (fire && wasAlive && this.bodyHealth <= 0 && !this.isDeadOrDying) {
+      // 火系致命伤 → 焦化 (原版仅爆炸类 ApplyBurn; 高血量(≥1800)/Boss 只受 1800 伤不焦化)
+      const willKill = wasAlive && this.bodyHealth - remaining <= 0;
+      const noChar = this.bodyHealth >= 1800 || this.type === 'BOSS';   // 原版: 当前血量≥1800 只受伤不焦化
+      if (fire && willKill && !noChar && !this.isDeadOrDying) {
+        this.bodyHealth = 0;
         this.becomeCharred();
+      } else {
+        this.takeBodyDamage(remaining, flags);
+        if (fire && wasAlive && this.bodyHealth <= 0 && !this.isDeadOrDying && !noChar) {
+          this.becomeCharred();
+        }
       }
     }
   }
@@ -2691,27 +2702,33 @@ class Zombie {
     const drawPos = this.getDrawPos();
     let px = this.posX + drawPos.imageOffsetX + drawPos.headX + 14;
     let py = this.posY + drawPos.imageOffsetY + drawPos.headY + drawPos.bodyY + 18;
+    let kind = 'helm';   // 掉落贴图分类 (render.js drawLimb 按类选原版独立贴图)
     if (this.helmType === 'cone') {
       [px, py] = this.getTrackPosition('anim_cone') || [px, py];
       this.reanimShowPrefix('anim_cone', RG.HIDDEN);
       this.reanimShowPrefix('anim_hair', RG.NORMAL);
+      kind = 'cone';
     } else if (this.helmType === 'bucket') {
       [px, py] = this.getTrackPosition('anim_bucket') || [px, py];
       this.reanimShowPrefix('anim_bucket', RG.HIDDEN);
       this.reanimShowPrefix('anim_hair', RG.NORMAL);
+      kind = 'bucket';
     } else if (this.helmType === 'football') {
       [px, py] = this.getTrackPosition('zombie_football_helmet') || [px, py];
       this.reanimShowPrefix('zombie_football_helmet', RG.HIDDEN);
       this.reanimShowPrefix('anim_hair', RG.NORMAL);
+      kind = 'helm';
     } else if (this.helmType === 'digger') {
       this.reanimShowTrack('Zombie_digger_hardhat', RG.HIDDEN);
+      kind = 'helm';
     } else if (this.helmType === 'bobsled') {
       this.reanimShowPrefix('anim_bucket', RG.HIDDEN);
+      kind = 'bucket';
     }
     this.helmType = null;
     this.helmHealth = 0;
     if (!(flags & DMG.DOESNT_LEAVE_BODY)) {
-      this.board.addLimbParticle('helm', px, py);
+      this.board.addLimbParticle(kind, px, py);
     }
     this.updateDamageStates(flags);
   }
@@ -2848,52 +2865,61 @@ class Zombie {
     this.becomeCharred();
   }
 
-  // 焦黑僵尸替换 (原版: 生成 REANIM_ZOMBIE_CHARRED 播 crumble, 原僵尸 DieNoLoot)
+  // 焦黑僵尸 (原版 Zombie::ApplyBurn 8661-8805)
+  //   特殊类(蹦极/雪人/雪橇队/飞行/无头) → 原地烧焦雕像 (animRate=0, counter=300, DropLoot)
+  //   普通僵尸 → AddReanimation(Zombie_charred) 独立焦尸特效 (全时间轴 PLAY_ONCE, 速率×0.9-1.1) + 本体立即 DieWithLoot
   becomeCharred() {
     if (this.phase === PH.BURNED) return;
+    const b = this.board;
+    // 清除冰冻/黄油 (原版 RemoveIceTrap / ButteredCounter=min(,0))
+    if (this.iceTrapCounter > 0) this.iceTrapCounter = 0;
+    if (this.butteredCounter > 0) this.butteredCounter = Math.min(this.butteredCounter, 0);
+    this.velX = 0;
+    this.stopEating();
+    // ---- 特殊类: 原地雕像化 ----
+    const special = this.type === 'BUNGEE' || this.type === 'YETI' ||
+      this.isFlying || !this.hasHead;
+    if (special) {
+      if (this.bodyReanim) this.bodyReanim.animRate = 0;
+      this.phase = PH.BURNED;
+      this.phaseCounter = 300;
+      this.justGotShotCounter = 0;
+      this.dropLoot();
+      b.game.audio.play('zombie_burnt');
+      return;
+    }
+    // ---- 普通类: 独立焦尸特效 reanim + 立即死亡 (原版 AddReanimation + DieWithLoot) ----
     const map = {
       CATAPULT: 'Zombie_charred_catapult', DIGGER: 'Zombie_charred_digger',
       GARGANTUAR: 'Zombie_charred_gargantuar', REDEYE: 'Zombie_charred_gargantuar',
       IMP: 'Zombie_charred_imp', ZAMBONI: 'Zombie_charred_zamboni',
     };
     const defName = map[this.type] || 'Zombie_charred';
-    if (!RE.hasDef(defName)) {
-      // 兜底: 无焦黑reanim → 定格烧黑 (色染)
+    if (RE.hasDef(defName)) {
+      const r = new RE.Reanimation(defName);      // 构造: animRate=fps, frameCount=全时间轴
+      r.setPosition(this.posX + 22, this.posY - 10);   // 原版 (mPosX+22, mPosY-10)
+      r.renderOrder = this.renderOrder || (this.row * 10000 + 303000);  // 原版: mRenderOrder 同层
+      r.loopType = RE.PLAY_ONCE;                  // 播完自灭 (原版默认 REANIM_PLAY_ONCE)
+      r.animRate *= 0.9 + Math.random() * 0.2;    // 原版 RandRangeFloat(0.9, 1.1)
+      b.reanims.push(r);
+    } else {
+      // 兜底: 无焦黑reanim → 本体定格烧黑 (色染)
       this.phase = PH.BURNED;
       this.phaseCounter = 200;
-      this.velX = 0;
-      this.stopEating();
       if (this.bodyReanim) {
         this.bodyReanim.colorOverride = [30, 24, 20, 255];
         this.bodyReanim.animRate = 0;
       }
-      this.board.game.audio.play('zombie_burnt');
+      b.game.audio.play('zombie_burnt');
+      this.dieWithLoot();
       return;
     }
-    // 替换 reanim 实例 (保留位置/缩放)
-    const old = this.bodyReanim;
-    const r = Assets.reanim(defName);
-    if (old) {
-      r.x = old.x; r.y = old.y;
-      r.scaleX = old.scaleX; r.scaleY = old.scaleY;
-    }
-    // 原版: crumble 粉碎动画 速率×0.9-1.1 随机
-    r.play('anim_crumble', RE.PLAY_ONCE_HOLD, 24 * (0.9 + Math.random() * 0.2));
-    this.bodyReanim = r;
-    this.phase = PH.BURNED;
-    this.charredDef = defName;
-    this.velX = 0;
-    this.stopEating();
-    this.board.game.audio.play('zombie_burnt');
+    b.game.audio.play('zombie_burnt');
+    this.dieWithLoot();
   }
 
   updateBurn() {
-    // 焦黑僵尸: crumble 播完消失 (原版 reanim 播完 DieNoLoot)
-    const r = this.bodyReanim;
-    if (this.charredDef && r && r.loopCount > 0) {
-      this.dieNoLoot();
-      return;
-    }
+    // 原地雕像化的焦黑僵尸: 300 tick 后消失 (原版 5499: phaseCounter-- → 0 时 Die)
     this.phaseCounter--;
     if (this.phaseCounter <= 0) this.dieNoLoot();
   }
@@ -2991,6 +3017,7 @@ class Zombie {
 
   dieNoLoot() {
     this.dead = true;
+    if (this.board && this.board._noteKill) this.board._noteKill(this);
     if (this.bodyReanim) this.bodyReanim.reanimDie();
     if (this.flagReanim) this.flagReanim.reanimDie();
     if (this.specialHeadReanim) this.specialHeadReanim.reanimDie();
@@ -3007,6 +3034,7 @@ class Zombie {
 
   dieWithLoot() {
     this.dropLoot();
+    if (this.board && this.board._noteKill) this.board._noteKill(this);
     this.dieNoLoot();
   }
 

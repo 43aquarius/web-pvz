@@ -199,7 +199,7 @@ class Projectile {
         // 铁门僵尸: 正面子弹先打盾 (盾在hitZombies里通过takeDamage处理)
         const flags = { noFlash: false };
         if (this.def.chill) flags.chill = true;
-        if (this.def.fire) flags.fire = true;
+        // 火豌豆不触发灰烬化 (原版 ApplyBurn 仅由爆炸类调用, 火豌豆只是更高伤害)
         if (this.def.antiAir && z.flyingHigh) {
           // 对空加倍
           z.takeDamage(this.def.dmg * this.def.antiAir, board, flags);
@@ -226,7 +226,10 @@ class Projectile {
   splat(board, x) {
     const y = board.gridY(this.row) + 35;
     board.addEffect(this.def.splat || 'splat', x, y);
-    const snd = this.type === 'snowpea' ? 'snowpea_splat' : this.type === 'firepea' ? 'firepea' : 'splat';
+    // 原版豌豆命中音效: splat1/splat2/splat3 随机 (#12)
+    const snd = this.type === 'snowpea' ? 'snowpea_splat'
+      : this.type === 'firepea' ? 'firepea'
+      : 'splat' + (1 + Math.floor(Math.random() * 3));
     board.game.audio.play(snd);
   }
 

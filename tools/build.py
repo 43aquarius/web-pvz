@@ -21,7 +21,7 @@ HTML_HEAD = '''<!DOCTYPE html>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#1a1206">
-<title>植物大战僵尸 · Web 原版复刻版</title>
+<title>植物大战僵尸</title>
 <style>
   html, body { margin:0; padding:0; height:100%; background:#1a1206; overflow:hidden;
                overscroll-behavior:none; -webkit-text-size-adjust:100%; }

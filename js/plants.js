@@ -140,7 +140,13 @@ class Plant {
         for (const L of this.anims) if (L.r.animExists('anim_idle')) L.r.play('anim_idle', RE.PLAY_ONCE_HOLD, 0);
         break;
       case 'CHERRYBOMB': case 'DOOMSHROOM': case 'JALAPENO': case 'ICESHROOM': case 'BLOVER':
-        this.state = 'fuse'; this.fuseT = d.fuse || 1; break;
+        this.state = 'fuse'; this.fuseT = d.fuse || 1;
+        // 樱桃炸弹: 种下后快速膨胀变大 (原版 1.05s 待机 + scale 脉冲) — #15
+        if (this.type === 'CHERRYBOMB') {
+          this.fuseT = 1.05;   // 原版 mPlantAge >= 105tick 引爆
+          for (const L of this.anims) if (L.r.animExists('anim_idle')) L.r.play('anim_idle', RE.LOOP, 26);
+        }
+        break;
       case 'SUNSHROOM':
         this.timer = 30; break;
       case 'COBCANNON':
@@ -232,8 +238,8 @@ class Plant {
           // 触发: 僵尸靠近
           for (const z of board.zombies) {
             if (!z.dead && z.row === this.row && !z.underwater && Math.abs(z.hitX() - (this.x + 40)) < 55 && !z.boss) {
-              // 原版: 半径60行内0, burn=false → TakeDamage(1800,18U) 即死不掉肢体
-              this.explode(board, d.radius, d.dmg);
+              // 原版: 半径60行内0, TakeDamage(1800, 18U) → 火系致命伤 → 僵尸烧焦化灰烬 (#11)
+              this.explode(board, d.radius, d.dmg, { fire: true });
               board.game.audio.play('spudow');
               return;
             }
@@ -305,11 +311,20 @@ class Plant {
       }
       case 'WALLNUT': case 'EXPLODEONUT': case 'GIANTWALLNUT': {
         // ---- 坚果保龄球 (原版 Plant::UpdateBowling 完整移植) ----
-        // 原版: mX -= _ground 轨道速度(负值) → 向右滚; mX>800 消失; 撞僵尸后换行弹跳
+        // 原版: SetFramesForLayer("_ground") 播放帧43-56 (脸绕圆周转 = 滚动视觉), mX -= _ground 轨道速度
         if (this.rolling) {
+          // 首次滚动: 切换到 _ground 帧区间 (原版 Plant 构造 172: 保龄球关播放 _ground 层)
+          if (!this._rollAnimSet) {
+            this._rollAnimSet = true;
+            const body = this.anims[0] && this.anims[0].r;
+            if (body && body.def && body.def.n >= 56) {
+              body.frameStart = 43; body.frameCount = 13; body.loopType = RE.LOOP;
+              body.animRate = this.type === 'GIANTWALLNUT' ? 6 + Math.random() * 4 : 12 + Math.random() * 6;
+              body.animTime = 0;
+            }
+          }
           const rollSpeed = this.type === 'GIANTWALLNUT' ? 300 : 170;   // 原版巨型 ×2
           this.x += rollSpeed * dt;
-          this.rollSpin = (this.rollSpin || 0) + dt * (this.type === 'GIANTWALLNUT' ? 300 : 500);
           // 撞僵尸判定 (原版 FindTargetZombie 同行)
           let hitZombie = null;
           for (const z of board.zombies) {
@@ -319,12 +334,12 @@ class Plant {
           if (hitZombie) {
             const zx = this.x + 40, zy = this.y + 40;
             if (this.type === 'EXPLODEONUT') {
-              // 原版: 爆炸坚果 90 半径 3x3 清场 + ShakeBoard
+              // 原版: 爆炸坚果 90 半径 3x3 清场 + ShakeBoard (火系 → 灰烬化)
               board.addEffect('powie', zx, zy);
               for (const z2 of board.zombies) {
                 if (z2.dead || z2.boss) continue;
                 if (Math.abs(z2.hitX() - zx) < 115 && Math.abs(z2.row - this.row) <= 1) {
-                  z2.takeDamage(1800, board, { exploded: true });
+                  z2.takeDamage(1800, board, { exploded: true, noFlash: true, fire: true });
                 }
               }
               board.game.audio.play('cherrybomb');
@@ -723,7 +738,7 @@ class Plant {
     this.die();   // 清除网格引用 → 格子立即可复种
   }
 
-  explode(board, radius, dmg) {
+  explode(board, radius, dmg, opts = {}) {
     const cx = this.x + 40, cy = this.y + 40;
     board.addEffect('powie', cx, cy);
     // 原版 KillAllZombiesInRadius: 圆-矩形相交 + 行范围 ≤1
@@ -732,8 +747,8 @@ class Plant {
       if (Math.abs(z.row - this.row) > 1) continue;
       const zy = board.gridY(z.row) + 42;
       if (Math.hypot(z.hitX() - cx, zy - cy) < radius + 30) {
-        // 樱桃炸弹/末日菇 burn=true → 烧焦僵尸 (原版 ApplyBurn)
-        const fire = this.type === 'CHERRYBOMB' || this.type === 'DOOMSHROOM';
+        // 樱桃炸弹/末日菇/土豆雷 burn=true → 烧焦僵尸化灰烬 (原版 ApplyBurn)
+        const fire = !!opts.fire || this.type === 'CHERRYBOMB' || this.type === 'DOOMSHROOM' || this.type === 'EXPLODEONUT';
         z.takeDamage(dmg, board, { exploded: true, noFlash: true, fire });
       }
     }
@@ -884,16 +899,7 @@ class Plant {
       if (L.attached) continue;   // 已由身体轨道挂载绘制 (完整矩阵跟随: 旋转/缩放/位移)
       L.r.setPosition(this.x, dy);
       L.r.overrideScale(sc, sc);
-      // 坚果保龄球滚动旋转 (绕格心)
-      if (this.rolling && this.rollSpin !== undefined) {
-        const th = this.rollSpin * Math.PI / 180;
-        const cx = this.x + 40, cy = dy + 40;
-        const a = Math.cos(th), b = Math.sin(th);
-        const ov = L.r.overlay;
-        ov[0] = a; ov[1] = b; ov[2] = -b; ov[3] = a;
-        ov[4] = cx - (a * cx - b * cy);
-        ov[5] = cy - (b * cx + a * cy);
-      }
+      // 坚果保龄球滚动: 旋转由 reanim _ground 帧区间自带 (脸绕圆周) — 无需手动 overlay 旋转
       L.r.refreshAttachments();   // 头部等附件立即同步 (消除一帧滞后)
       if (this.eatFlash > 0) {
         ctx.save();

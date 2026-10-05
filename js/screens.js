@@ -37,7 +37,11 @@ const Screens = {
   mouse: { x: 400, y: 300 },
   hover: null,
 
-  update(dt) { this.t += dt; },
+  update(dt) {
+    this.t += dt;
+    // 标题屏 logo 落下动画 (其余屏: menu 在 draw 内自更新, zengarden 由主循环单独驱动)
+    if (typeof Screens.title.update === 'function') Screens.title.update(dt);
+  },
 };
 
 // ================================================================
@@ -45,15 +49,30 @@ const Screens = {
 // ================================================================
 Screens.title = {
   started: false,
+  logoT: 0,           // logo 下落弹跳动画计时 (原版 mTitleStateCounter)
+  update(dt) { this.logoT = (this.logoT || 0) + dt * 100; },
   draw(ctx) {
+    // 原版标题屏: IMAGE_TITLESCREEN (titlescreen.jpg 场景图) + IMAGE_PVZ_LOGO 叠加 (#6)
+    // 提取资产无 logo 图 → 用原版风格字体 logo 还原 (无 "Web原版复刻" 等自造副标题)
     const bg = img('titlescreen.jpg');
     if (bg) ctx.drawImage(bg, 0, 0, 800, 600);
     else { ctx.fillStyle = '#20300a'; ctx.fillRect(0, 0, 800, 600); }
     const t = Screens.t;
-    // 标题 logo (文字版, 原版风格: 蓬松绿+描边+高光)
+    // ---- PvZ logo (原版 TitleScreen.cpp: counter 100→60 EASE_IN 从-150加速落下, 60→50 BOUNCE 落地回弹, 之后静止 y=10) ----
+    const tc = this.logoT || 0;                      // 屏幕显示后经过的 tick (100/s)
+    const counter = Math.max(0, 100 - tc);           // 原版 mTitleStateCounter 递减
+    let logoY;
+    if (counter > 60) {
+      const k = Math.min(1, (100 - counter) / 40);   // 0→1
+      logoY = -150 + k * k * 160;                    // EASE_IN(t²) 加速下落
+    } else if (counter > 50) {
+      const k = (60 - counter) / 10;                 // 0→1
+      logoY = 10 + (1 - Math.abs(2 * k - 1)) * 5;    // BOUNCE 三角波 落地回弹
+    } else {
+      logoY = 10;
+    }
     ctx.save();
-    const bob = Math.sin(t * 1.2) * 3;
-    ctx.translate(400, 148 + bob);
+    ctx.translate(400, logoY + 110);
     ctx.font = 'bold 82px "Noto Sans SC", sans-serif';
     ctx.textAlign = 'center';
     ctx.lineWidth = 16; ctx.strokeStyle = '#1d3b06'; ctx.lineJoin = 'round';
@@ -69,19 +88,11 @@ Screens.title = {
     ctx.fillStyle = '#ffffff';
     ctx.fillText('植物大战僵尸', 0, 0);
     ctx.restore();
-    ctx.font = 'bold 26px "Noto Sans SC", sans-serif';
-    ctx.lineWidth = 6; ctx.strokeStyle = '#1d3b06';
-    ctx.strokeText('Web 原版复刻', 0, 38);
-    ctx.fillStyle = '#cfe89a';
-    ctx.fillText('Web 原版复刻', 0, 38);
     ctx.restore();
-    // 点击开始 (闪烁)
-    const a = 0.55 + 0.45 * Math.sin(t * 3.2);
-    ctx.save(); ctx.globalAlpha = a; ctx.restore();
-    pvzText(ctx, '点 击 开 始', 400, 480, 34, '#ffe9a8', { stroke: 'rgba(30,18,0,0.9)' });
+    // 点击开始 (闪烁, 原版 Click to start 位置)
     ctx.save();
     ctx.globalAlpha = 0.6 + 0.4 * Math.sin(t * 3.2);
-    pvzText(ctx, '点 击 屏 幕 任 意 处', 400, 520, 22, '#ffffff');
+    pvzText(ctx, '点 击 开 始', 400, 480, 34, '#ffe9a8', { stroke: 'rgba(30,18,0,0.9)' });
     ctx.restore();
     ctx.save();
     ctx.globalAlpha = 0.75;
@@ -192,7 +203,13 @@ Screens.menu = {
     }
   },
 
-  // ---- 按钮区 (原版 TrackButton: 轨道变换 + 偏移) ----
+  // ---- 按钮区 (原版 GameSelector::Update TrackButton 绑定, 1:1 对应) ----
+  //   mAdventureButton → StartAdventure_button / Adventure_button 轨道 (0,0)
+  //   mMinigameButton (玩玩小游戏) → Survival_button 轨道 (0,0)   [原版素材命名混乱, 图=开始小游戏墓碑]
+  //   mPuzzleButton (解谜模式) → Challenges_button 轨道 (0,0)     [图=解谜模式墓碑]
+  //   mSurvivalButton (生存模式) → ZenGarden_button 轨道 (0,0)    [图=生存模式奖杯]
+  //   mZenGardenButton (禅镜花园水壶) → BG_Right + (100,360) 130x130
+  //   mStoreButton (戴夫的店) → BG_Right + (334,441)
   computeButtons() {
     if (!this.inst) return [];
     const inst = this.inst;
@@ -206,13 +223,19 @@ Screens.menu = {
     // 冒险模式大按钮
     const [ax, ay] = trackPos('SelectorScreen_StartAdventure_button');
     B.push({ k: 'adventure', x: ax, y: ay, w: 331, h: 146, track: 'SelectorScreen_StartAdventure_button', hl: 'selectorscreen_startadventure_highlight.png' });
-    // 小游戏/解谜 (解锁: 玩玩小游戏+解谜模式) / 生存
-    const [mx, my] = trackPos('SelectorScreen_Survival_button');
-    B.push({ k: 'survival', x: mx, y: my, w: 313, h: 133 });
-    const [px, py] = trackPos('SelectorScreen_Challenges_button');
-    B.push({ k: 'challenges', x: px, y: py, w: 286, h: 122 });
-    const [vx, vy] = trackPos('SelectorScreen_ZenGarden_button');
-    B.push({ k: 'zengarden', x: vx, y: vy, w: 266, h: 123 });
+    // 玩玩小游戏 (墓碑) — 原版 mMinigameButton → Survival_button 轨道
+    const [gx, gy] = trackPos('SelectorScreen_Survival_button');
+    B.push({ k: 'minigames', x: gx, y: gy, w: 313, h: 133, track: 'SelectorScreen_Survival_button', hl: 'selectorscreen_survival_highlight.png' });
+    // 解谜模式 (墓碑) — 原版 mPuzzleButton → Challenges_button 轨道
+    const [px2, py2] = trackPos('SelectorScreen_Challenges_button');
+    B.push({ k: 'puzzle', x: px2, y: py2, w: 286, h: 122, track: 'SelectorScreen_Challenges_button', hl: 'selectorscreen_challenges_highlight.png' });
+    // 生存模式 (奖杯) — 原版 mSurvivalButton → ZenGarden_button 轨道 (图=vasebreaker_button 生存奖杯)
+    const [sx, sy] = trackPos('SelectorScreen_ZenGarden_button');
+    B.push({ k: 'survival', x: sx, y: sy, w: 266, h: 123, track: 'SelectorScreen_ZenGarden_button', hl: 'selectorscreen_vasebreaker_highlight.png' });
+    // 禅镜花园 (水壶) — 原版 mZenGardenButton → BG_Right + (100,360) 130x130
+    B.push({ k: 'zengarden', x: bgR[0] + 100, y: bgR[1] + 360, w: 130, h: 130, hl: 'selectorscreen_zengardenhighlight.png' });
+    // 戴夫的店 (商店图标) — 原版 mStoreButton → BG_Right + (334,441)
+    B.push({ k: 'shop', x: bgR[0] + 334, y: bgR[1] + 441, w: 74, h: 74, hl: 'selectorscreen_storehighlight.png' });
     // 图鉴 (原版: BG_Right + (256,387))
     B.push({ k: 'almanac', x: bgR[0] + 256, y: bgR[1] + 387, w: 99, h: 99, hl: 'selectorscreen_almanachighlight.png' });
     // 选项/帮助/退出 (原版: BG_Right 偏移)
@@ -229,14 +252,15 @@ Screens.menu = {
   fallbackButtons() {
     const game = Screens.game;
     const btns = [
-      { k: 'adventure', x: 234, y: 170, w: 332, h: 82, label: '冒 险 模 式' },
-      { k: 'challenges', x: 234, y: 262, w: 332, h: 66, label: '玩玩小游戏 · 解谜' },
-      { k: 'survival', x: 234, y: 338, w: 332, h: 66, label: '生 存 模 式' },
-      { k: 'almanac', x: 234, y: 414, w: 155, h: 60, label: '图 鉴' },
-      { k: 'options', x: 411, y: 414, w: 155, h: 60, label: '选　项' },
+      { k: 'adventure', x: 234, y: 130, w: 332, h: 66, label: '冒 险 模 式' },
+      { k: 'minigames', x: 234, y: 204, w: 332, h: 56, label: '玩玩小游戏' },
+      { k: 'puzzle', x: 234, y: 268, w: 332, h: 56, label: '解 谜 模 式' },
+      { k: 'survival', x: 234, y: 332, w: 332, h: 56, label: '生 存 模 式' },
+      { k: 'almanac', x: 234, y: 412, w: 155, h: 60, label: '图 鉴' },
+      { k: 'options', x: 411, y: 412, w: 155, h: 60, label: '选　项' },
     ];
     if (game && game.shopUnlocked && game.shopUnlocked()) {
-      btns.push({ k: 'shop', x: 411, y: 330, w: 155, h: 60, label: '戴夫商店' });
+      btns.push({ k: 'shop', x: 411, y: 332, w: 155, h: 56, label: '戴夫商店' });
     }
     return btns;
   },
@@ -304,7 +328,7 @@ Screens.menu = {
     if (this.leafInst) this.leafInst.draw(ctx);
     // ---- 5. 花 ----
     for (const f of this.flowers) f.draw(ctx);
-    // ---- 6. 附加元素 (图鉴书/小按钮/悬停高亮) ----
+    // ---- 6. 附加元素 (图鉴书/水壶/商店图标/小按钮/悬停高亮) ----
     this.buttons = this.computeButtons();
     const hover = Screens.hover;
     // 图鉴书 (原版: 按钮图片 99x99 画在轨道位置)
@@ -313,6 +337,37 @@ Screens.menu = {
       const isH = hover === 'almanac';
       const aimg = img(isH ? 'selectorscreen_almanachighlight.png' : 'selectorscreen_almanac.png');
       if (aimg) ctx.drawImage(aimg, alm.x, alm.y);
+    }
+    // 禅镜花园水壶 (原版 mZenGardenButton: BG_Right+(100,360) zengarden.png 130x130)
+    const zg = this.buttons.find(b => b.k === 'zengarden');
+    if (zg) {
+      const isH = hover === 'zengarden';
+      const zimg = img(isH ? 'selectorscreen_zengardenhighlight.png' : 'selectorscreen_zengarden.png');
+      if (zimg) ctx.drawImage(zimg, zg.x, zg.y, 130, 130);
+    }
+    // 戴夫的店图标 (原版 mStoreButton: BG_Right+(334,441) store.png) — 通关 3-4 解锁
+    const shop = this.buttons.find(b => b.k === 'shop');
+    if (shop) {
+      const game0 = Screens.game;
+      if (game0 && game0.shopUnlocked && game0.shopUnlocked()) {
+        const isH = hover === 'shop';
+        const simg = img(isH ? 'selectorscreen_storehighlight.png' : 'selectorscreen_store.png');
+        if (simg) ctx.drawImage(simg, shop.x, shop.y);
+        // 悬停时显示金币余额
+        if (isH) pvzText(ctx, '◆ ' + (game0.coins || 0), shop.x + 37, shop.y - 10, 14, '#ffd34d');
+      } else {
+        shop.disabled = true;
+      }
+    }
+    // 墓碑/奖杯按钮悬停高亮 (原版 SetImageOverride: 悬停换高亮图)
+    const trackOverrides = [
+      { track: 'SelectorScreen_Survival_button', k: 'minigames', hl: 'selectorscreen_survival_highlight.png' },
+      { track: 'SelectorScreen_Challenges_button', k: 'puzzle', hl: 'selectorscreen_challenges_highlight.png' },
+      { track: 'SelectorScreen_ZenGarden_button', k: 'survival', hl: 'selectorscreen_vasebreaker_highlight.png' },
+    ];
+    for (const to of trackOverrides) {
+      if (hover === to.k) inst.setImageOverride(to.track, to.hl);
+      else inst.setImageOverride(to.track, null);
     }
     // 冒险按钮高亮 (轨道 override) + 开始/继续状态切换 (原版 mShowStartButton)
     const adv = this.buttons.find(b => b.k === 'adventure');
@@ -376,63 +431,43 @@ Screens.menu = {
     if (hover === 'locked') {
       pvzText(ctx, '尚未开放', 400, 240, 18, '#cfcfcf');
     }
-    // ---- 戴夫的车 → 商店 (原版素材 Store_HatchbackOpen; 通关 3-4 后解锁) ----
-    if (game && game.shopUnlocked && game.shopUnlocked()) {
-      const cx = 60, cy = 330, cw2 = 200, ch2 = 110;
-      this.shopRect = { x: cx, y: cy, w: cw2, h: ch2 };
-      const hov2 = inRect(Screens.mouse || { x: -1, y: -1 }, cx, cy, cw2, ch2);
-      const carImg = img('store_hatchbackopen.png');
-      if (carImg) {
-        ctx.save();
-        const bob = Math.sin(Screens.t * 2.2) * 2;
-        ctx.translate(cx + cw2 / 2, cy + ch2 / 2 + bob * 0.3);
-        const sc = hov2 ? 1.04 : 1;
-        ctx.scale(sc, sc);
-        ctx.drawImage(carImg, -carImg.width / 2, -carImg.height / 2);
-        ctx.restore();
-      } else {
-        // 兜底: 程序化车
-        ctx.save();
-        ctx.translate(cx + cw2 / 2, cy + ch2 / 2);
-        const bump = Math.sin(Screens.t * 2.2) * 2;
-        ctx.translate(0, bump * 0.4);
-        ctx.fillStyle = hov2 ? '#d94f3a' : '#b23a28';
-        ctx.beginPath(); ctx.roundRect(-cw2 / 2 + 8, -18, cw2 - 22, 34, 7); ctx.fill();
-        ctx.fillStyle = hov2 ? '#e88a70' : '#c86a52';
-        ctx.beginPath(); ctx.roundRect(-cw2 / 2 + 26, -38, 44, 24, 6); ctx.fill();
-        ctx.fillStyle = '#222';
-        ctx.beginPath(); ctx.arc(-cw2 / 2 + 24, 20, 11, 0, Math.PI * 2); ctx.arc(cw2 / 2 - 22, 20, 11, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#888';
-        ctx.beginPath(); ctx.arc(-cw2 / 2 + 24, 20, 5, 0, Math.PI * 2); ctx.arc(cw2 / 2 - 22, 20, 5, 0, Math.PI * 2); ctx.fill();
-        ctx.restore();
+    // 未解锁模式的悬停提示 (原版 MODE_LOCKED)
+    if (game) {
+      if (hover === 'minigames' || hover === 'puzzle') {
+        if (game.progress.unlocked <= 11) pvzText(ctx, '通关冒险模式 1-1 后开放', 400, 560, 15, '#cfe0ff');
+      } else if (hover === 'survival') {
+        if (game.progress.unlocked <= 12) pvzText(ctx, '通关冒险模式后开放', 400, 560, 15, '#cfe0ff');
+      } else if (hover === 'zengarden') {
+        if (!game.zenGardenUnlocked()) pvzText(ctx, '通关 5-4 ( level 44 ) 后开放', 400, 560, 15, '#cfe0ff');
+      } else if (hover === 'shop') {
+        if (!game.shopUnlocked()) pvzText(ctx, '通关 3-4 后开放', 400, 560, 15, '#cfe0ff');
       }
-      // 金币余额角标 (悬停时显示)
-      if (hov2) {
-        pvzText(ctx, '◆ ' + (game.coins || 0), cx + cw2 / 2, cy - 12, 15, '#ffd34d');
-      }
-    } else {
-      this.shopRect = null;
     }
   },
 
   click(p, game) {
-    // 戴夫商店入口
-    if (this.shopRect && inRect(p, this.shopRect.x, this.shopRect.y, this.shopRect.w, this.shopRect.h)) {
-      game.audio.play('gravebutton');
-      game.state = 'shop'; Screens.shop.enter();
-      return;
-    }
     for (const b of (this.buttons || [])) {
       if (!inRect(p, b.x, b.y, b.w, b.h)) continue;
+      if (b.disabled) { game.audio.play('buzzer'); return; }
       if (b.k === 'adventure') {
         game.audio.play('gravebutton');
         this.inst && this.inst.setImageOverride('SelectorScreen_StartAdventure_button', null);
         game.startAdventure();
-      } else if (b.k === 'challenges') {
+      } else if (b.k === 'minigames') {
+        // 玩玩小游戏 (原版 mMinigameButton → ChallengeScreen(PAGE_CHALLENGE), 通关解锁)
+        if (game.progress.unlocked <= 11) { game.audio.play('buzzer'); return; }
         game.audio.play('gravebutton');
         game.state = 'modeselect';
-        Screens.modeSelect.enter('challenge');
+        Screens.modeSelect.enter('minigames');
+      } else if (b.k === 'puzzle') {
+        // 解谜模式 (原版 mPuzzleButton → ChallengeScreen(PAGE_PUZZLE))
+        if (game.progress.unlocked <= 11) { game.audio.play('buzzer'); return; }
+        game.audio.play('gravebutton');
+        game.state = 'modeselect';
+        Screens.modeSelect.enter('puzzle');
       } else if (b.k === 'survival') {
+        // 生存模式 (原版 mSurvivalButton → ChallengeScreen(PAGE_SURVIVAL))
+        if (game.progress.unlocked <= 12) { game.audio.play('buzzer'); return; }
         game.audio.play('gravebutton');
         game.state = 'modeselect';
         Screens.modeSelect.enter('survival');
@@ -933,36 +968,89 @@ Screens.levelSelect = {
 };
 
 // ================================================================
-// 模式选择屏 (玩玩小游戏 / 解谜 / 生存) — 原版 ChallengeScreen 风格
+// 模式选择屏 — 原版 ChallengeScreen 完整还原 (#7)
+//   三个独立页面 (从主菜单各自入口进入, 彼此独立, 只能返回主菜单):
+//     minigames (玩玩小游戏 CHALLENGE_PAGE_CHALLENGE 20格)
+//     puzzle    (解谜模式 CHALLENGE_PAGE_PUZZLE 20格)
+//     survival  (生存模式 CHALLENGE_PAGE_SURVIVAL 10格)
+//   原版布局: 4行×5列 挑战格子 (38+col*155, 93+row*119) 104x115
 // ================================================================
 const MODE_GROUPS = {
-  challenge: {
+  minigames: {
     title: '玩玩小游戏',
+    // 原版 CHALLENGE_PAGE_CHALLENGE 20 项 (gChallengeDefs 顺序), beghouled×2/zombiquarium 暂未实作
     items: [
-      { key: 'bowling', label: '坚果保龄球', desc: '传送带上滚出坚果，把僵尸撞飞！' },
-      { key: 'whack', label: '打僵尸', desc: '僵尸冒头就敲！考验手速。' },
-      { key: 'raining', label: '雨天种子', desc: '天上掉种子包，接住就能种。' },
-      { key: 'vasebreaker', label: '花瓶终结者', desc: '打碎神秘罐子，小心僵尸。' },
-      { key: 'izombie', label: '我是僵尸', desc: '这一次，你来指挥僵尸。' },
+      { key: 'war_and_peas', label: '豌豆大战', icon: 'PEASHOOTER', desc: '豌豆射手大阅兵' },
+      { key: 'bowling', label: '坚果保龄球', icon: 'WALLNUT', desc: '坚果滚滚滚' },
+      { key: 'slot_machine', label: '老虎机', icon: 'SUNFLOWER', desc: '随机神秘种子' },
+      { key: 'raining', label: '雨天种子', icon: 'REPEATER', desc: '天降种子包' },
+      { key: null, label: '消消乐', icon: null, desc: '敬请期待' },
+      { key: 'invisighoul', label: '隐形僵尸', icon: 'ICESHROOM', desc: '看不见的僵尸' },
+      { key: 'seeing_stars', label: '看见星星', icon: 'STARFRUIT', desc: '杨桃阵点亮' },
+      { key: null, label: '僵尸水族馆', icon: null, desc: '敬请期待' },
+      { key: null, label: '消消乐·转', icon: null, desc: '敬请期待' },
+      { key: 'little_trouble', label: '小麻烦', icon: 'LILYPAD', desc: '泳池小麻烦' },
+      { key: 'portal_combat', label: '传送门战斗', icon: 'CACTUS', desc: '传送门夹击' },
+      { key: 'column', label: '列队僵尸', icon: 'FLOWERPOT', desc: '一列一列打' },
+      { key: 'bobsled_bonanza', label: '雪橇大丰收', icon: 'BOBSLED', desc: '雪橇小队来袭' },
+      { key: 'zombies_speed', label: '高速僵尸', icon: 'FOOTBALL', desc: '僵尸喝了红牛' },
+      { key: 'whack', label: '打僵尸', icon: 'NORMAL', desc: '冒头就敲' },
+      { key: 'last_stand', label: '最后防线', icon: 'TALLNUT', desc: '巨额阳光守到底' },
+      { key: 'war_and_peas_2', label: '豌豆大战2', icon: 'GATLINGPEA', desc: '更密集的豌豆' },
+      { key: 'bowling2', label: '保龄球·极', icon: 'GIANTWALLNUT', desc: '巨型坚果登场' },
+      { key: 'pogo_party', label: '跳跳派对', icon: 'POGO', desc: '跳跳僵尸狂欢' },
+      { key: 'final_boss', label: '最终Boss', icon: 'BOSS', desc: '僵王博士决战' },
+    ],
+  },
+  puzzle: {
+    title: '解谜模式',
+    // 原版 CHALLENGE_PAGE_PUZZLE: 花瓶终结者 10 关 + 我是僵尸 10 关
+    items: [
+      { key: 'vasebreaker', label: '花瓶终结者 I', icon: 'WALLNUT', desc: '砸罐子放植物' },
+      { key: 'vasebreaker2', label: '花瓶终结者 II', icon: 'CHOMPER', desc: '更凶险的罐阵' },
+      { key: 'vasebreaker3', label: '花瓶终结者 III', icon: 'JALAPENO', desc: '终极罐子考验' },
+      { key: null, label: '花瓶 IV', icon: null, desc: '敬请期待' },
+      { key: null, label: '花瓶 V', icon: null, desc: '敬请期待' },
+      { key: null, label: '花瓶 VI', icon: null, desc: '敬请期待' },
+      { key: null, label: '花瓶 VII', icon: null, desc: '敬请期待' },
+      { key: null, label: '花瓶 VIII', icon: null, desc: '敬请期待' },
+      { key: null, label: '花瓶 IX', icon: null, desc: '敬请期待' },
+      { key: null, label: '花瓶·无尽', icon: null, desc: '敬请期待' },
+      { key: 'izombie', label: '我是僵尸 I', icon: 'NORMAL', desc: '指挥僵尸吃脑' },
+      { key: 'izombie2', label: '我是僵尸 II', icon: 'CONE', desc: '夜晚指挥官' },
+      { key: 'izombie3', label: '我是僵尸 III', icon: 'BUCKET', desc: '铜墙铁壁防线' },
+      { key: null, label: '僵尸 IV', icon: null, desc: '敬请期待' },
+      { key: null, label: '僵尸 V', icon: null, desc: '敬请期待' },
+      { key: null, label: '僵尸 VI', icon: null, desc: '敬请期待' },
+      { key: null, label: '僵尸 VII', icon: null, desc: '敬请期待' },
+      { key: null, label: '僵尸 VIII', icon: null, desc: '敬请期待' },
+      { key: null, label: '僵尸 IX', icon: null, desc: '敬请期待' },
+      { key: null, label: '僵尸·无尽', icon: null, desc: '敬请期待' },
     ],
   },
   survival: {
     title: '生存模式',
+    // 原版 CHALLENGE_PAGE_SURVIVAL: 普通 5 + 困难 5
     items: [
-      { key: 'survival_day', label: '白天生存', desc: '白天草坪，波次无尽增强。' },
-      { key: 'survival_night', label: '黑夜生存', desc: '黑夜墓园，蘑菇的战场。' },
-      { key: 'survival_pool', label: '泳池生存', desc: '六行泳池，水陆两线作战。' },
-      { key: 'survival_fog', label: '浓雾生存', desc: '浓雾弥漫，视野受限。' },
-      { key: 'survival_roof', label: '屋顶生存', desc: '屋顶花盆，投手的主场。' },
+      { key: 'survival_day', label: '白天生存', icon: 'SUNFLOWER', desc: '白天草坪' },
+      { key: 'survival_night', label: '黑夜生存', icon: 'PUFFSHROOM', desc: '黑夜墓园' },
+      { key: 'survival_pool', label: '泳池生存', icon: 'LILYPAD', desc: '水陆两线' },
+      { key: 'survival_fog', label: '浓雾生存', icon: 'PLANTERN', desc: '视野受限' },
+      { key: 'survival_roof', label: '屋顶生存', icon: 'CABBAGEPULT', desc: '屋顶花盆' },
+      { key: 'survival_day_hard', label: '白天生存·难', icon: 'GATLINGPEA', desc: '全兵种僵尸' },
+      { key: 'survival_night_hard', label: '黑夜生存·难', icon: 'DOOMSHROOM', desc: '重甲军团' },
+      { key: 'survival_pool_hard', label: '泳池生存·难', icon: 'TANGLEKELP', desc: '海豚雪橇齐上阵' },
+      { key: 'survival_fog_hard', label: '浓雾生存·难', icon: 'MAGNETSHROOM', desc: '矿工气球夜袭' },
+      { key: 'survival_roof_hard', label: '屋顶生存·难', icon: 'MELONPULT', desc: '投石车与巨人' },
     ],
   },
 };
 
 Screens.modeSelect = {
-  group: 'challenge',
+  group: 'minigames',
   hover: null,
   _cells: null,
-  enter(group) { this.group = group || 'challenge'; },
+  enter(group) { this.group = group || 'minigames'; },
   // 原版 ChallengeScreen 按钮布局: (38+col*155, 93+row*119) 104x115
   cells() {
     const g = MODE_GROUPS[this.group];
@@ -984,7 +1072,7 @@ Screens.modeSelect = {
       if (bg1) { ctx.globalAlpha = 0.25; ctx.drawImage(bg1, -220, 0); ctx.globalAlpha = 1; }
       ctx.fillStyle = 'rgba(10,6,2,0.6)'; ctx.fillRect(0, 0, 800, 600);
     }
-    // 标题 (原版挑战页标题木牌)
+    // 标题 (原版挑战页标题木牌位置)
     pvzText(ctx, g.title, 400, 52, 36, '#ffe36a');
     pvzText(ctx, '点击选择一个玩法', 400, 86, 14, '#e8d9b5');
     const cells = this.cells();
@@ -993,36 +1081,45 @@ Screens.modeSelect = {
     cells.forEach((c, i) => {
       const hov = hover === 'mode' + i;
       ctx.save();
-      // 按钮 (原版风格: 悬停亮框)
-      ctx.fillStyle = hov ? 'rgba(120,90,40,0.55)' : 'rgba(60,44,20,0.55)';
-      ctx.strokeStyle = hov ? '#ffe9a8' : 'rgba(90,70,40,0.8)';
+      // 按钮 (原版风格: 悬停亮框; 未实作项灰显)
+      const locked = !c.key;
+      ctx.fillStyle = locked ? 'rgba(40,30,16,0.55)' : hov ? 'rgba(120,90,40,0.62)' : 'rgba(60,44,20,0.55)';
+      ctx.strokeStyle = locked ? 'rgba(70,54,30,0.6)' : hov ? '#ffe9a8' : 'rgba(90,70,40,0.8)';
       ctx.lineWidth = 2.5;
       ctx.beginPath(); ctx.roundRect(c.x, c.y, c.w, c.h, 10);
       ctx.fill(); ctx.stroke();
       // 图标 (植物缩略/僵尸头)
       const UIm = __getUI();
-      const iconKey = {
-        bowling: 'WALLNUT', whack: 'NORMAL', raining: 'PEASHOOTER',
-        vasebreaker: 'PEASHOOTER', izombie: 'BUCKET',
-        survival_day: 'SUNFLOWER', survival_night: 'PUFFSHROOM', survival_pool: 'LILYPAD',
-        survival_fog: 'PLANTERN', survival_roof: 'CABBAGEPULT',
-      }[c.key];
       let icon = null;
-      if (iconKey && UIm) {
-        icon = PLANTS[iconKey] ? UIm.getThumb(iconKey) : UIm.getZombieThumb(iconKey);
+      if (c.icon && UIm) {
+        icon = PLANTS[c.icon] ? UIm.getThumb(c.icon) : UIm.getZombieThumb(c.icon);
       }
-      if (icon) ctx.drawImage(icon, c.x + (c.w - 56) / 2, c.y + 10, 56, 56);
+      if (icon) {
+        ctx.save();
+        if (locked) ctx.globalAlpha = 0.35;
+        ctx.drawImage(icon, c.x + (c.w - 56) / 2, c.y + 10, 56, 56);
+        ctx.restore();
+      } else if (locked) {
+        // 未实作: 锁图标
+        ctx.save();
+        ctx.globalAlpha = 0.6;
+        ctx.strokeStyle = '#c8b28a'; ctx.lineWidth = 3;
+        const lx = c.x + c.w / 2, ly = c.y + 30;
+        ctx.strokeRect(lx - 12, ly - 4, 24, 18);
+        ctx.beginPath(); ctx.arc(lx, ly - 4, 8, Math.PI, 0); ctx.stroke();
+        ctx.restore();
+      }
       // 名称 + 简述
       ctx.textAlign = 'center';
       ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
-      ctx.fillStyle = '#fff4d0';
+      ctx.fillStyle = locked ? '#8a7a5a' : '#fff4d0';
       ctx.fillText(c.label, c.x + c.w / 2, c.y + 84);
       ctx.font = '11px "Noto Sans SC", sans-serif';
-      ctx.fillStyle = '#c8b28a';
+      ctx.fillStyle = locked ? '#6a5a3a' : '#c8b28a';
       ctx.fillText(c.desc.slice(0, 9), c.x + c.w / 2, c.y + 102);
       ctx.restore();
     });
-    // 返回按钮 (原版 BACK_TO_MENU @ (18,568))
+    // 返回按钮 (原版 BACK_TO_MENU @ 左下; 各页独立, 无互切按钮)
     this._back = { x: 18, y: 560, w: 120, h: 34 };
     ctx.save();
     ctx.fillStyle = '#a03a3a';
@@ -1031,17 +1128,6 @@ Screens.modeSelect = {
     ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
     ctx.fillText('返回主菜单', 78, 582);
     ctx.restore();
-    // 切换 小游戏⇆生存 (右下)
-    const other = this.group === 'challenge' ? 'survival' : 'challenge';
-    const otherLabel = other === 'challenge' ? '← 小游戏/解谜' : '生存模式 →';
-    ctx.save();
-    ctx.fillStyle = '#3a6a8a';
-    ctx.beginPath(); ctx.roundRect(660, 560, 130, 34, 6); ctx.fill();
-    ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
-    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
-    ctx.fillText(otherLabel, 725, 582);
-    ctx.restore();
-    this._swap = { x: 660, y: 560, w: 130, h: 34, group: other };
   },
   click(p, game) {
     if (this._back && inRect(p, this._back.x, this._back.y, this._back.w, this._back.h)) {
@@ -1049,13 +1135,9 @@ Screens.modeSelect = {
       game.state = 'menu';
       return;
     }
-    if (this._swap && inRect(p, this._swap.x, this._swap.y, this._swap.w, this._swap.h)) {
-      game.audio.play('buttonclick');
-      this.group = this._swap.group;
-      return;
-    }
     for (const c of (this._cells || [])) {
       if (inRect(p, c.x, c.y, c.w, c.h)) {
+        if (!c.key) { game.audio.play('buzzer'); return; }   // 未实作项
         game.audio.play('gravebutton');
         game.startMode(c.key);
         return;
@@ -1092,6 +1174,7 @@ Screens.shop = {
   enter() {
     this.page = 0;
     this.bubble = null;
+    this.signT = 0;   // 招牌降落动画计时 (原版 aStoreSignPosY: -150→0 EASE_IN_OUT)
     // 首次进店 → 戴夫开业对话 (原版 301-304)
     const game = Screens.game;
     if (game && !this.firstVisitDone && !game.daveSeen.shop) {
@@ -1103,34 +1186,36 @@ Screens.shop = {
       }
       this.firstVisitDone = true;
     }
-    // 戴夫 reanim (原版 DrawCrazyDave @ (-42,+68))
+    // 戴夫 reanim (原版 StoreScreen::Draw: gCrazyDave 偏移 (-42,+68) → 最终位置约 (158,248) 站在车左侧)
     if (!this.daveAnim && RE.hasDef('CrazyDave')) {
       const d = Assets.reanim('CrazyDave');
-      d.x = 60; d.y = 230;
+      d.x = 158; d.y = 278;
       d.play('anim_idle', RE.LOOP, 18);
       this.daveAnim = d;
     }
   },
   draw(ctx) {
     const game = Screens.game;
-    // ---- 背景 + 车 + 招牌 (原版 StoreScreen::Draw) ----
+    // ---- 背景 + 车 + 招牌 (原版 StoreScreen::Draw 1:1 坐标) ----
     const bg = img('store_background.jpg');
     if (bg) {
       ctx.drawImage(bg, 0, 0, 800, 600);
     } else {
       ctx.fillStyle = '#2a2018'; ctx.fillRect(0, 0, 800, 600);
     }
-    const car = img('store_car.png');            // 后备箱开启的车
+    // 招牌降落动画 (原版 aStoreSignPosY: PvzpAnimateCurve(50,110,time,-150,0,EASE_IN_OUT))
+    this.signT = Math.min(110, (this.signT || 0) + 1);
+    const signP = Math.min(1, Math.max(0, (this.signT - 50) / 60));
+    const signEase = signP < 0.5 ? 2 * signP * signP : 1 - Math.pow(-2 * signP + 2, 2) / 2;
+    const signPosY = -150 + 150 * signEase;
+    const car = img('store_car.png');            // 车身 (后备箱开启) @ (196,138)
     if (car) ctx.drawImage(car, 196, 138);
-    const hatch = img('store_hatchbackopen.png');
+    const hatch = img('store_hatchbackopen.png'); // 开启的后备箱盖 @ (299,0)
     if (hatch) ctx.drawImage(hatch, 299, 0);
-    // 招牌 (原版 285, signPosY 轻微上下浮动)
+    // 招牌 (原版 285, signPosY)
     const sign = img('store_sign.png');
-    if (sign) {
-      const bob = Math.sin(Screens.t * 1.5) * 3;
-      ctx.drawImage(sign, 285, 20 + bob);
-    }
-    // ---- 戴夫 (左侧) ----
+    if (sign) ctx.drawImage(sign, 285, Math.round(signPosY));
+    // ---- 戴夫 (原版: 车身之后绘制, 站在车左侧 (158,278)) ----
     if (this.daveAnim) {
       this.daveAnim.update(1 / 60);
       this.daveAnim.draw(ctx);
@@ -1241,10 +1326,10 @@ Screens.shop = {
       ctx.textAlign = 'center'; ctx.fillStyle = '#f4e6b0';
       ctx.fillText('返回主菜单', 115, 572);
     }
-    // ---- 戴夫气泡 (商品介绍 / 首次开店) ----
+    // ---- 戴夫气泡 (原版 IMAGE_STORE_SPEECHBUBBLE @ 戴夫头右上 (285-180, 20-78)=(105,-58) → 实际放 (240,28)) ----
     if (this.bubble) {
       const bubbleImg = img('store_speechbubble2.png') || img('store_speechbubble.png');
-      const bx = 150, by = 90, bw = 320, bh = 110;
+      const bx = 240, by = 28, bw = 320, bh = 110;
       ctx.save();
       if (bubbleImg) {
         ctx.drawImage(bubbleImg, bx, by, bw, bh);
@@ -1374,8 +1459,12 @@ Screens.modeWin = {
   },
   click(p, game) {
     game.audio.play('buttonclick');
+    // 模式胜利 → 回对应模式选择页 (三页独立, 不互切)
+    const group = game.modeKey && game.modeKey.startsWith('survival') ? 'survival'
+      : game.modeKey && (game.modeKey.startsWith('vasebreaker') || game.modeKey.startsWith('izombie')) ? 'puzzle'
+      : 'minigames';
     game.state = 'modeselect';
-    Screens.modeSelect.enter(game.modeKey && game.modeKey.startsWith('survival') ? 'survival' : 'challenge');
+    Screens.modeSelect.enter(group);
     game.audio.playBGM('start_menu');
   },
 };

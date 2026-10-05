@@ -40,12 +40,27 @@ const UI = {
     this.hoverCard = -1;
     this.selectedCard = -1;
     this.seedFlash = 0;
+    // #2 卡牌形象加载不出修复: 分包加载完成后清空缩略图/图鉴模型缓存
+    // (getThumb 在 reanim def 未就绪时会生成空白图并永久缓存 — 分包到达后重绘)
+    if (Assets && Assets.onPackLoaded) {
+      Assets.onPackLoaded(() => {
+        this.cardThumbs.clear();
+        this._almModels = null;
+        this._zThumbs = null;
+      });
+    }
   },
 
   // ---------- 植物缩略图 (原版 SeedPacketDrawSeed: reanim 首帧, 按植物缩放偏移) ----------
   getThumb(type) {
     if (this.cardThumbs.has(type)) return this.cardThumbs.get(type);
     const def = PLANTS[type];
+    // #2 修复: reanim 定义未就绪 (分包未加载) → 不生成不缓存 (避免空白缩略图被永久缓存)
+    if (!def || !RE.hasDef(def.reanim)) {
+      const ph = document.createElement('canvas');
+      ph.width = 50; ph.height = 70;
+      return ph;   // 占位 (不缓存, 分包加载后 onPackLoaded 清缓存重绘)
+    }
     const cv = document.createElement('canvas');
     cv.width = 50; cv.height = 70;
     const c = cv.getContext('2d');
@@ -749,7 +764,7 @@ const UI = {
       }
       case 'conveyor': {
         // 坚果保龄球: 出球线 (原版 Challenge::DrawBackdrop: BOWLINGSTRIPE @ (268,77))
-        if (board.level.fixed === 'bowling') {
+        if (board.level.fixed === 'bowling' || board.level.fixed === 'bowling2') {
           const stripe = Assets.image('wallnut_bowlingstripe.png');
           if (stripe) ctx.drawImage(stripe, 268, 77);
         }
@@ -862,7 +877,7 @@ const UI = {
   drawAlmanac(ctx) {
     const game = this.game;
     const a = game.almanac;
-    // ---- 索引页 (原版 ALMANAC_PAGE_INDEX) ----
+    // ---- 索引页 (原版 ALMANAC_PAGE_INDEX: 左向日葵/右僵尸 站在草地上) ----
     if (a.tab === 'index') {
       const bg = Assets.image('almanac_indexback.jpg');
       if (bg) ctx.drawImage(bg, 0, 0, 800, 600);
@@ -876,25 +891,33 @@ const UI = {
       ctx.fillStyle = '#ffe9a8';
       ctx.fillText('城郊植物大图鉴', 400, 78);
       ctx.restore();
-      // 左: 向日葵模型 / 右: 普通僵尸模型 (原版真实模型)
+      // 左右两侧草地地面 (原版索引页: 向日葵与僵尸各自站在 almanac_groundday 上) — #5
+      const groundL = Assets.image('almanac_groundday.jpg');
+      if (groundL) {
+        ctx.save();
+        ctx.drawImage(groundL, 90, 300, 240, 170);
+        ctx.drawImage(groundL, 470, 300, 240, 170);
+        ctx.restore();
+      }
+      // 左: 向日葵模型 / 右: 普通僵尸模型 (原版真实模型, 站在地面中央)
       const sunflower = this.almanacModel('plants', 'SUNFLOWER');
       if (sunflower) {
         sunflower.update(1 / 60);
-        ctx.save(); ctx.translate(200, 260); ctx.scale(1.3, 1.3);
+        ctx.save(); ctx.translate(210, 385); ctx.scale(1.15, 1.15);
         sunflower.setPosition(0, 0); sunflower.draw(ctx);
         ctx.restore();
       }
       const norm = this.almanacModel('zombies', 'NORMAL');
       if (norm) {
         norm.update(1 / 60);
-        ctx.save(); ctx.translate(600, 270); ctx.scale(1.2, 1.2);
+        ctx.save(); ctx.translate(590, 390); ctx.scale(1.05, 1.05);
         norm.setPosition(0, 0); norm.draw(ctx);
         ctx.restore();
       }
-      // 两大按钮 (原版 VIEW_PLANTS (130,345,156x42) / VIEW_ZOMBIES (487,345,210x48))
+      // 两大按钮 (原版 VIEW_PLANTS / VIEW_ZOMBIES 木牌按钮, 位于两侧下方)
       this._almIndexBtns = [
-        { k: 'plants', x: 130, y: 345, w: 230, h: 56, label: '查看植物', c: '#5a9a3a' },
-        { k: 'zombies', x: 460, y: 345, w: 230, h: 56, label: '查看僵尸', c: '#a05a3a' },
+        { k: 'plants', x: 100, y: 470, w: 230, h: 56, label: '查看植物', c: '#5a9a3a' },
+        { k: 'zombies', x: 470, y: 470, w: 230, h: 56, label: '查看僵尸', c: '#a05a3a' },
       ];
       const hover = this._screens() ? this._screens().hover : null;
       for (const b of this._almIndexBtns) {
@@ -1003,20 +1026,20 @@ const UI = {
         model.draw(ctx);
         ctx.restore();
       }
-      // 名称 (原版居中 (617,288))
+      // 名称 (原版居中 (617,288), 展示窗正下方) — #5 错位修正
       ctx.save();
       ctx.font = 'bold 24px "Noto Sans SC", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillStyle = '#3a2a10';
       const cn = (entry && entry['名字']) || def.cn || a.selected;
-      ctx.fillText(cn, 617, 330);
+      ctx.fillText(cn, 617, 292);
       // 描述 (原版 (485,309) 左对齐 258宽)
       ctx.font = '13px "Noto Sans SC", sans-serif';
       ctx.textAlign = 'left';
       ctx.fillStyle = '#4a3820';
-      let yy = 356;
+      let yy = 318;
       const desc = (entry && entry['描述']) || def.desc || '';
-      yy = this._almWrap(ctx, desc, 485, yy, 258, 19);
+      yy = this._almWrap(ctx, desc, 485, yy, 258, 18);
       // 参数 (键值对)
       if (entry && entry['参数']) {
         yy += 6;
@@ -1082,6 +1105,12 @@ const UI = {
     if (!this._zThumbs) this._zThumbs = new Map();
     if (this._zThumbs.has(type)) return this._zThumbs.get(type);
     const def = ZOMBIES[type];
+    // #2 修复: reanim 定义未就绪 → 占位不缓存 (分包到达后重绘)
+    if (!def || !RE.hasDef(def.reanim)) {
+      const ph = document.createElement('canvas');
+      ph.width = 90; ph.height = 80;
+      return ph;
+    }
     const cv = document.createElement('canvas');
     cv.width = 90; cv.height = 80;
     const c = cv.getContext('2d');

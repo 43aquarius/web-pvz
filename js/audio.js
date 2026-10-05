@@ -53,7 +53,7 @@ const Audio2 = (function () {
     digger: 'SFX/zombie/digger_zombie.ogg', gravebutton: 'SFX/button/gravebutton.ogg', gravebuttonchime: 'SFX/zombie/gravestone_rumble.ogg',
     zombie_falls_1: 'sounds/zombie_falling_1.ogg', zombie_falls_2: 'sounds/zombie_falling_2.ogg',
     zombie_groan: 'SFX/zombie/groan/groan.ogg', zombie_groan2: 'SFX/zombie/groan/groan2.ogg',
-    zombie_burnt: 'SFX/zombie/zombie_burnt.ogg',
+    zombie_burnt: 'sounds/zombie_falling_2.ogg',   // 原版僵尸烧焦音效文件缺失, 用坠落音近似
     scream: 'SFX/progress/scream.ogg',
     winmusic: 'SFX/progress/winmusic.ogg', losemusic: 'SFX/progress/losemusic.ogg',
     hugewave: 'SFX/progress/hugewave.ogg', finalwave: 'SFX/progress/finalwave.ogg',
