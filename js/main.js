@@ -100,8 +100,15 @@ const Game = {
       if (e.touches[0]) { this.mouse = pos(e.touches[0]); Screens.mouse = this.mouse; e.preventDefault(); }
     }, { passive: false });
     this.canvas.addEventListener('mousedown', e => { this.onClick(pos(e)); this.audio.resume(); });
+    // 移动端触摸: 坐标在 Touch 对象 (changedTouches[0]) 上, 而非 TouchEvent 本身
+    // 同时更新 mouse → 悬停高亮/种植预览/卡片跟随在触摸端同步生效
     this.canvas.addEventListener('touchstart', e => {
-      if (e.touches[0]) { this.onClick(pos(e)); this.audio.resume(); e.preventDefault(); }
+      const t = e.changedTouches[0] || e.touches[0];
+      if (t) {
+        const p = pos(t);
+        this.mouse = p; Screens.mouse = p;
+        this.onClick(p); this.audio.resume(); e.preventDefault();
+      }
     }, { passive: false });
     // 移动端: 长按/双击不弹菜单/缩放
     this.canvas.addEventListener('contextmenu', e => {
