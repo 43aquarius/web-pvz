@@ -321,7 +321,7 @@ class Plant {
         break;
       }
       // ---- 射手植物 ----
-      case 'PEASHOOTER': case 'SNOWPEA': case 'REPEATER': case 'GATLINGPEA': case 'PUFFSHROOM': case 'FUMESHROOM':
+      case 'PEASHOOTER': case 'SNOWPEA': case 'REPEATER': case 'LEFTPEATER': case 'GATLINGPEA': case 'PUFFSHROOM': case 'FUMESHROOM':
       case 'SCAREDYSHROOM': case 'SEASHROOM': case 'SPLITPEA': case 'THREEPEATER': case 'STARFRUIT':
       case 'CACTUS': case 'GLOOMSHROOM': case 'CATTAIL': case 'CABBAGEPULT': case 'KERNELPULT': case 'MELONPULT': case 'WINTERMELON': {
         this.updateShooter(dt, board);
@@ -593,8 +593,10 @@ class Plant {
 
     let hasTarget = false;
     switch (this.type) {
-      case 'PEASHOOTER': case 'SNOWPEA': case 'REPEATER': case 'GATLINGPEA': case 'CACTUS':
-        hasTarget = inRow(this.row);
+      case 'PEASHOOTER': case 'SNOWPEA': case 'REPEATER': case 'LEFTPEATER': case 'GATLINGPEA': case 'CACTUS':
+        hasTarget = this.type === 'LEFTPEATER'
+          ? board.zombiesInRow(this.row, -100, this.x + 20).length > 0     // 向左射手: 目标在左侧 (原版攻击矩形镜像)
+          : inRow(this.row);
         break;
       case 'PUFFSHROOM': case 'SCAREDYSHROOM': case 'SEASHROOM':
         hasTarget = inRow(this.row) && !(this.type === 'SCAREDYSHROOM' && this.isScared(board));
@@ -618,15 +620,15 @@ class Plant {
         hasTarget = inRow(this.row) || inRow(this.row - 1) || inRow(this.row + 1);
         break;
       case 'STARFRUIT':
-        hasTarget = board.zombies.some(z => !z.dead && z.hittable !== false && !z.boss &&
+        hasTarget = board.zombies.some(z => !z.dead && z.hittable !== false && !z.boss && !z.mindControlled &&
           Math.abs(z.hitX() - (this.x + 40)) < 400 && Math.abs(z.row - this.row) <= 2);
         break;
       case 'GLOOMSHROOM':
-        hasTarget = board.zombies.some(z => !z.dead && !z.boss && z.hittable !== false &&
+        hasTarget = board.zombies.some(z => !z.dead && !z.boss && z.hittable !== false && !z.mindControlled &&
           Math.hypot(z.hitX() - (this.x + 40), board.gridY(z.row) + 42 - (this.y + 40)) < 300);
         break;
       case 'CATTAIL':
-        hasTarget = board.zombies.some(z => !z.dead && !z.boss && z.hittable !== false);
+        hasTarget = board.zombies.some(z => !z.dead && !z.boss && z.hittable !== false && !z.mindControlled);
         break;
       case 'CABBAGEPULT': case 'KERNELPULT': case 'MELONPULT': case 'WINTERMELON':
         hasTarget = inRow(this.row);
@@ -662,6 +664,16 @@ class Plant {
         }
         playShoot('anim_shooting');
         game.audio.play(this.type === 'CACTUS' ? 'splat2' : 'throw');
+        break;
+      }
+      case 'LEFTPEATER': {
+        // 向左双发射手 (原版 Plant.cpp:4503 PROJECTILE_PEA + MOTION_BACKWARDS × 2)
+        const shots = d.shots || 2;
+        for (let i = 0; i < shots; i++) {
+          board.projectiles.push(new Projectile(d.proj, this.x + 20, mouthY - 6, this.row, this, { backward: true, delay: i * 0.14 }));
+        }
+        playShoot('anim_shooting');
+        game.audio.play('throw');
         break;
       }
       case 'PUFFSHROOM': case 'SCAREDYSHROOM': case 'SEASHROOM': {
@@ -729,7 +741,7 @@ class Plant {
         break;
       }
       case 'CATTAIL': {
-        const z = board.zombies.filter(z => !z.dead && z.hittable !== false && !z.boss)
+        const z = board.zombies.filter(z => !z.dead && z.hittable !== false && !z.boss && !z.mindControlled)
           .sort((a, b) => Math.hypot(a.hitX() - this.x, a.row - this.row) - Math.hypot(b.hitX() - this.x, b.row - this.row))[0];
         if (z) {
           board.projectiles.push(new Projectile('cattail', this.x + 40, this.y + 20, this.row, this, { target: z }));
@@ -972,7 +984,9 @@ class Plant {
     for (const L of this.anims) {
       if (L.attached) continue;   // 已由身体轨道挂载绘制 (完整矩阵跟随: 旋转/缩放/位移)
       L.r.setPosition(this.x + (this.shakeX || 0), dy + (this.shakeY || 0));   // 樱桃/辣椒待爆抖动 (#17)
-      L.r.overrideScale(sc, sc);
+      // 向左射手镜像 (原版 Plant.cpp:2792: aScaleX *= -1, 附件头随之镜像)
+      if (this.def.mirror) L.r.overrideScale(-sc, sc);
+      else L.r.overrideScale(sc, sc);
       // 坚果保龄球滚动: 旋转由 reanim _ground 帧区间自带 (脸绕圆周) — 无需手动 overlay 旋转
       L.r.refreshAttachments();   // 头部等附件立即同步 (消除一帧滞后)
       if (this.eatFlash > 0) {

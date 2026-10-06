@@ -161,8 +161,8 @@ class Projectile {
     this.y += this.vy * dt;
     // 追踪
     if (this.target && (this.target.dead || this.target.phase === 'dying')) {
-      // 换目标
-      this.target = board.zombies.filter(z => !z.dead && z.hittable !== false && !z.boss)
+      // 换目标 (原版: 魅惑僵尸不可选为目标)
+      this.target = board.zombies.filter(z => !z.dead && z.hittable !== false && !z.boss && !z.mindControlled)
         .sort((a, b) => Math.hypot(a.hitX() - this.x, board.gridY(a.row) - this.y) - Math.hypot(b.hitX() - this.x, board.gridY(b.row) - this.y))[0] || null;
     }
     if (this.target) {
@@ -205,6 +205,8 @@ class Projectile {
     for (const z of board.zombies) {
       if (z.dead || z.row !== this.row || z.hittable === false || z.phase === 'dying' || z.boss) continue;
       if (z.underground || z.underwater) continue;
+      // 原版 EffectedByDamage: 普通子弹对被魅惑僵尸不生效 → 直接穿过
+      if (z.mindControlled) continue;
       // 气球: 只有对空子弹能打
       if (z.flyingHigh && !(this.def.antiAir || this.def.homing || this.type === 'cattail')) continue;
       // 高度判定(简化: 同行即命中, 抛物线除外)
@@ -222,10 +224,10 @@ class Projectile {
         } else {
           z.takeDamage(this.def.dmg, board, flags);
         }
-        // 溅射
+        // 溅射 (原版: 被魅惑僵尸同样不受溅射)
         if (this.def.splash) {
           for (const z2 of board.zombies) {
-            if (z2 === z || z2.dead || z2.row !== this.row || z2.boss || z2.hittable === false) continue;
+            if (z2 === z || z2.dead || z2.row !== this.row || z2.boss || z2.hittable === false || z2.mindControlled) continue;
             if (Math.abs(z2.hitX() - zx) < 80) z2.takeDamage(this.def.splash, board, { chill: this.def.chill, noFlash: true });
           }
         }

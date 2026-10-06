@@ -117,7 +117,9 @@ const UI = {
       const cx0 = (minX + maxX) / 2 - 150, cy0 = (minY + maxY) / 2 - 150;
       // 视觉中心对到卡包中心 (25, 33) — 定位后再刷新附件 (头跟随身体矩阵)
       body.setPosition(25 - cx0 * fit, 30 - cy0 * fit + 3);
-      body.overrideScale(fit, fit);
+      // 向左射手: 卡面镜像 (原版 SeedPacket.cpp:4130 aSeedG.mScaleX *= -1)
+      if (def.mirror) body.overrideScale(-fit, fit);
+      else body.overrideScale(fit, fit);
       body.refreshAttachments();
       body.animTime = 0.15;
       body.draw(c);
@@ -246,8 +248,63 @@ const UI = {
       this.drawLevelText(ctx, board);
       return;
     }
-    // ---- 无种子银行模式 (打僵尸/罐子/我不是僵尸) ----
-    if (board.mode === 'whack' || board.mode === 'vasebreaker' || board.mode === 'izombie') {
+    // ---- 罐子解谜: 原版种子银行 (Board.cpp:1490 仅1格樱桃炸弹) + 阳光计数 (无尽阳光罐) ----
+    if (board.mode === 'vasebreaker') {
+      const bankY = cs.active ? cs.seedBankY : 0;
+      if (bankY > -87) {
+        const bank = Assets.image('seedbank.png');
+        if (bank) ctx.drawImage(bank, 0, 0, 446, 87, 0, bankY, 446, 87);
+        else { ctx.fillStyle = '#8a6642'; ctx.fillRect(0, bankY, 446, 87); }
+        // 阳光计数 (原版: seedbank 自带太阳图, 文本 (34,78))
+        const sunTxt = String(Math.max(0, board.sun));
+        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#000';
+        ctx.fillText(sunTxt, 34, bankY + 78);
+        // 樱桃炸弹卡 (原版 1 格)
+        const c = board.seedCards[0];
+        if (c) {
+          const x = this.packetX(0, 1);
+          this.drawSeedCard(ctx, c.type, x, 7 + bankY, {
+            cooldown: c.cd,
+            disabled: board.sun < PLANTS[c.type].cost || c.cd > 0,
+            selected: game.selectedCard === 0,
+          });
+        }
+        // 铲子槽 (原版罐子关有铲子: 铲植物/砸罐)
+        if (game.shovelUnlocked) {
+          const shovelBank = Assets.image('shovelbank.png');
+          const shX = 456;
+          if (shovelBank) ctx.drawImage(shovelBank, shX, bankY);
+          else { ctx.fillStyle = '#8a6642'; ctx.fillRect(shX, bankY, 70, 72); }
+          const shovel = Assets.image('shovel.png');
+          if (shovel && !game.shovelMode) ctx.drawImage(shovel, shX + 4, bankY + 4);
+          if (game.shovelMode) {
+            ctx.strokeStyle = '#ffef7a'; ctx.lineWidth = 3;
+            ctx.strokeRect(shX - 2, bankY - 2, 74, 76);
+          }
+        }
+      }
+      this.drawProgressBar(ctx, board);
+      this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
+      this.drawLevelText(ctx, board);
+      if (board.state === 'intro' && !cs.active) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, board.waveTimer);
+        ctx.font = 'bold 40px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 6; ctx.strokeStyle = '#3a2a10';
+        const t = Math.ceil(board.waveTimer);
+        const txt = t > 2 ? '准备！' : '僵尸来了！';
+        ctx.strokeText(txt, 400, 250);
+        ctx.fillStyle = '#ffe9a8';
+        ctx.fillText(txt, 400, 250);
+        ctx.restore();
+      }
+      return;
+    }
+    // ---- 无种子银行模式 (打僵尸/我不是僵尸) ----
+    if (board.mode === 'whack' || board.mode === 'izombie') {
       this.drawProgressBar(ctx, board);
       this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
       this.drawLevelText(ctx, board);

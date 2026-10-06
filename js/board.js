@@ -8,7 +8,7 @@
 // ============================================================
 'use strict';
 
-const { CONST, PLANTS, ZOMBIES, MODE_LEVELS, CONVEYOR_POOLS, zombieAllowedOnLevel, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, availablePlants, awardForLevel } = require('./data');
+const { CONST, PLANTS, ZOMBIES, MODE_LEVELS, CONVEYOR_POOLS, VASE_RECIPES, VASE_ADVENTURE_STAGES, zombieAllowedOnLevel, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, availablePlants, awardForLevel } = require('./data');
 const { Zombie, H } = require('./zombie');
 const RE = require('./reanim');
 const { Projectile } = require('./projectiles');
@@ -253,6 +253,8 @@ class Board {
     if (!d || d.weight <= 0 || d.boss) return false;
     // 5-5 蹦极闪电战 (原版: NORMAL/CONE/BUCKET/LADDER)
     if (this.level.id === 45 && ['NORMAL', 'CONE', 'BUCKET', 'LADDER', 'FLAG', 'BUNGEE'].includes(ty)) return true;
+    // 小僵尸关 (原版 Challenge.cpp:2345 — NORMAL/TRAFFIC_CONE/FOOTBALL/SNORKEL)
+    if (this.game && this.game.littleTrouble) return ['NORMAL', 'CONE', 'FOOTBALL', 'SNORKEL'].includes(ty);
     return zombieAllowedOnLevel(ty, this.level.id);
   }
   introZombieType() {
@@ -275,6 +277,8 @@ class Board {
       const isFinal = !level.endless && w === numWaves - 1;
       const types = [];
       let points = level.endless ? Math.min(26, Math.floor(w / 2.2) + 1) : Math.floor(w / 3) + 1;
+      // 小僵尸关: 僵尸点数×4 (原版 Board.cpp:672 IsLittleTroubleLevel/WallnutBowling ×4)
+      if (this.game && this.game.littleTrouble) points *= 4;
       if (level.fixed === 'boss' && isFinal) {
         out.push({ flag: false, final: true, boss: true, count: 1, types: [['BOSS', 1]] });
         continue;
@@ -297,12 +301,14 @@ class Board {
           if (this.canSpawnType(ty) && !types.some(([t]) => t === ty)) types.push([ty, 1]);
         }
       }
-      if (!level.endless && lv === 50 && isFinal && !types.some(([t]) => t === 'GARGANTUAR')) types.push(['GARGANTUAR', 1]);
+      if (!level.endless && level.id === 50 && isFinal && !types.some(([t]) => t === 'GARGANTUAR')) types.push(['GARGANTUAR', 1]);   // 仅冒险 5-10 (额外模式 id≠50)
       const pool = Object.keys(ZOMBIES).filter(ty => {
         const d = ZOMBIES[ty];
         if (d.weight <= 0 || d.boss) return false;
         // 小游戏限定僵尸池 (雪橇大丰收/跳跳派对等)
         if (level.zombieTypes && !level.zombieTypes.includes(ty)) return false;
+        // 小僵尸关限定池 (原版 Challenge.cpp:2345 NORMAL/CONE/FOOTBALL/SNORKEL)
+        if (this.game && this.game.littleTrouble && !['NORMAL', 'CONE', 'FOOTBALL', 'SNORKEL'].includes(ty)) return false;
         // 困难生存: 全兵种僵尸池 (按 unlock 门槛, 门槛内全部可用)
         if (level.hard) { if ((d.unlock || 99) > 48) return false; }
         else if (!zombieAllowedOnLevel(ty, lv)) return false;
@@ -847,12 +853,12 @@ class Board {
   // ---------- 查询 ----------
   zombiesInRow(row, minX = -100, maxX = 900) {
     return this.zombies.filter(z => !z.dead && z.row === row && z.x >= minX && z.x <= maxX &&
-      z.hittable !== false && !z.underwater && !z.underground && !z.boss);
+      z.hittable !== false && !z.underwater && !z.underground && !z.boss && !z.mindControlled);   // 原版: 植物不攻击被魅惑僵尸
   }
   firstZombieInRow(row, fromX, toX) {
     let best = null;
     for (const z of this.zombies) {
-      if (z.dead || z.row !== row || z.hittable === false || z.boss) continue;
+      if (z.dead || z.row !== row || z.hittable === false || z.boss || z.mindControlled) continue;
       const zx = z.hitX();
       if (zx >= fromX && zx <= toX) {
         if (!best || zx < best.hitX()) best = z;
@@ -978,57 +984,17 @@ class Board {
       // 原版 Challenge::StartLevel (whack): 开局放置 3 个初始墓碑 (从场地随机长出)
       this.whackPlaceGraves(3);
     } else if (f === 'vasebreaker') {
-      // 罐子解谜 (原版 ScaryPotter): 右侧棋盘摆罐子, 点击锤碎 → 植物/僵尸
-      // 原版各关配方 (ScaryPotterPopulate): SP1 碗豆5雪碗5倭瓜5普僵6铁桶3小丑1
-      //   SP2 提升难度; SP3 更强 (此处用渐进配方)
+      // 罐子解谜 (原版 ScaryPotter): 按原版配方摆罐, 点击锤碎 → 植物/僵尸/阳光
       this.mode = 'vasebreaker';
       this.sun = 0;
-      this.seedCards = [];
+      // 原版 Board.cpp:1490: 罐子关种子银行仅 1 格樱桃炸弹 (阳光罐攒阳光后可用)
+      this.seedCards = [{ type: 'CHERRYBOMB', cd: 0 }];
       this.vases = [];
       this.vasePackets = [];   // 砸出的可用种子包 (点击拾取 → 免费种植)
       this.mallet = null;      // 锤子动画 (Hammer.reanim anim_open_pot)
-      const recipeKey = this.level.vaseRecipe || 'sp1';
-      const recipe = {
-        sp1: [
-          { plant: 'PEASHOOTER', n: 5 }, { plant: 'SNOWPEA', n: 5 }, { plant: 'SQUASH', n: 5 },
-          { zombie: 'NORMAL', n: 6 }, { zombie: 'BUCKET', n: 3 }, { zombie: 'JACK', n: 1 },
-        ],
-        sp2: [
-          { plant: 'PEASHOOTER', n: 4 }, { plant: 'SNOWPEA', n: 3 }, { plant: 'REPEATER', n: 3 }, { plant: 'SQUASH', n: 3 },
-          { zombie: 'NORMAL', n: 5 }, { zombie: 'CONE', n: 3 }, { zombie: 'BUCKET', n: 4 }, { zombie: 'JACK', n: 1 },
-        ],
-        sp3: [
-          { plant: 'PEASHOOTER', n: 3 }, { plant: 'REPEATER', n: 3 }, { plant: 'CHOMPER', n: 3 }, { plant: 'SQUASH', n: 2 }, { plant: 'JALAPENO', n: 1 },
-          { zombie: 'NORMAL', n: 4 }, { zombie: 'BUCKET', n: 5 }, { zombie: 'FOOTBALL', n: 3 }, { zombie: 'JACK', n: 1 },
-        ],
-      }[recipeKey] || null;
-      if (!recipe) { this.mode = null; return; }
-      // 加权随机摆罐 (原版 ScaryPotterPopulate: 列 3..8, 每格权重 1, 抽取后权重清 0)
-      const cells = [];
-      for (let r = 0; r < this.rows; r++) for (let c = 3; c < 9; c++) cells.push([r, c]);
-      const contents = [];
-      for (const item of recipe) {
-        for (let i = 0; i < item.n; i++) contents.push(item);
-      }
-      shuffleB(contents);
-      // 罐子数不超过格子数
-      const nVases = Math.min(contents.length, cells.length);
-      for (let i = 0; i < nVases; i++) {
-        const [row, col] = cells[i];
-        const item = contents[i];
-        // 原版: 装巨人的罐显示 ZOMBIE 态
-        const state = item.zombie === 'GARGANTUAR' ? 'zombie' : 'question';
-        this.vases.push({
-          row, col, broken: false, rising: 0,
-          content: item.plant || item.zombie,
-          isPlant: !!item.plant,
-          state,   // question | leaf | zombie (原版三态贴图列)
-        });
-      }
-      // 原版 ScaryPotterChangePotType: 随机挑 2 个种子罐 → LEAF 预揭示
-      const seedVases = this.vases.filter(v => v.isPlant && v.state === 'question');
-      shuffleB(seedVases);
-      for (let i = 0; i < Math.min(2, seedVases.length); i++) seedVases[i].state = 'leaf';
+      this.potStage = 0;       // 冒险 4-5: 原版 mSurvivalStage 三轮 / 无尽: 轮数
+      this.vaseDave = null;    // 轮间戴夫过场 (冒险 4-5)
+      this.initVasebreaker();
     } else if (f === 'izombie') {
       // 我不是僵尸 (原版 I Zombie): 指挥僵尸吃掉脑子
       this.mode = 'izombie';
@@ -1111,6 +1077,130 @@ class Board {
   _plantClass() {
     const m = (window.__mods && window.__mods['plants']) || require('./plants');
     return m.Plant;
+  }
+
+  // ---------- 罐子解谜: 原版 Challenge::ScaryPotterPopulate 1:1 ----------
+  initVasebreaker() {
+    const isAdv = !this.level.mode;              // 冒险 4-5 vs 解谜模式
+    let R;
+    if (isAdv) {
+      R = VASE_ADVENTURE_STAGES[Math.min(this.potStage, 2)];
+    } else {
+      const key = this.level.vaseRecipe || 'sp1';
+      R = VASE_RECIPES[key] || VASE_RECIPES.sp1;
+    }
+    // 原版: 全网格每格权重1 → ScaryPotterDontPlaceInCol 清零禁列 → 抽取后清零
+    const cells = [];
+    for (let c = 0; c < 9; c++) {
+      if (R.excl.includes(c)) continue;
+      for (let r = 0; r < this.rows; r++) cells.push([r, c]);
+    }
+    shuffleB(cells);
+    // 展开配方 → 内容列表 (无尽: 巨人随轮数增, 普僵相应减, 原版 aNumExtraGargantuars)
+    const contents = [];
+    let gargc = 0;
+    for (const [kind, ty, n] of R.pots) {
+      let count = n;
+      if (n === -1) {   // spE 动态数量
+        if (ty === 'NORMAL') count = 8 - Math.min(8, Math.floor(this.potStage / 10));
+        if (ty === 'GARGANTUAR') { gargc = 1 + Math.min(8, Math.floor(this.potStage / 10)); count = gargc; }
+      }
+      for (let i = 0; i < count; i++) contents.push([kind, ty]);
+    }
+    const nVases = Math.min(contents.length, cells.length);
+    for (let i = 0; i < nVases; i++) {
+      const [row, col] = cells[i];
+      const [kind, ty] = contents[i];
+      // 原版: 装巨人的罐显示 ZOMBIE 脸 (玩家可辨识规避)
+      const state = (kind === 'z' && ty === 'GARGANTUAR') ? 'zombie' : 'question';
+      this.vases.push({
+        row, col, broken: false, rising: 0,
+        content: kind === 'p' ? ty : kind === 'sun' ? null : ty,
+        isPlant: kind === 'p',
+        isSun: kind === 'sun',
+        sunCount: kind === 'sun' ? 1 + Math.floor(Math.random() * 3) : 0,  // 原版 Rand(3)+1
+        state,   // question | leaf | zombie (原版三态贴图列)
+      });
+    }
+    // 原版 ScaryPotterChangePotType(LEAF, n): 随机挑种子罐 → 叶子预揭示
+    const seedVases = this.vases.filter(v => v.isPlant && v.state === 'question');
+    shuffleB(seedVases);
+    for (let i = 0; i < Math.min(R.leaf || 0, seedVases.length); i++) seedVases[i].state = 'leaf';
+  }
+
+  // 冒险 4-5 轮间戴夫 (原版 UpdateLevelEndSequence + AdvanceCrazyDaveDialog)
+  startVaseDave() {
+    const stage = this.potStage;
+    this.vaseDave = {
+      stage,
+      lines: stage === 0
+        ? ['看！清干净了！', '不过别高兴太早——', '我再给你一些罐子！']
+        : ['干得漂亮！', '这应该是他们的最后一波了！'],
+      line: -1,
+      phase: 'enter',
+      t: 0,
+      anim: null,
+    };
+    this.game.audio.play('hugewave');
+  }
+  updateVaseDave(dt) {
+    const d = this.vaseDave;
+    if (!d) return;
+    d.t += dt;
+    if (!d.anim && RE.hasDef('CrazyDave')) {
+      const a = Assets.reanim('CrazyDave');
+      a.x = 170; a.y = 88;
+      d.anim = a;
+    }
+    if (d.phase === 'enter') {
+      if (d.anim) d.anim.update(dt);
+      if (!d._played) {
+        d._played = true;
+        if (d.anim) d.anim.play('anim_enter', RE.PLAY_ONCE_HOLD, 24);
+        this.game.audio.play('dave_short');
+      }
+      if (d.t >= 0.75) { d.phase = 'talk'; d.line = 0; d.talkT = 0; }
+    } else if (d.phase === 'talk') {
+      d.talkT = (d.talkT || 0) + dt;
+      if (d.anim) {
+        d.anim.update(dt);
+        if (d.talkT > 1.8) {
+          d.talkT = 0;
+          const next = ['anim_smalltalk', 'anim_mediumtalk', 'anim_blahblah'][Math.floor(Math.random() * 3)];
+          d.anim.play(next, RE.LOOP, 16 + Math.random() * 8);
+          this.game.audio.play(Math.random() < 0.5 ? 'dave_short' : 'dave_medium');
+        }
+      }
+    } else if (d.phase === 'repopulate') {
+      // 原版 PuzzleNextStageClear: 清场后 ScaryPotterPopulate
+      this.potStage++;
+      for (const z of this.zombies) if (!z.dead && z.fromWave !== -2) z.dieNoLoot();
+      for (const p of this.plants) if (!p.dead) p.dead = true;
+      this.vasePackets = [];
+      this.game.freePlant = null;
+      this.vases = [];
+      this.initVasebreaker();
+      this.game.audio.play('plant');
+      d.phase = 'leave';
+      d.t = 0;
+      if (d.anim) d.anim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
+      this.game.audio.play('dave_short');
+    } else if (d.phase === 'leave') {
+      if (d.anim) d.anim.update(dt);
+      if (d.t >= 0.62) this.vaseDave = null;
+    }
+  }
+  vaseDaveClick(game) {
+    const d = this.vaseDave;
+    if (!d) return false;
+    if (d.phase === 'enter') { d.t = Math.max(d.t, 0.74); return true; }
+    if (d.phase === 'talk') {
+      d.line++;
+      if (d.line >= d.lines.length) { d.phase = 'repopulate'; return true; }
+      game.audio.play(Math.random() < 0.5 ? 'dave_short' : 'dave_medium');
+      return true;
+    }
+    return true;
   }
 
   updateMode(dt) {
@@ -1207,6 +1297,8 @@ class Board {
         break;
       }
       case 'vasebreaker': {
+        // 轮间戴夫过场优先 (冒险 4-5, 原版 IsScaryPotterDaveTalking 冻结时间线)
+        if (this.vaseDave) { this.updateVaseDave(dt); break; }
         // 锤子动画推进
         if (this.mallet) {
           this.mallet.t += dt;
@@ -1228,9 +1320,23 @@ class Board {
           pk.life -= dt;
         }
         this.vasePackets = this.vasePackets.filter(pk => !pk.taken && pk.life > 0);
-        // 胜利: 所有罐子已碎且场上无僵尸 (原版 ScaryPotterIsCompleted)
-        if (!this.mallet && this.vases.every(v => v.broken) && this.zombies.filter(z => !z.dead && z.fromWave !== -2).length === 0) {
-          this.triggerWin();
+        // 胜利/下一轮 (原版 ScaryPotterIsCompleted: 罐全开且无僵尸)
+        if (!this.mallet && this.vases.length && this.vases.every(v => v.broken) && this.zombies.filter(z => !z.dead && z.fromWave !== -2).length === 0) {
+          const isAdv = !this.level.mode;
+          if (isAdv && this.potStage < 2) {
+            // 原版: 轮间戴夫入场 → 补充罐子 (mNextSurvivalStageCounter 300tick)
+            this.startVaseDave();
+          } else if (!isAdv && this.level.endless) {
+            // 无尽罐子: 清场进入下一轮 (巨人+1/10轮, 原版 mSurvivalStage)
+            this.potStage++;
+            this.vases = [];
+            this.vasePackets = [];
+            this.initVasebreaker();
+            this.game.audio.play('plant');
+            this.addEffect('text', 400, 250, { hold: 1.6, txt: '第 ' + (this.potStage + 1) + ' 轮', c: '#ffe36a', size: 30 });
+          } else {
+            this.triggerWin();
+          }
         }
         break;
       }
@@ -1318,8 +1424,16 @@ class Board {
         return true;   // 模式下吞掉点击
       }
       case 'vasebreaker': {
+        // 轮间戴夫对话优先 (原版 IsScaryPotterDaveTalking 冻结交互)
+        if (this.vaseDave) return this.vaseDaveClick(game);
         // 免费植物种植中 → 放行给 gameClick 的种植逻辑 (原版 CursorObject PLANT_FROM_USABLE_COIN)
         if (game.freePlant) return false;
+        // 阳光罐掉落的阳光可收集 (原版 COIN_SUN 点击 → 交给 gameClick 通用收集)
+        for (const s of this.suns) {
+          if (!s.collected && Math.abs(p.x - s.x) < 35 && Math.abs(p.y - s.y) < 35) return false;
+        }
+        // 种子银行区域 (阳光计数 + 樱桃炸弹卡 + 铲子槽) → 交给 gameClick 通用逻辑
+        if (p.y < 87) return false;
         // 可用种子包拾取 (原版: 点击 → 光标变免费植物)
         for (const pk of this.vasePackets) {
           if (pk.taken) continue;
@@ -1424,7 +1538,12 @@ class Board {
     this.addEffect('vase_shatter', x + 40, y + 40, { leaf: v.state === 'leaf', zombie: v.state === 'zombie' });
     game.audio.play('vase_breaking');
     game.audio.play('bonk');
-    if (v.isPlant) {
+    if (v.isSun) {
+      // 原版 SCARYPOT_SUN: AddCoin(aXPos+15*i, aYPos, COIN_SUN, FROM_PLANT) × sunCount
+      for (let i = 0; i < (v.sunCount || 1); i++) {
+        this.addSun(x + 40 + 15 * i, y + 30, y + 55 + Math.random() * 20, 'plant');
+      }
+    } else if (v.isPlant) {
       // 原版: AddCoin(x+20, y, COIN_USABLE_SEED_PACKET) — 掉出可用种子包
       this.vasePackets.push({
         plant: v.content, x: x + 30, y: y + 20, vx: (Math.random() - 0.5) * 80,

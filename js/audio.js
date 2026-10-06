@@ -45,6 +45,7 @@ const Audio2 = (function () {
     jalapeno: 'SFX/plant/jalapeno.ogg', iceshroom: 'SFX/plant/frozen.ogg',
     blover: 'SFX/plant/blover.ogg', magnetshroom: 'SFX/plant/magnetshroom.ogg',
     mindcontrol: 'SFX/plant/mindcontrolled.ogg',
+    floop: 'sounds/floop.ogg',   // 原版 FOLEY_FLOOP — 僵尸吃到魅惑菇
     potato_mine: 'SFX/plant/potato_mine.ogg', spudow: 'SFX/plant/potato_mine.ogg',
     squash_hmm: 'SFX/plant/squash_hmm.ogg',
     frozen: 'SFX/plant/frozen.ogg', thaw: 'SFX/plant/frozen.ogg',

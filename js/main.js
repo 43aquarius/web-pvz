@@ -31,6 +31,7 @@ const Game = {
   justUnlocked: null,
   endless: false,
   selectedZombieCard: -1,   // 我不是僵尸: 选中的僵尸卡
+  littleTrouble: false,     // 小僵尸关 (原版 IsLittleTroubleLevel: 冒险3-5 + 小游戏"小僵尸大麻烦")
   menuDialog: null,         // 游戏内菜单对话框 (#14: 菜单按钮 → 菜单页而非直接回主菜单)
   coins: 0,                 // 金币 (戴夫商店货币, 原版 $)
   purchased: {},            // 商店已购物 { key: true }
@@ -386,6 +387,15 @@ const Game = {
     if (cell) {
       const [col, row] = cell;
       if (this.shovelMode) {
+        // 罐子关: 铲子砸罐 (原版 ADVICE_USE_SHOVEL_ON_POTS — 铲子可直接敲碎罐子)
+        if (board.mode === 'vasebreaker') {
+          const v = board.vases.find(vv => !vv.broken && vv.row === row && vv.col === col);
+          if (v) {
+            board.scaryPotterMalletPot(v, this);
+            this.shovelMode = false;
+            return;
+          }
+        }
         // 铲除: 多层植物选择 (原版 SpecialPlantHitTest + 三分区)
         // 原版: 下1/3格 = 南瓜壳; 中部 = 普通植物; 上部 = 浮水植物
         const cellY0 = board.cellY(row, col);
@@ -617,8 +627,11 @@ const Game = {
     if (this.levelLoading) return;   // 防双击
     await this._preloadLevel(level);
     const lv = this.levelId;
-    // 铲子解锁 (特殊玩法关卡无铲子)
-    const specialNoShovel = ['bowling', 'bowling2', 'whack', 'vasebreaker', 'izombie'].includes(level.fixed);
+    // 小僵尸关 (原版 IsLittleTroubleLevel: 冒险 3-5 / 关卡25 + 小游戏"小僵尸大麻烦")
+    // → 僵尸缩放0.5 + 血量÷4 (zombie.js ZombieInitialize)
+    this.littleTrouble = !!level.littleTrouble || (!this.modeKey && lv === 25);
+    // 铲子解锁 (原版: 罐子关有铲子 — 可铲植物/砸罐 ADVICE_USE_SHOVEL_ON_POTS)
+    const specialNoShovel = ['bowling', 'bowling2', 'whack', 'izombie'].includes(level.fixed);
     const firstTime = this.progress.unlocked <= lv;
     if (specialNoShovel) this.shovelUnlocked = false;
     else if (lv === 5 && firstTime) this.shovelUnlocked = false;   // 1-5 首次: 由戴夫对话解锁
@@ -664,9 +677,11 @@ const Game = {
   beginPlay() {
     const board = this.board;
     const level = board.level;
-    board.seedCards = board.chosenSeeds.map(t => ({ type: t, cd: 0 }));
-    // 初始冷却 (原版: 开局短暂冷却)
-    for (const c of board.seedCards) c.cd = 2;
+    if (board.mode !== 'vasebreaker') {
+      board.seedCards = board.chosenSeeds.map(t => ({ type: t, cd: 0 }));
+      // 初始冷却 (原版: 开局短暂冷却)
+      for (const c of board.seedCards) c.cd = 2;
+    }   // 罐子关: 保持 initMode 的 1 格樱桃炸弹 (原版 Board.cpp:1490)
     board.state = 'intro';
     this.state = 'playing';
     this.audio.playBGM(level.bgm);

@@ -173,7 +173,14 @@ def build(mode):
         # 生产模式: 嵌入式数据块 (在模块script之前)
         embed_scripts = []
         rd = load_reanim_data()
-        embed_scripts.append('<script>\nwindow.__EMBED__ = {reanim:{}, images:{}, audio:{}, data:{}};\n</script>\n')
+        # 数据文件 (almanac_data / dave_dialogs) — dist 单文件 file:// 无法 fetch, 一并内嵌
+        data_embed = {}
+        for dk in ['almanac_data', 'dave_dialogs']:
+            p = os.path.join(WEB, 'assets', dk + '.json')
+            if os.path.exists(p):
+                data_embed[dk] = base64.b64encode(open(p, 'rb').read()).decode()
+        data_js = ''.join(json.dumps(k) + ':"' + v + '",' for k, v in data_embed.items()).rstrip(',')
+        embed_scripts.append('<script>\nwindow.__EMBED__ = {reanim:{}, images:{}, audio:{}, data:{' + data_js + '}};\n</script>\n')
         chunk = []; size = 0
         def flush_r():
             if chunk:

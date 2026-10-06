@@ -37,6 +37,7 @@ const PLANTS = {
   SNOWPEA:         { cn: '寒冰射手',   cost: 175, cd: 7500,  hp: 300,  reanim: 'SnowPea', anim: 'anim_idle', layers: [['anim_idle'],['anim_head_idle']], shootRate: 1.5, dmg: 20, range: 9, cls: 'shooter', proj: 'snowpea', desc: '冰豌豆减速僵尸' },
   CHOMPER:         { cn: '大嘴花',     cost: 150, cd: 7500,  hp: 300,  reanim: 'Chomper', anim: 'anim_idle', cls: 'shooter', chew: 42, biteDmg: 1800, desc: '吞噬僵尸后需42秒咀嚼' },
   REPEATER:        { cn: '双发射手',   cost: 200, cd: 7500,  hp: 300,  reanim: 'PeaShooter', anim: 'anim_idle', layers: [['anim_idle'],['anim_head_idle']], shootRate: 1.5, dmg: 20, range: 9, cls: 'shooter', proj: 'pea', shots: 2, desc: '一次发射两颗豌豆' },
+  LEFTPEATER:      { cn: '向左双发射手', cost: 200, cd: 750, hp: 300, reanim: 'PeaShooter', anim: 'anim_idle', layers: [['anim_idle'],['anim_head_idle']], shootRate: 1.5, dmg: 20, range: 9, cls: 'shooter', proj: 'pea', shots: 2, backward: true, mirror: true, desc: '向左发射双联豌豆 (罐子解谜专属)' },
   PUFFSHROOM:      { cn: '小喷菇',     cost: 0,   cd: 7500,  hp: 300,  reanim: 'PuffShroom', anim: 'anim_idle', shootRate: 1.5, dmg: 20, range: 3, cls: 'shooter', proj: 'puff', desc: '免费短程蘑菇, 白天睡觉' },
   SUNSHROOM:       { cn: '阳光菇',     cost: 25,  cd: 7500,  hp: 300,  reanim: 'SunShroom', anim: 'anim_idle', sunRate: 24, sunVal: 15, growTime: 120, firstSun: [3, 10], cls: 'producer', desc: '产出阳光, 长大后产量翻倍' },
   FUMESHROOM:      { cn: '大喷菇',     cost: 75,  cd: 7500,  hp: 300,  reanim: 'FumeShroom', anim: 'anim_idle', shootRate: 1.5, dmg: 20, range: 4, cls: 'shooter', proj: 'fume', desc: '穿透雾气攻击4格内僵尸' },
@@ -376,6 +377,53 @@ const CONVEYOR_POOLS = {
   seeing_stars:  [['STARFRUIT', 100]],
 };
 
+// ---------- 罐子解谜原版配方 (Challenge.cpp ScaryPotterPopulate 1:1) ----------
+// excl: 原版 ScaryPotterDontPlaceInCol 禁列 → 可用列精确填满无空格
+// leaf: 原版 ScaryPotterChangePotType(LEAF, n) 预揭示叶子罐数
+// p/z: [植物/僵尸, 类型, 数量] — 数量总和 === (9-禁列数)×行数
+const VASE_RECIPES = {
+  sp1: { excl: [0, 1, 2, 3], leaf: 2,
+    pots: [['p', 'PEASHOOTER', 5], ['p', 'SNOWPEA', 5], ['p', 'SQUASH', 5],
+           ['z', 'NORMAL', 6], ['z', 'BUCKET', 3], ['z', 'JACK', 1]] },                       // 25/25
+  sp2: { excl: [0, 1, 2, 8], leaf: 2,
+    pots: [['p', 'LEFTPEATER', 7], ['p', 'SNOWPEA', 3], ['p', 'WALLNUT', 3], ['p', 'POTATOMINE', 2],
+           ['z', 'NORMAL', 6], ['z', 'BUCKET', 3], ['z', 'JACK', 1]] },                        // 25/25
+  sp3: { excl: [0, 1, 2], leaf: 2,
+    pots: [['p', 'LEFTPEATER', 6], ['p', 'SNOWPEA', 4], ['p', 'SQUASH', 2], ['p', 'HYPNOSHROOM', 3], ['p', 'WALLNUT', 3],
+           ['z', 'NORMAL', 8], ['z', 'BUCKET', 2], ['z', 'DANCER', 1], ['z', 'JACK', 1]] },   // 30/30
+  sp4: { excl: [0, 1], leaf: 2,
+    pots: [['p', 'PUFFSHROOM', 11], ['p', 'HYPNOSHROOM', 4], ['p', 'LEFTPEATER', 4],
+           ['z', 'JACK', 8], ['z', 'NORMAL', 7], ['z', 'FOOTBALL', 1]] },                      // 35/35
+  sp5: { excl: [0, 1], leaf: 2,
+    pots: [['p', 'LEFTPEATER', 6], ['p', 'PUMPKIN', 3], ['p', 'SQUASH', 4], ['p', 'HYPNOSHROOM', 2], ['p', 'SNOWPEA', 2], ['p', 'MAGNETSHROOM', 3],
+           ['z', 'NORMAL', 6], ['z', 'BUCKET', 5], ['z', 'JACK', 1], ['z', 'FOOTBALL', 3]] },  // 35/35
+  sp6: { excl: [0, 1], leaf: 2,
+    pots: [['p', 'LEFTPEATER', 7], ['p', 'SQUASH', 2], ['p', 'TALLNUT', 5], ['p', 'THREEPEATER', 2], ['p', 'TORCHWOOD', 4],
+           ['z', 'NORMAL', 7], ['z', 'POLEVAULTER', 5], ['z', 'FOOTBALL', 2], ['z', 'JACK', 1]] }, // 35/35
+  sp7: { excl: [0, 1, 2], leaf: 2,
+    pots: [['p', 'SPIKEWEED', 13], ['p', 'WALLNUT', 3], ['p', 'SQUASH', 3],
+           ['z', 'NORMAL', 10], ['z', 'BUCKET', 1]] },                                          // 30/30
+  sp8: { excl: [0, 1], leaf: 2,
+    pots: [['p', 'PUFFSHROOM', 7], ['p', 'WALLNUT', 3], ['p', 'SQUASH', 5], ['p', 'LEFTPEATER', 4],
+           ['z', 'JACK', 8], ['z', 'NORMAL', 4], ['z', 'POGO', 4]] },                           // 35/35
+  sp9: { excl: [0, 1], leaf: 2,
+    pots: [['p', 'LEFTPEATER', 6], ['p', 'SNOWPEA', 2], ['p', 'PEASHOOTER', 2], ['p', 'THREEPEATER', 2], ['p', 'SQUASH', 5], ['p', 'POTATOMINE', 1], ['p', 'WALLNUT', 1], ['p', 'PLANTERN', 1],
+           ['z', 'NORMAL', 8], ['z', 'BUCKET', 5], ['z', 'JACK', 1], ['z', 'GARGANTUAR', 1]] }, // 35/35
+  spE: { excl: [0, 1], leaf: 2, endless: true,
+    pots: [['p', 'LEFTPEATER', 6], ['p', 'SNOWPEA', 2], ['p', 'PEASHOOTER', 1], ['p', 'THREEPEATER', 2], ['p', 'SQUASH', 5], ['p', 'POTATOMINE', 1], ['p', 'WALLNUT', 1], ['p', 'PLANTERN', 1], ['sun', null, 1],
+           ['z', 'NORMAL', -1], ['z', 'BUCKET', 5], ['z', 'JACK', 1], ['z', 'GARGANTUAR', -1]] }, // 35/35 (巨人随轮数增)
+};
+
+// 冒险 4-5 三轮罐子 (原版 mSurvivalStage 0/1/2, 轮间戴夫过场)
+const VASE_ADVENTURE_STAGES = [
+  { excl: [0, 1, 2, 3, 4, 5], leaf: 0,
+    pots: [['p', 'PEASHOOTER', 5], ['p', 'SQUASH', 5], ['z', 'NORMAL', 4], ['z', 'BUCKET', 1]] },            // 15/15
+  { excl: [0, 1, 2, 3, 4], leaf: 2,
+    pots: [['p', 'PEASHOOTER', 4], ['p', 'SNOWPEA', 5], ['p', 'SQUASH', 4], ['z', 'NORMAL', 5], ['z', 'BUCKET', 1], ['z', 'FOOTBALL', 1]] }, // 20/20
+  { excl: [0, 1, 2, 3], leaf: 3,
+    pots: [['p', 'PEASHOOTER', 5], ['p', 'SNOWPEA', 5], ['p', 'HYPNOSHROOM', 5], ['z', 'NORMAL', 6], ['z', 'BUCKET', 2], ['z', 'DANCER', 1], ['z', 'JACK', 1]] }, // 25/25
+];
+
 const MODE_LEVELS = {
   // ---- 玩玩小游戏 (原版 CHALLENGE_PAGE_CHALLENGE 顺序) ----
   bowling:   { id: 101, label: '坚果保龄球',   mode: 'minigame', fixed: 'bowling', scene: 'day',   waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', endless: true, desc: '用传送带上的坚果滚翻僵尸' },
@@ -386,7 +434,7 @@ const MODE_LEVELS = {
   war_and_peas_2: { id: 106, label: '豌豆大战2', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'war_and_peas_2', scene: 'day', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '更密集的豌豆大军' },
   slot_machine:  { id: 107, label: '老虎机',   mode: 'minigame', fixed: 'conveyor', conveyorPool: 'slot_machine', scene: 'day', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_day', desc: '随机发放神秘种子' },
   seeing_stars:  { id: 108, label: '看见星星', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'seeing_stars', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '用杨桃点亮五个阵点' },
-  little_trouble:{ id: 109, label: '小麻烦',   mode: 'minigame', fixed: 'conveyor', conveyorPool: 'little_trouble', scene: 'pool', waves: 20, grassRows: [0, 1, 4, 5], rows: 6, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'pool', desc: '泳池边的大麻烦' },
+  little_trouble:{ id: 109, label: '小僵尸大麻烦', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'little_trouble', scene: 'pool', waves: 30, littleTrouble: true, grassRows: [0, 1, 4, 5], rows: 6, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'pool', desc: '泳池上的迷你僵尸大军' },
   portal_combat:{ id: 110, label: '传送门战斗', mode: 'minigame', fixed: 'conveyor', conveyorPool: 'portal_combat', scene: 'pool', waves: 20, grassRows: [0, 1, 4, 5], rows: 6, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'pool', desc: '穿越传送门夹击僵尸' },
   column:    { id: 111, label: '列队僵尸',     mode: 'minigame', fixed: 'conveyor', conveyorPool: 'column', scene: 'roof', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'roof', potColumns: 8, desc: '一列一列打过去' },
   invisighoul: { id: 112, label: '隐形僵尸',   mode: 'minigame', fixed: 'conveyor', conveyorPool: 'invisighoul', scene: 'night', waves: 20, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '看不见的僵尸最可怕' },
@@ -399,8 +447,15 @@ const MODE_LEVELS = {
   final_boss: { id: 119, label: '最终Boss',    mode: 'minigame', fixed: 'boss', scene: 'boss', waves: 10, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'roof', desc: '与僵王博士决一死战' },
   // ---- 解谜模式 (原版 CHALLENGE_PAGE_PUZZLE: 花瓶终结者 + 我是僵尸) ----
   vasebreaker: { id: 201, label: '花瓶终结者 I', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '打碎罐子, 释放植物或僵尸', vaseRecipe: 'sp1' },
-  vasebreaker2: { id: 202, label: '花瓶终结者 II', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '更凶险的罐子阵', vaseRecipe: 'sp2' },
-  vasebreaker3: { id: 203, label: '花瓶终结者 III', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '终极罐子考验', vaseRecipe: 'sp3' },
+  vasebreaker2: { id: 202, label: '花瓶终结者 II', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '向左双发射手登场', vaseRecipe: 'sp2' },
+  vasebreaker3: { id: 203, label: '花瓶终结者 III', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '魅惑菇与舞王登场', vaseRecipe: 'sp3' },
+  vasebreaker4: { id: 211, label: '花瓶终结者 IV', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '小丑僵尸的狂欢', vaseRecipe: 'sp4' },
+  vasebreaker5: { id: 212, label: '花瓶终结者 V', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '磁力菇登场', vaseRecipe: 'sp5' },
+  vasebreaker6: { id: 213, label: '花瓶终结者 VI', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '火炬树桩与高坚果', vaseRecipe: 'sp6' },
+  vasebreaker7: { id: 214, label: '花瓶终结者 VII', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '地刺阵', vaseRecipe: 'sp7' },
+  vasebreaker8: { id: 215, label: '花瓶终结者 VIII', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '跳跳僵尸来袭', vaseRecipe: 'sp8' },
+  vasebreaker9: { id: 216, label: '花瓶终结者 IX', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '巨人僵尸压轴', vaseRecipe: 'sp9' },
+  vasebreaker_endless: { id: 217, label: '花瓶终结者·无尽', mode: 'puzzle', fixed: 'vasebreaker', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 0, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', endless: true, desc: '巨人越来越多的无尽罐子', vaseRecipe: 'spE' },
   izombie:     { id: 204, label: '我是僵尸 I', mode: 'puzzle', fixed: 'izombie', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '指挥僵尸吃到脑子' },
   izombie2:    { id: 205, label: '我是僵尸 II', mode: 'puzzle', fixed: 'izombie', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 150, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '夜晚的僵尸指挥官', izLayout: 'hard1' },
   izombie3:    { id: 206, label: '我是僵尸 III', mode: 'puzzle', fixed: 'izombie', scene: 'night', waves: 30, grassRows: [0, 1, 2, 3, 4], rows: 5, startSun: 200, graves: [], skySun: false, chooseSeeds: false, bgm: 'front_night', desc: '铜墙铁壁的植物防线', izLayout: 'hard2' },
@@ -428,4 +483,4 @@ const WAVE = {
   ACCEL_DELAY: 2,              // 加速后2秒刷下一波
 };
 
-if (typeof module !== 'undefined') module.exports = { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, PROJECTILES, LEVELS, MODE_LEVELS, CONVEYOR_POOLS, WAVE_COUNTS, SEED_ORDER, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, UPGRADE_ORDER, SHOP_ITEMS, availablePlants, seedsAvailableCount, awardPlantForLevel, awardForLevel, gravesForLevel };
+if (typeof module !== 'undefined') module.exports = { CONST, PLANTS, ZOMBIES, ZOMBIE_ALLOWED, zombieAllowedOnLevel, PROJECTILES, LEVELS, MODE_LEVELS, CONVEYOR_POOLS, VASE_RECIPES, VASE_ADVENTURE_STAGES, WAVE_COUNTS, SEED_ORDER, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, UPGRADES, UPGRADE_ORDER, SHOP_ITEMS, availablePlants, seedsAvailableCount, awardPlantForLevel, awardForLevel, gravesForLevel };

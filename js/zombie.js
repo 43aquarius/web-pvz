@@ -486,8 +486,8 @@ class Zombie {
         break;
     }
 
-    // 小僵尸模式 (Little Trouble)
-    if (this.game.littleTrouble && this.isOnBoard) {
+    // 小僵尸模式 (Little Trouble, 原版 Zombie.cpp:871: 含过场僵尸 fromWave==-2)
+    if (this.game.littleTrouble && (this.isOnBoard || this.fromWave === WAVE_CUTSCENE)) {
       this.scaleZombie = 0.5;
       this.bodyHealth /= 4;
       this.helmHealth /= 4;
@@ -1068,6 +1068,20 @@ class Zombie {
       return;
     }
     this.startEating();
+    // 魅惑菇: 被吃的僵尸立即倒戈 (原版 Zombie.cpp:4831 AnimateChewSound —
+    // 吃到清醒魅惑菇 → FLOOP + 植物死亡 + StartMindControlled + 粒子 + 转身向右)
+    if (p.type === 'HYPNOSHROOM' && !p.isAsleep) {
+      this.board.game.audio.play('floop');
+      p.die();
+      this.startMindControlled();
+      this.board.addEffect('mindcontrol', this.x + 60, this.y + 40);
+      // 原版: mVelX = 0.17 (向右慢走) + mAnimTicksPerFrame = 18 (慢速步伐)
+      // (先 stopEating 再定速 — stopEating→startWalkAnim 会重随机速度)
+      this.stopEating();
+      this.velX = 0.17;
+      this.updateAnimSpeed();
+      return;
+    }
     // 免啃植物
     if (p.type === 'JALAPENO' || p.type === 'CHERRYBOMB' || p.type === 'DOOMSHROOM' || p.type === 'ICESHROOM' || p.type === 'HYPNOSHROOM' ||
       p.state === 'flowerpot_inv' || p.state === 'lilypad_inv' || p.state === 'squash_look' || p.state === 'squash_pre') {
@@ -1107,6 +1121,26 @@ class Zombie {
     this.isEating = true;
     this.playZombieReanim('anim_eat', RE.LOOP, 0, 0);
     this.updateAnimSpeed();
+  }
+  // 原版 Zombie::StartMindControlled (Zombie.cpp:6984)
+  // 舞王解除伴舞绑定 / 伴舞脱离领队 / 普通解除关联 — 魅惑后不再受原社交关系牵连
+  startMindControlled() {
+    this.board.game.audio.play('mindcontrol');
+    this.mindControlled = true;
+    if (this.type === 'DANCER') {
+      this.followerZombies = [null, null, null, null];
+    } else if (this.type === 'BACKUP') {
+      const leader = this.relatedZombie;
+      if (leader && !leader.dead && leader.followerZombies) {
+        const idx = leader.followerZombies.indexOf(this);
+        if (idx >= 0) leader.followerZombies[idx] = null;
+      }
+      this.relatedZombie = null;
+    } else if (this.relatedZombie) {
+      this.relatedZombie.relatedZombie = null;
+      this.relatedZombie = null;
+    }
+    // 割草机不再对其生效 (原版 mind controlled 不被自家割草机碾)
   }
   stopEating() {
     if (!this.isEating) return;

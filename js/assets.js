@@ -173,8 +173,12 @@ const Assets = (function () {
       for (const t of ['NORMAL', 'CONE', 'POLEVAULTER', 'BUCKET']) for (const p of zombiePacksFor(t)) packs.add(p);
     }
     if (level.fixed === 'vasebreaker') {
-      for (const t of ['PEASHOOTER', 'SUNFLOWER', 'WALLNUT', 'SNOWPEA', 'CHOMPER', 'REPEATER', 'POTATOMINE', 'SQUASH', 'THREEPEATER', 'JALAPENO', 'MELONPULT']) packs.add('plant_' + t);
-      for (const t of ['NORMAL', 'CONE', 'BUCKET']) for (const p of zombiePacksFor(t)) packs.add(p);
+      // sp1~sp9+无尽全部配方涉及植物 (VASE_RECIPES) + LEFTPEATER 复用 PeaShooter 素材
+      for (const t of ['PEASHOOTER', 'SUNFLOWER', 'WALLNUT', 'SNOWPEA', 'CHOMPER', 'REPEATER', 'LEFTPEATER', 'POTATOMINE', 'SQUASH',
+        'THREEPEATER', 'JALAPENO', 'MELONPULT', 'HYPNOSHROOM', 'PUMPKIN', 'MAGNETSHROOM', 'TALLNUT', 'TORCHWOOD',
+        'PUFFSHROOM', 'PLANTERN', 'CHERRYBOMB']) packs.add('plant_' + t);
+      // 配方涉及僵尸 (含 sp3 舞王/sp6 撑杆/sp8 跳跳/sp9+无尽 巨人)
+      for (const t of ['NORMAL', 'CONE', 'BUCKET', 'JACK', 'FOOTBALL', 'DANCER', 'POLEVAULTER', 'POGO', 'GARGANTUAR']) for (const p of zombiePacksFor(t)) packs.add(p);
     }
     if (level.id === 45) packs.add('plant_CHOMPER'), packs.add('plant_PUMPKIN'), packs.add('plant_CHERRYBOMB'), packs.add('plant_FLOWERPOT');
     if (level.id === 40) packs.add('bg_fog');      // 暴风雨夜: 雨素材
