@@ -2836,8 +2836,31 @@ class Zombie {
   dropLoot() {
     if (this.droppedLoot) return;
     this.droppedLoot = true;
-    // 原版 Zombie::Die: 掉落表 (金币/银币/钻石 概率) — 简化: 18% 金币
+    // 原版 Zombie::DieWithLoot → DropLoot → Board::DropLootPiece
     if (this.fromWave !== -2 && this.board) {
+      if (this.board.mode === 'whack') {
+        // ---- 原版 DropLootPiece whack 分支 (Board.cpp:9064) ----
+        // aDropHit = Rand(30000); 命中 [2500×f, max×f] → 掉 3 颗阳光 (每颗25);
+        // max 随当前阳光拥有量递减 (>500→2800 / >350→3100 / >200→3700 / 否则5000);
+        // f = 僵尸价值 (普僵1 / 路障2 / 铁桶4)
+        const WV = { NORMAL: 1, FLAG: 1, CONE: 2, BUCKET: 4 };
+        const f = WV[this.type] || 1;
+        const sun = this.board.sun;
+        const aSunChanceMax = sun > 500 ? 2800 : sun > 350 ? 3100 : sun > 200 ? 3700 : 5000;
+        const hit = Math.floor(Math.random() * 30000);
+        if (hit >= 2500 * f && hit <= aSunChanceMax * f) {
+          const cx = this.posX + 40, cy = this.posY + 30;
+          this.board.addWhackSun(cx - 20, cy);
+          this.board.addWhackSun(cx - 40, cy);
+          this.board.addWhackSun(cx - 60, cy);
+          return;
+        }
+        // 其余落入金币表 (原版: 金 250×f / 银 2500×f / 30000)
+        if (hit < 250 * f) this.board.addCoin(this.posX + 30, this.posY + 30, 25);
+        else if (hit < 2500 * f) this.board.addCoin(this.posX + 30, this.posY + 30, 10);
+        return;
+      }
+      // 常规关卡: 掉落表 (金币/银币/钻石 概率) — 简化: 18% 金币
       const roll = Math.random();
       if (roll < 0.14) this.board.addCoin(this.posX + 30, this.posY + 30, 25);
       else if (roll < 0.18) this.board.addCoin(this.posX + 30, this.posY + 30, 10);

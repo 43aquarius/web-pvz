@@ -151,6 +151,19 @@ const Renderer = {
         list.push({ o: p.row * 10000 + RENDER_LAYER.PLANT + (p.col || 0), d: () => p.draw(ctx, board) });
       }
     }
+    // 罐子解谜: 罐子进渲染列表 (原版 Challenge.cpp:3494 ScaryPotterPlacePot
+    //   mRenderOrder = MakeRenderOrder(RENDER_LAYER_PLANT, row, 0) → 与植物同层行交错;
+    //   同格僵尸覆盖罐子 / 下排罐子覆盖上排僵尸; 过场戴夫绘制于全部之上 → 修复戴夫被罐子遮挡)
+    if (board.vases && board.vases.length) {
+      const UIm = (window.__mods && window.__mods['ui']) || require('./ui');
+      const UI = UIm && UIm.UI;
+      if (UI && UI.drawVase) {
+        for (const v of board.vases) {
+          if (v.broken) continue;
+          list.push({ o: v.row * 10000 + RENDER_LAYER.PLANT + (v.col || 0), d: () => UI.drawVase(ctx, v, board) });
+        }
+      }
+    }
     // 街边僵尸 (开场过场, row=-1 → 不在草坪, 直接画)
     for (const z of board.zombies) {
       if (z.row === -1 && !z.dead) {
@@ -200,8 +213,49 @@ const Renderer = {
     for (const c of board.coins) this.drawCoin(ctx, c);
     // ---- 关卡奖励掉落物 (原版 LevelAward: 种子包/道具/纸条) ----
     if (board.levelAward) this.drawLevelAward(ctx, board.levelAward);
+    // ---- 罐子关轮间戴夫 (原版: 戴夫 above-UI 层级, 绘于全部战场元素之上) ----
+    if (board.vaseDave) this.drawVaseDave(ctx, board.vaseDave);
     // ---- 浓雾 (原版 Board::DrawFog: 逐格 8-cel + 呼吸波动) ----
     if (board.scene === 'fog') this.drawFog(ctx, board);
+  },
+
+  // ---- 罐子关轮间戴夫 + 对话框 (原版 UpdateLevelEndSequence + AdvanceCrazyDaveDialog) ----
+  drawVaseDave(ctx, d) {
+    if (d.phase === 'repopulate') return;   // 补罐阶段不画 (原版 PuzzleNextStageClear 无戴夫)
+    if (d.anim) d.anim.draw(ctx);
+    if (d.phase === 'talk' && d.line >= 0) {
+      const text = d.lines[Math.min(d.line, d.lines.length - 1)] || '';
+      const bx = 400, by = 470, bw = 560, bh = 88;
+      ctx.save();
+      ctx.globalAlpha = 0.96;
+      const grad = ctx.createLinearGradient(0, by, 0, by + bh);
+      grad.addColorStop(0, '#f5e7c0'); grad.addColorStop(1, '#e0c48a');
+      ctx.fillStyle = grad;
+      ctx.strokeStyle = '#7a5222'; ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.roundRect(bx - bw / 2, by, bw, bh, 16);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#4a2f10';
+      ctx.font = 'bold 19px "Noto Sans SC", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      // 自动换行 (简单贪心)
+      const maxW = bw - 60;
+      const words = text.split('');
+      let line = '', lines = [];
+      for (const w of words) {
+        if (ctx.measureText(line + w).width > maxW) { lines.push(line); line = w; }
+        else line += w;
+      }
+      if (line) lines.push(line);
+      lines = lines.slice(0, 3);
+      lines.forEach((l, i) => ctx.fillText(l, bx, by + 34 + i * 26));
+      const a = 0.5 + 0.5 * Math.sin((d.talkT || 0) * 6);
+      ctx.globalAlpha = a;
+      ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#8a6a2a';
+      ctx.fillText('点击继续', bx, by + bh - 12);
+      ctx.restore();
+    }
   },
 
   // ---- 奖励掉落物 (掉落弹跳 + 待点击提示光效; 飞行阶段在 fly 渲染) ----
@@ -469,6 +523,24 @@ const Renderer = {
           ctx.globalAlpha = 1 - p;
           if (img1) ctx.drawImage(img1, 0, Math.floor(p * 5) * (img1.height / 6), img1.width, img1.height / 6,
             e.x - 90, e.y - 90, 180, 180);
+          ctx.restore();
+          break;
+        }
+        case 'pow': {
+          // 原版 PARTICLE_POW: 打僵尸锤击粉云 (100px, 0.5s, 上方-ui层)
+          const img1 = Assets.image('explosionpowie');
+          const p = Math.min(1, e.t / 0.5);
+          ctx.save();
+          ctx.globalAlpha = 1 - p;
+          if (img1) {
+            ctx.drawImage(img1, 0, Math.floor(p * 5) * (img1.height / 6), img1.width, img1.height / 6,
+              e.x - 50, e.y - 50, 100, 100);
+          } else {
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(e.x, e.y, 45 * (1 - p * 0.3), 0, Math.PI * 2);
+            ctx.fill();
+          }
           ctx.restore();
           break;
         }

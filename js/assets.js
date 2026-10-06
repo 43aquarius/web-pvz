@@ -277,6 +277,7 @@ const Assets = (function () {
     }
     RE.setImages(state.images);
     // ---------- 数据文件 (图鉴文案 / 戴夫对话, 小体积启动预取) ----------
+    // dev 模式 (__REANIM_DATA__ 内联 reanim) 与网络模式均走 fetch; 仅 dist (__EMBED__) 用内嵌
     const dataKeys = ['almanac_data', 'dave_dialogs'];
     for (const dk of dataKeys) {
       try {
@@ -284,7 +285,7 @@ const Assets = (function () {
           state.data[dk] = typeof E.data[dk] === 'string'
             ? JSON.parse(await new Response(b64ToBlob(E.data[dk], 'application/json')).text())
             : E.data[dk];
-        } else if (!R) {
+        } else if (!E) {
           const r = await fetch('assets/' + dk + '.json?v=' + (window.__BUILD__ || '1'));
           if (r.ok) state.data[dk] = await r.json();
         }

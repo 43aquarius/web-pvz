@@ -544,6 +544,8 @@ const Game = {
     if (!conveyor && !free && card) card.cd = def.cd / 1000;
     if (conveyor) board.seedCards = [];   // 传送带卡一次性
     if (free) this.freePlant = null;      // 免费植物用后清空
+    // 打僵尸: 首次种植完成教程 (原版 SeedPacket.cpp:863 → TUTORIAL_WHACK_A_ZOMBIE_COMPLETED)
+    if (board.mode === 'whack' && board.whackFlashT > 0) board.whackFlashT = 0;
     this.selectedCard = -1;
     this.audio.play(board.isWater(row, col) ? 'plant_water' : (Math.random() < 0.5 ? 'plant' : 'plant2'));
     return true;
@@ -677,11 +679,11 @@ const Game = {
   beginPlay() {
     const board = this.board;
     const level = board.level;
-    if (board.mode !== 'vasebreaker') {
+    if (board.mode !== 'vasebreaker' && board.mode !== 'whack') {
       board.seedCards = board.chosenSeeds.map(t => ({ type: t, cd: 0 }));
       // 初始冷却 (原版: 开局短暂冷却)
       for (const c of board.seedCards) c.cd = 2;
-    }   // 罐子关: 保持 initMode 的 1 格樱桃炸弹 (原版 Board.cpp:1490)
+    }   // 罐子关: 保持 initMode 的 1 格樱桃炸弹; 打僵尸关: 保持 3 卡 (土豆雷/咬咬碑/樱桃)
     board.state = 'intro';
     this.state = 'playing';
     this.audio.playBGM(level.bgm);
@@ -1016,7 +1018,8 @@ const Game = {
       }
     }
     // 打僵尸模式: 锤子光标 (原版 Challenge::StartLevel: Hammer.reanim anim_whack_zombie 挂光标)
-    if (board.mode === 'whack' && m) {
+    // 原版语义: 拿起种子后光标变为植物 (CURSOR_TYPE_PLANT_FROM_BANK) → 此时不再画锤子
+    if (board.mode === 'whack' && m && this.selectedCard < 0 && !this.freePlant) {
       const RE = require('./reanim');
       if (!this._whackMallet && RE.hasDef('Hammer')) {
         this._whackMallet = Assets.reanim('Hammer');

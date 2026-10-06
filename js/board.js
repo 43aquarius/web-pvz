@@ -613,7 +613,8 @@ class Board {
   }
 
   // ---------- 打僵尸模式 (原版 WhackAZombie 系列) ----------
-  // 原版 WhackAZombiePlaceGraves: 列3..8 随机格, 避开已有墓碑
+  // 原版 WhackAZombiePlaceGraves: 列3..8 随机格, 避开已有墓碑;
+  // 原版权重: 有植物格 1 / 空格 100000; 新墓碑所在格的植物直接压死 (aPlant->Die())
   whackPlaceGraves(count) {
     const cells = [];
     for (let c = 3; c < 9; c++) {
@@ -623,7 +624,22 @@ class Board {
       }
     }
     for (let i = 0; i < count && cells.length; i++) {
-      const [r, c] = cells.splice(Math.floor(Math.random() * cells.length), 1)[0];
+      // 原版权重抽取 (PvzpPickFromWeightedGridArray)
+      let total = 0;
+      for (const [r, c] of cells) total += (this.grid[r] && this.grid[r][c]) ? 1 : 100000;
+      let pick = Math.random() * total, idx = cells.length - 1;
+      for (let j = 0; j < cells.length; j++) {
+        pick -= (this.grid[cells[j][0]] && this.grid[cells[j][0]][cells[j][1]]) ? 1 : 100000;
+        if (pick <= 0) { idx = j; break; }
+      }
+      const [r, c] = cells.splice(idx, 1)[0];
+      // 原版: 新墓碑压死该格植物 (墓碑会挤掉玩家的植物!)
+      const plant = this.grid[r] && this.grid[r][c];
+      if (plant && !plant.dead) {
+        if (typeof plant.die === 'function') plant.die();
+        plant.dead = true;
+        this.addEffect('text', this.gridX(c) + 40, this.cellY(r, c) + 30, { hold: 1.1, txt: '墓碑压碎了植物!', c: '#ff8a6a', size: 15 });
+      }
       this.graves.push({ row: r, col: c, rise: 0 });
       this.addEffect('dust', this.gridX(c) + 40, this.cellY(r, c) + 60);
       this.game.audio.play('gravebuttonchime');
@@ -652,7 +668,11 @@ class Board {
       else if (typeHit < pailChance + coneChance) type = 'CONE';
     }
     // 从现有墓碑中随机挑选 (原版 weighted array)
-    const graves = this.graves.slice();
+    // 原版: 正在被咬咬碑吃掉的墓碑不出僵尸 (aPlant->mSeedType != SEED_GRAVEBUSTER)
+    const graves = this.graves.filter(g => {
+      const p = this.grid[g.row] && this.grid[g.row][g.col];
+      return !p || p.type !== 'GRAVEBUSTER';
+    });
     count = Math.min(count, graves.length);
     // 原版 aMaxSpeed = PvzpAnimateCurve(1,12,wave, 1,3, EASE_IN) → 快速奔跑
     const maxSpeed = 1 + (Math.min(wave, 12) - 1) / 11 * 2;
@@ -663,6 +683,8 @@ class Board {
       const z = this.spawnZombieForWave(ty, g.row, wave);
       if (!z) continue;
       z.riseFromGrave(g.col, g.row);
+      // 原版: RiseFromGrave 后 mPhaseCounter=50 → 跳过地下等待直接破土 (打僵尸节奏更快)
+      z.phaseCounter = 50;
       // 原版 RandRangeFloat(0.5, aMaxSpeed) — 破土后按此速度奔跑 (pickRandomSpeed 尊重)
       z.whackSpeed = 0.5 + Math.random() * Math.max(0, spd - 0.5);
       try { z.updateAnimSpeed(); } catch (e) { }
@@ -727,6 +749,14 @@ class Board {
     this.suns.push(s);
     this.game.audio.play('points');
   }
+  // 打僵尸: 击杀掉落的阳光 (原版 Zombie::DieWithLoot → AddCoin COIN_SUN + COIN_MOTION_COIN
+  // — 从僵尸位置弹出、落地弹跳、待拾取; 每颗 25 阳光, 一次掉 3 颗)
+  addWhackSun(x, y) {
+    const s = new Sun(x, y - 30, y + 15 + Math.random() * 10, 'coin');
+    s.vy = -170 - Math.random() * 60;
+    s.vx = (Math.random() - 0.5) * 50;
+    this.suns.push(s);
+  }
   addProjectile(type, x, y, row, opts = {}) {
     const pr = new Projectile(type, x, y, row, this, opts);
     this.projectiles.push(pr);
@@ -744,13 +774,10 @@ class Board {
   checkWinLose() {
     // 我不是僵尸: 僵尸进屋 = 吃到脑子 = 胜利 (由 updateMode 判定)
     if (this.mode === 'izombie') return;
-    // 打僵尸/砸罐子模式: 僵尸走到左边直接消失 (原版无失败判定, 只有清场胜利)
-    if (this.mode === 'whack' || this.mode === 'vasebreaker') {
-      for (const z of this.zombies) {
-        if (!z.dead && z.x < -70) z.dieNoLoot();
-      }
-      return;
-    }
+    // 打僵尸/砸罐子模式: 失败判定由僵尸自身 checkForBoardEdge 处理
+    // (原版 Zombie.cpp:4566 — 僵尸带 头到达 BOARD_EDGE → ZombiesWon 判负, 两模式均无豁免;
+    //   旧实现"到左侧直接消失"是错的 — 会抢先在 -70 杀掉僵尸导致永远无法判负)
+    if (this.mode === 'whack' || this.mode === 'vasebreaker') return;
     for (const z of this.zombies) {
       if (!z.dead && !z.boss && z.x < -60 && z.hasHead) {
         if (z.flyingHigh) { this.triggerLose(z.row); return; }
@@ -970,19 +997,29 @@ class Board {
       this.sun = 0;
       this.seedCards = [];
     } else if (f === 'whack') {
-      // 打僵尸 (原版 2-5): 无种子无阳光, 墓碑出僵尸, 点击捶击
-      // 原版 Challenge::StartLevel: mZombieCountDown=200 (2s 后第一波), 锤子光标
+      // 打僵尸 (原版 2-5 / 小游戏): 锤子光标 + 墓碑刷怪 + 击杀掉阳光购买植物
       this.mode = 'whack';
       this.whackScore = 0;
       this.sun = 0;
-      this.seedCards = [];
-      this.whackWaves = 12;          // 原版 12 波
+      // 原版 Board.cpp:1495-1499 三张卡: 土豆雷 / 咬咬碑(墓碑吞噬者) / 冒险=樱桃炸弹 小游戏=寒冰菇
+      const third = this.level.mode === 'minigame' ? 'ICESHROOM' : 'CHERRYBOMB';
+      this.seedCards = [
+        { type: 'POTATOMINE', cd: 0 },
+        { type: 'GRAVEBUSTER', cd: 0 },
+        { type: third, cd: 0 },
+      ];
+      // 原版 Board::PickZombieWaves (Board.cpp:576): 冒险 2-5 = 8 波, 小游戏 = 12 波
+      this.whackWaves = this.level.mode === 'minigame' ? 12 : 8;
       this.whackWave = 0;
-      this.whackCountdown = 200;     // 原版 StartLevel: 200tick
+      this.whackCountdown = 200;     // 原版 StartLevel: 200tick (2s 后第一波)
       this.whackSpawnCounter = 0;
       this.whackFinalSpawned = false;
-      // 原版 Challenge::StartLevel (whack): 开局放置 3 个初始墓碑 (从场地随机长出)
-      this.whackPlaceGraves(3);
+      // 原版种子银行初始隐藏于屏上 (mY=-87), 首次获得阳光后滑入 (Challenge.cpp:1923 +2/帧)
+      this.seedBankY = -87;
+      this.whackBankShown = false;
+      this.whackFlashT = 0;          // 原版 TUTORIAL_WHACK_A_ZOMBIE_*: 卡片闪烁提示玩家用阳光买植物
+      // 原版 Board::InitLevel (Board.cpp:1077): 开局随机长出 9 座墓碑 (刷怪点)
+      this.whackPlaceGraves(9);
     } else if (f === 'vasebreaker') {
       // 罐子解谜 (原版 ScaryPotter): 按原版配方摆罐, 点击锤碎 → 植物/僵尸/阳光
       this.mode = 'vasebreaker';
@@ -1262,6 +1299,16 @@ class Board {
         break;
       }
       case 'whack': {
+        // ---- 原版 Challenge::Update 1923: 种子银行滑入 ----
+        // 首次拥有阳光(含待收集) → 银行从 -87 滑到 0 (+2/帧) + 卡片闪烁教程 (TUTORIAL_WHACK_A_ZOMBIE_*)
+        if (!this.whackBankShown && (this.sun > 0 || this.suns.some(s => !s.dead && !s.collected))) {
+          this.whackBankShown = true;
+          this.whackFlashT = 2.5;   // 原版 BEFORE_PICK_SEED(1500tick) + PICK_SEED(400tick)
+        }
+        if (this.whackBankShown && this.seedBankY < 0) {
+          this.seedBankY = Math.min(0, this.seedBankY + dt * 200);   // ≈原版 +2/update
+        }
+        if (this.whackFlashT > 0) this.whackFlashT -= dt;
         // ---- 原版 Challenge::WhackAZombieSpawning 完整移植 (100Hz tick) ----
         const tk = Math.max(1, Math.round(dt * 100));
         if (this.whackWave >= this.whackWaves && this.whackCountdown <= 0) {
@@ -1276,10 +1323,15 @@ class Board {
           if (prev > 100 && this.whackCountdown <= 100 && this.whackWave > 0) {
             this.whackPlaceGraves(Math.max(1, 5 - this.graves.length));
           }
-          // 原版: 倒计时 5tick → NextWaveComing 音效
+          // 原版: 倒计时 5tick → NextWaveComing (Board.cpp:5214)
           if (prev > 5 && this.whackCountdown <= 5) {
-            if (this.whackWave === 0) this.game.audio.play('awooga');
-            else if (this.whackWave === this.whackWaves - 1) this.game.audio.play('siren');
+            if (this.whackWave === 0) {
+              this.game.audio.play('awooga');                       // 原版: 首波 AWOOGA
+            } else if (this.whackWave === this.whackWaves - 1) {
+              // 原版: 下一波为最后一波 → SIREN + FinalWave.reanim 横幅 (RENDER_LAYER_ABOVE_UI)
+              this.game.audio.play('siren');
+              Banners.showFinalWave(2.1, this.game.audio);
+            }
           }
           if (this.whackCountdown <= 0) {
             this.whackCountdown = 2000;      // 原版: 波间隔 2000tick
@@ -1405,23 +1457,48 @@ class Board {
     if (this.state !== 'playing') return false;
     switch (this.mode) {
       case 'whack': {
-        // 锤子挥击动画 (原版光标 Hammer anim_whack_zombie)
+        // ---- 原版 Board::MouseHitTest: 锤子光标下 阳光/种子银行点击优先于锤击 ----
+        // 种植进行中 → 交回通用逻辑 (选格种植/右键取消)
+        if (game.selectedCard >= 0 || game.freePlant) return false;
+        // 阳光 (原版 Coin MouseHitTest → 收集)
+        for (const s of this.suns) {
+          if (!s.collected && !s.dead && Math.abs(p.x - s.x) < 35 && Math.abs(p.y - s.y) < 35) return false;
+        }
+        // 种子银行区域 (原版 SeedBank MouseHitTest; 银行完全滑入后才可点)
+        if (p.y < 87 && this.whackBankShown && this.seedBankY > -10) return false;
+        // ---- 原版 Challenge::MouseDownWhackAZombie ----
+        // 每次点击: 挥锤音效 + 动画重置 (FOLEY_SWING)
         if (game._whackMallet) {
           try { game._whackMallet.play('anim_whack_zombie', RE.PLAY_ONCE_HOLD, 24); } catch (e) { }
         }
-        // 锤击僵尸 (原版 MouseDownWhackAZombie: 命中矩形)
+        game.audio.play('swing');
+        // 命中判定: 圆(x, y-20, r=45) ∩ 僵尸矩形, 取渲染序最高 (原版 GetCircleRectOverlap)
+        let top = null;
         for (const z of this.zombies) {
           if (z.dead || z.isDeadOrDying) continue;
-          if (p.x > z.x && p.x < z.x + 100 && p.y > z.y - 20 && p.y < z.y + 120) {
-            z.takeDamage(9999, this, { mowed: true });
-            this.whackScore += 1;
-            this.addEffect('squish', z.x + 40, z.y + 40);
-            game.audio.play('bonk');
-            game.audio.play('squash_hmm');
-            return true;
+          const r = z.zombieRect;
+          if (!r) continue;
+          const rx = z.x + r.x, ry = z.y + r.y, rw = r.w, rh = r.h;
+          const cx = Math.max(rx, Math.min(p.x, rx + rw));
+          const cy = Math.max(ry, Math.min(p.y - 20, ry + rh));
+          if ((cx - p.x) * (cx - p.x) + (cy - (p.y - 20)) * (cy - (p.y - 20)) <= 45 * 45) {
+            if (!top || z.renderOrder >= top.renderOrder) top = z;
           }
         }
-        return true;   // 模式下吞掉点击
+        if (top) {
+          if (top.helmType) {
+            // 原版: 有头盔 → TakeHelmDamage(900) (路障一锤击落; 铁桶 1100 血需两锤)
+            game.audio.play(top.helmType === 'bucket' ? 'shieldhit' : 'snowpea_splat');
+            top.takeHelmDamage(900, 0);
+          } else {
+            // 原版: 无头盔 → BONK + POW粒子 + DieWithLoot (秒杀并掉落阳光/金币)
+            game.audio.play('bonk');
+            this.addEffect('pow', p.x - 3, p.y + 9);
+            top.dieWithLoot();
+            this.whackScore += 1;
+          }
+        }
+        return true;   // 其余点击吞掉 (锤击挥空)
       }
       case 'vasebreaker': {
         // 轮间戴夫对话优先 (原版 IsScaryPotterDaveTalking 冻结交互)
@@ -1593,6 +1670,8 @@ class Sun {
     this.dead = false;
     this.collected = false;
     this.vx = (Math.random() - 0.5) * 30;
+    this.vy = 0;
+    this.landed = false;
     this.phase = Math.random() * Math.PI * 2;
     this.flyT = 0;
   }
@@ -1605,7 +1684,19 @@ class Sun {
       if (this.flyT > 1.2) this.dead = true;
       return;
     }
-    if (this.y < this.targetY) {
+    if (this.from === 'coin') {
+      // 原版 COIN_MOTION_COIN: 掉落阳光的弹出物理 (vy 上抛 + 重力 + 落地弹跳衰减)
+      if (!this.landed) {
+        this.vy += 500 * dt;
+        this.y += this.vy * dt;
+        this.x += this.vx * dt;
+        if (this.y >= this.targetY) {
+          this.y = this.targetY;
+          if (Math.abs(this.vy) > 80) this.vy = -this.vy * 0.4;
+          else { this.vy = 0; this.vx = 0; this.landed = true; }
+        }
+      }
+    } else if (this.y < this.targetY) {
       this.y += 40 * dt;
       if (this.from === 'sky') this.x += this.vx * dt;
     }
@@ -1664,6 +1755,7 @@ class Effect {
     this.t += dt;
     switch (this.name) {
       case 'splat': case 'snowsplat': case 'firesplat': if (this.t > 0.5) this.dead = true; break;
+      case 'pow': if (this.t > 0.5) this.dead = true; break;   // 原版 PARTICLE_POW (锤击粉云 0.5s)
       case 'explosion': if (this.t > 0.9) this.dead = true; break;
       case 'spudow': if (this.t > 0.9) this.dead = true; break;
       case 'boom': if (this.t > 1.2) this.dead = true; break;

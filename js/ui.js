@@ -303,8 +303,52 @@ const UI = {
       }
       return;
     }
-    // ---- 无种子银行模式 (打僵尸/我不是僵尸) ----
-    if (board.mode === 'whack' || board.mode === 'izombie') {
+    // ---- 我不是僵尸: 无常规种子银行 (僵尸卡银行由 drawModeOverlay 绘制) ----
+    if (board.mode === 'izombie') {
+      this.drawProgressBar(ctx, board);
+      this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
+      this.drawLevelText(ctx, board);
+      if (board.state === 'intro' && !cs.active) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, board.waveTimer);
+        ctx.font = 'bold 40px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 6; ctx.strokeStyle = '#3a2a10';
+        const t = Math.ceil(board.waveTimer);
+        const txt = t > 2 ? '准备！' : '僵尸来了！';
+        ctx.strokeText(txt, 400, 250);
+        ctx.fillStyle = '#ffe9a8';
+        ctx.fillText(txt, 400, 250);
+        ctx.restore();
+      }
+      return;
+    }
+    // ---- 打僵尸: 原版三卡种子银行 (土豆雷/咬咬碑/樱桃炸弹) — 初始隐藏, 获得阳光后滑入 ----
+    if (board.mode === 'whack') {
+      const bankY = Math.max(-87, board.seedBankY === undefined ? -87 : board.seedBankY);
+      if (bankY > -87) {
+        const bank = Assets.image('seedbank.png');
+        if (bank) ctx.drawImage(bank, 0, 0, 446, 87, 0, bankY, 446, 87);
+        else { ctx.fillStyle = '#8a6642'; ctx.fillRect(0, bankY, 446, 87); }
+        // 阳光计数 (原版: seedbank 自带太阳图, 文本 (34,78) 黑色)
+        const sunTxt = String(Math.max(0, board.sun));
+        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#000';
+        ctx.fillText(sunTxt, 34, bankY + 78);
+        // 卡包 (原版 3 格; TUTORIAL_WHACK_A_ZOMBIE 期间闪烁提示)
+        const nC = board.seedCards.length;
+        const flash = board.whackFlashT > 0 && Math.floor(board.time * 4) % 2 === 0;
+        for (let i = 0; i < nC; i++) {
+          const c = board.seedCards[i];
+          const x = this.packetX(i, nC);
+          this.drawSeedCard(ctx, c.type, x, 7 + bankY, {
+            cooldown: c.cd,
+            disabled: (board.sun < PLANTS[c.type].cost || c.cd > 0) && !flash,
+            selected: game.selectedCard === i,
+          });
+        }
+      }
       this.drawProgressBar(ctx, board);
       this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
       this.drawLevelText(ctx, board);
@@ -451,14 +495,18 @@ const UI = {
     // 底条 (cell 0)
     if (fm) ctx.drawImage(fm, 0, 0, celW, celH, 600, 575, celW, celH);
     // 进度填充 (cell 1 从右揭示, 原版 aClipWidth 0..143)
-    const total = board.totalWaves;
-    const cur = board.wave;
+    // 打僵尸模式: 原版 ProgressMeterHasFlags=false → 无旗帜, 进度按 whackWave/whackWaves
+    const isWhack = board.mode === 'whack';
+    const total = isWhack ? (board.whackWaves || 8) : board.totalWaves;
+    const cur = isWhack ? board.whackWave : board.wave;
     // 原版 UpdateProgressMeterWidth: 波次+血量比例 → 此处用波次与计时近似
     let progress;
     if (cur >= total) progress = 150;
     else if (cur > 0) {
       const per = 150 / Math.max(1, total - 1);
-      const inWave = 1 - Math.max(0, board.waveTimer) / Math.max(0.1, board._waveTimerStart || 20);
+      const inWave = isWhack
+        ? 1 - Math.max(0, board.whackCountdown || 0) / 2000     // 原版波间隔 2000tick
+        : 1 - Math.max(0, board.waveTimer) / Math.max(0.1, board._waveTimerStart || 20);
       progress = Math.min(150, (cur - 1) * per + per * clamp01(inWave));
     } else progress = 0;
     const clip = Math.round(progress / 150 * 143);
@@ -466,8 +514,8 @@ const UI = {
       const srcX = celW - clip - 7;
       ctx.drawImage(fm, srcX, celH, clip, celH, celW - clip + 593, 575, clip, celH);
     }
-    // 旗帜 (原版: 每10波1旗, 波次到达时升起)
-    if (fm && total >= 10) {
+    // 旗帜 (原版: 每10波1旗, 波次到达时升起; 原版 ProgressMeterHasFlags: 打僵尸无旗帜)
+    if (fm && total >= 10 && !isWhack) {
       const perFlag = total >= 10 ? 10 : total;
       const nFlagWaves = Math.floor(total / perFlag);
       const flagsPosEnd = 590 + celW;
@@ -610,70 +658,74 @@ const UI = {
     ctx.restore();
   },
 
+  // ---------- 罐子解谜: 单个罐子绘制 (原版 GridItem::DrawScaryPot) ----------
+  // 由 Renderer.drawBoard 渲染列表按行调用 (植物层行交错, 原版 MakeRenderOrder(RENDER_LAYER_PLANT,row,0))
+  drawVase(ctx, v, board) {
+    // 三态列 0问号/1叶子/2僵尸, 行1正面完整罐 (80x100/格), 位置 grid-5/-15
+    const pot = Assets.image('scary_pot.png');
+    const shadow = Assets.image('plantshadow2.png') || Assets.image('plantshadow.png');
+    const x = board.gridX(v.col) - 5, y = board.cellY(v.row, v.col) - 15;
+    // 影子 (原版 PLANTSHADOW2 ×1.3 @ x-5, y+72)
+    if (shadow) {
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      ctx.drawImage(shadow, x - 5, y + 72, shadow.width * 1.3, shadow.height * 1.3);
+      ctx.restore();
+    }
+    const col = v.state === 'leaf' ? 1 : v.state === 'zombie' ? 2 : 0;
+    if (pot) {
+      // 行1 = 正面完整罐 (80x100/格)
+      ctx.drawImage(pot, col * 80, 100, 80, 100, x, y, 80, 100);
+    } else {
+      // 兜底: 程序化陶罐
+      ctx.save();
+      const g = ctx.createLinearGradient(x, y, x + 80, y + 90);
+      g.addColorStop(0, '#c89a5a'); g.addColorStop(0.5, '#a8743a'); g.addColorStop(1, '#8a5a2a');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(x + 18, y + 14);
+      ctx.quadraticCurveTo(x + 8, y + 40, x + 14, y + 62);
+      ctx.quadraticCurveTo(x + 18, y + 86, x + 40, y + 88);
+      ctx.quadraticCurveTo(x + 62, y + 86, x + 66, y + 62);
+      ctx.quadraticCurveTo(x + 72, y + 40, x + 62, y + 14);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#5a3a16'; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.restore();
+    }
+    // 叶子/僵尸态标记 (罐上符号, 原版烘焙在贴图中; 此处叠加半透明图形强化可读性)
+    if (pot && v.state !== 'question') {
+      ctx.save();
+      if (v.state === 'leaf') {
+        // 叶子图标
+        ctx.translate(x + 40, y + 40);
+        ctx.fillStyle = 'rgba(46,94,20,0.9)';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 16, 9, -0.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(26,60,10,0.9)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-14, 6); ctx.lineTo(14, -6); ctx.stroke();
+      } else {
+        // 僵尸脸图标
+        ctx.translate(x + 40, y + 42);
+        ctx.fillStyle = 'rgba(40,40,46,0.85)';
+        ctx.beginPath(); ctx.ellipse(0, 0, 13, 15, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#d8d8d0';
+        ctx.beginPath(); ctx.arc(-5, -3, 2.5, 0, Math.PI * 2); ctx.arc(5, -3, 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#d8d8d0'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-6, 5); ctx.lineTo(6, 5); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  },
+
   drawModeOverlay(ctx, board) {
     if (!board || !board.mode) return;
     const game = this.game;
     switch (board.mode) {
       case 'vasebreaker': {
-        // 罐子 (原版 GridItem::DrawScaryPot: 三态列 0问号/1叶子/2僵尸, 行1正面, 位置 grid-5/-15)
-        const pot = Assets.image('scary_pot.png');
-        const shadow = Assets.image('plantshadow2.png') || Assets.image('plantshadow.png');
-        for (const v of board.vases) {
-          if (v.broken) continue;
-          const x = board.gridX(v.col) - 5, y = board.cellY(v.row, v.col) - 15;
-          // 影子 (原版 PLANTSHADOW2 ×1.3 @ x-5, y+72)
-          if (shadow) {
-            ctx.save();
-            ctx.globalAlpha = 0.55;
-            ctx.drawImage(shadow, x - 5, y + 72, shadow.width * 1.3, shadow.height * 1.3);
-            ctx.restore();
-          }
-          const col = v.state === 'leaf' ? 1 : v.state === 'zombie' ? 2 : 0;
-          if (pot) {
-            // 行1 = 正面完整罐 (80x100/格)
-            ctx.drawImage(pot, col * 80, 100, 80, 100, x, y, 80, 100);
-          } else {
-            // 兜底: 程序化陶罐
-            ctx.save();
-            const g = ctx.createLinearGradient(x, y, x + 80, y + 90);
-            g.addColorStop(0, '#c89a5a'); g.addColorStop(0.5, '#a8743a'); g.addColorStop(1, '#8a5a2a');
-            ctx.fillStyle = g;
-            ctx.beginPath();
-            ctx.moveTo(x + 18, y + 14);
-            ctx.quadraticCurveTo(x + 8, y + 40, x + 14, y + 62);
-            ctx.quadraticCurveTo(x + 18, y + 86, x + 40, y + 88);
-            ctx.quadraticCurveTo(x + 62, y + 86, x + 66, y + 62);
-            ctx.quadraticCurveTo(x + 72, y + 40, x + 62, y + 14);
-            ctx.closePath();
-            ctx.fill();
-            ctx.strokeStyle = '#5a3a16'; ctx.lineWidth = 2.5; ctx.stroke();
-            ctx.restore();
-          }
-          // 叶子/僵尸态标记 (罐上符号, 原版烘焙在贴图中)
-          if (pot && v.state !== 'question') {
-            ctx.save();
-            if (v.state === 'leaf') {
-              // 叶子图标
-              ctx.translate(x + 40, y + 40);
-              ctx.fillStyle = 'rgba(46,94,20,0.9)';
-              ctx.beginPath();
-              ctx.ellipse(0, 0, 16, 9, -0.6, 0, Math.PI * 2);
-              ctx.fill();
-              ctx.strokeStyle = 'rgba(26,60,10,0.9)'; ctx.lineWidth = 2;
-              ctx.beginPath(); ctx.moveTo(-14, 6); ctx.lineTo(14, -6); ctx.stroke();
-            } else {
-              // 僵尸脸图标
-              ctx.translate(x + 40, y + 42);
-              ctx.fillStyle = 'rgba(40,40,46,0.85)';
-              ctx.beginPath(); ctx.ellipse(0, 0, 13, 15, 0, 0, Math.PI * 2); ctx.fill();
-              ctx.fillStyle = '#d8d8d0';
-              ctx.beginPath(); ctx.arc(-5, -3, 2.5, 0, Math.PI * 2); ctx.arc(5, -3, 2.5, 0, Math.PI * 2); ctx.fill();
-              ctx.strokeStyle = '#d8d8d0'; ctx.lineWidth = 2;
-              ctx.beginPath(); ctx.moveTo(-6, 5); ctx.lineTo(6, 5); ctx.stroke();
-            }
-            ctx.restore();
-          }
-        }
+        // 罐子本体已移至 Renderer.drawBoard 渲染列表 (原版 mRenderOrder = MakeRenderOrder(RENDER_LAYER_PLANT, row, 0):
+        // 与植物同层、同行僵尸覆盖罐子、下排罐子覆盖上排僵尸; 戴夫过场绘制于其上 → 修复戴夫被罐子遮挡)
         // 锤子动画 (原版 STATECHALLENGE_SCARY_POTTER_MALLETING: Hammer.reanim)
         if (board.mallet && board.mallet.anim) {
           board.mallet.anim.draw(ctx);
@@ -822,16 +874,8 @@ const UI = {
         break;
       }
       case 'whack': {
-        // 波次进度 (原版底部进度条语义; 顶部提示)
-        ctx.save();
-        ctx.font = 'bold 20px "Noto Sans SC", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(20,12,0,0.8)';
-        const label = `第 ${Math.min(board.whackWave || 0, board.whackWaves || 12)} / ${board.whackWaves || 12} 波 · 击杀 ${board.whackScore || 0}`;
-        ctx.strokeText(label, 400, 120);
-        ctx.fillStyle = '#ffe9a8';
-        ctx.fillText(label, 400, 120);
-        ctx.restore();
+        // 波次提醒已还原原版: FlagMeter 进度条 (ui.drawProgressBar 无旗模式) +
+        // FinalWave.reanim 横幅 + awooga/siren 音效 (board.js updateMode whack)
         break;
       }
     }
