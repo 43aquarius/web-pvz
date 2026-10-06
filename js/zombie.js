@@ -1536,6 +1536,8 @@ class Zombie {
         }
         this.board.addEffect('boom', px, py, { big: true });
         this.board.shakeBoard(4, -6);
+        // 原版: 罐子关小丑爆炸连带震开 3×3 格内罐子 (Challenge::ScaryPotterJackExplode)
+        if (this.board.mode === 'vasebreaker') this.board.scaryPotterJackExplode(px, py);
         this.dieNoLoot();
       }
     }
@@ -1558,6 +1560,12 @@ class Zombie {
             } else {
               this.squishAllInSquare(p.col, p.row, 'chew');
             }
+          }
+          // 原版 UpdateZombieGargantuar: 罐子关拍击连带砸开自身格位罐子
+          if (this.board.mode === 'vasebreaker') {
+            const gcol = this.board.pixelToGridX(this.posX, this.posY);
+            const pot = this.board.getScaryPotAt(gcol, this.row);
+            if (pot) this.board.scaryPotterOpenPot(pot, this.board.game);
           }
         }
         this.board.game.audio.play('thump');
@@ -1617,6 +1625,11 @@ class Zombie {
     let doSmash = false;
     if (this.mindControlled) doSmash = !!this.findZombieTarget();
     else if (this.findPlantTarget('chew')) doSmash = true;
+    // 原版 Zombie.cpp:2251: 罐子关巨人遇到挡路罐子直接拍碎 (GetScaryPotAt → doSmash)
+    else if (this.board.mode === 'vasebreaker') {
+      const gcol = this.board.pixelToGridX(this.posX, this.posY);
+      if (this.board.getScaryPotAt(gcol, this.row)) doSmash = true;
+    }
     if (doSmash) {
       this.phase = PH.GARGANTUAR_SMASHING;
       this.board.game.audio.play('lowgroan');

@@ -1559,6 +1559,22 @@ class Board {
   // 兼容旧名
   breakVase(v, game) { this.scaryPotterOpenPot(v, game); }
 
+  // 原版 Board::GetScaryPotAt: 该格上的未开罐子
+  getScaryPotAt(col, row) {
+    return this.vases.find(v => !v.broken && v.col === col && v.row === row) || null;
+  }
+
+  // 原版 Challenge::ScaryPotterJackExplode: 小丑爆炸震开 3×3 格内全部罐子
+  scaryPotterJackExplode(x, y) {
+    const cell = this.game.pixelToCell(x, y);
+    if (!cell) return;
+    const [cx, cy] = cell;
+    for (const v of this.vases.slice()) {
+      if (v.broken) continue;
+      if (Math.abs(v.col - cx) <= 1 && Math.abs(v.row - cy) <= 1) this.scaryPotterOpenPot(v, this.game);
+    }
+  }
+
   canPlantOn(row, col) {
     if (this.isWater(row, col)) return this.gridLily[row][col] && !this.grid[row][col];
     if (this.isRoof) return (this.gridPot[row][col] || this.gridLily[row][col]) && !this.grid[row][col];
