@@ -629,6 +629,8 @@ const Game = {
     if (this.levelLoading) return;   // 防双击
     await this._preloadLevel(level);
     const lv = this.levelId;
+    // 原版 HasFinishedAdventure: 通关一次后 (unlocked>50); 雪人仅二周目出现 (CanSpawnYetis)
+    this.finishedAdventure = this.progress.unlocked > 50;
     // 小僵尸关 (原版 IsLittleTroubleLevel: 冒险 3-5 / 关卡25 + 小游戏"小僵尸大麻烦")
     // → 僵尸缩放0.5 + 血量÷4 (zombie.js ZombieInitialize)
     this.littleTrouble = !!level.littleTrouble || (!this.modeKey && lv === 25);
@@ -638,6 +640,11 @@ const Game = {
     if (specialNoShovel) this.shovelUnlocked = false;
     else if (lv === 5 && firstTime) this.shovelUnlocked = false;   // 1-5 首次: 由戴夫对话解锁
     else this.shovelUnlocked = lv >= 5 || !firstTime;
+    // 原版 Board.cpp 1350-1358: 首次冒险 1-1 = 150 阳光, 重玩 1-1 = 50
+    if (lv === 1) level.startSun = firstTime ? 150 : 50;
+    // 原版 PickZombieWaves 581-586: 非首次冒险重玩 → 波数 <10 提到 20, ≥10 加 10 波
+    //   (小Boss关 1-10/2-10/3-10 与打僵尸关 2-5 除外: 打僵尸恒 8 波)
+    level.replayBoost = (!firstTime && !this.modeKey && lv <= 50 && lv !== 10 && lv !== 20 && lv !== 30 && lv !== 15 && !level.endless);
     const board = new Board(this, level);
     this.board = board;
     this.selectedCard = -1;

@@ -338,9 +338,11 @@ Screens.menu = {
     // ---- 6. 附加元素 (图鉴书/水壶/商店图标/小按钮/悬停高亮) ----
     this.buttons = this.computeButtons();
     const hover = Screens.hover;
-    // 图鉴书 (原版: 按钮图片 99x99 画在轨道位置)
+    // 图鉴书 (原版 CanShowAlmanac: 通关或玩到 2-5 (level≥15) 才解锁 — 即 2-4 奖励图鉴后)
+    const gameRef = Screens.game;
+    const canAlm = !gameRef || gameRef.progress.unlocked >= 15 || gameRef.progress.unlocked > 50 || gameRef.debugUnlocked;
     const alm = this.buttons.find(b => b.k === 'almanac');
-    if (alm) {
+    if (alm && canAlm) {
       const isH = hover === 'almanac';
       const aimg = img(isH ? 'selectorscreen_almanachighlight.png' : 'selectorscreen_almanac.png');
       if (aimg) ctx.drawImage(aimg, alm.x, alm.y);
@@ -548,6 +550,8 @@ Screens.menu = {
         game.audio.play('gravebutton');
         game.state = 'shop'; Screens.shop.enter();
       } else if (b.k === 'almanac') {
+        // 原版 CanShowAlmanac: 2-4 奖励图鉴后才可进入 (level≥15)
+        if (!(game.progress.unlocked >= 15 || game.progress.unlocked > 50 || game.debugUnlocked)) { game.audio.play('buzzer'); return; }
         game.audio.play('gravebutton');
         game.state = 'almanac'; game.almanac.selected = null; game.almanac.tab = 'index';
         // 索引页模型素材预载 (SUNFLOWER/普通僵尸 reanim; 缺此则两展示窗空白) (#10)

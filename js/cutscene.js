@@ -108,19 +108,23 @@ const Cutscene = {
   },
 
   placeStreetZombies(board) {
-    if (board.level.fixed) return;   // 特殊玩法关卡无街边僵尸
+    // 原版 PlaceStreetZombies: 仅僵王博士关 (5-10) 无街边僵尸;
+    // 打僵尸/罐子/我不是僵尸无常规波次 → 无预览类型, 也跳过
+    if (board.level.id === 50 && !board.level.mode) return;
+    if (['whack', 'vasebreaker', 'izombie'].includes(board.level.fixed)) return;
     // 收集本关可出现的僵尸种类 (原版按波次统计)
     const types = [];
     const seen = new Set();
     for (const w of board.waves) {
       for (const [ty] of w.types) {
         if (ty === 'FLAG' || ty === 'BOSS' || seen.has(ty)) continue;
+        if (ty === 'YETI' && board.level.id !== 40) continue;   // 原版: 雪人仅暴雨夜预览
         seen.add(ty);
         types.push(ty);
       }
     }
     if (board.waterRows.length && !types.includes('DUCKY')) types.unshift('DUCKY');
-    if (!types.length) types.push('NORMAL');
+    if (!types.length) return;
     // 5x5 网格摆放 (大僵尸优先)
     const grid = Array.from({ length: 5 }, () => new Array(5).fill(false));
     const placed = [];
@@ -140,7 +144,11 @@ const Cutscene = {
     big.forEach(place);
     rest.forEach(place);
     // 创建实体 (原版: fromWave=ZOMBIE_WAVE_CUTSCENE → 不参与逻辑, 仅播放待机动画)
-    for (const p of placed.slice(0, 12)) {
+    // 预览容量 (原版 PlaceStreetZombies): 常规 10 / 小僵尸 15 / 小Boss与暴雨 18
+    const lv = board.level.id;
+    const cap = (!board.level.mode && lv === 25) ? 15
+      : (!board.level.mode && (lv === 10 || lv === 20 || lv === 30 || lv === 40)) ? 18 : 12;
+    for (const p of placed.slice(0, cap)) {
       const z = this.board.addZombie(p.ty, -2);
       if (!z) continue;
       z.posX = p.gx * 56 + 830;                       // 原版 mPosX

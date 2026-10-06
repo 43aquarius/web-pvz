@@ -251,6 +251,8 @@ class Board {
   canSpawnType(ty) {
     const d = ZOMBIES[ty];
     if (!d || d.weight <= 0 || d.boss) return false;
+    // 原版 CanZombieSpawnOnLevel: 雪人需 CanSpawnYetis (通关至少一次后才出现)
+    if (ty === 'YETI' && !(this.game && this.game.finishedAdventure)) return false;
     // 5-5 蹦极闪电战 (原版: NORMAL/CONE/BUCKET/LADDER)
     if (this.level.id === 45 && ['NORMAL', 'CONE', 'BUCKET', 'LADDER', 'FLAG', 'BUNGEE'].includes(ty)) return true;
     // 小僵尸关 (原版 Challenge.cpp:2345 — NORMAL/TRAFFIC_CONE/FOOTBALL/SNORKEL)
@@ -260,6 +262,8 @@ class Board {
   introZombieType() {
     const lv = this.level.id;
     if (lv <= 1) return null;
+    // 原版 GetIntroducedZombieType: 雪人需 CanSpawnYetis (通关后重玩才登场)
+    if (lv === 40 && !(this.game && this.game.finishedAdventure)) return null;
     for (const ty of Object.keys(ZOMBIES)) {
       const d = ZOMBIES[ty];
       if (d.unlock === lv && d.weight > 0 && !d.boss && ty !== 'DUCKY') return ty;
@@ -268,7 +272,10 @@ class Board {
   }
   buildWaves(level) {
     const lv = level.id > 50 ? 50 : level.id;   // 额外模式(生存等)按满级僵尸池
-    const numWaves = level.endless ? 200 : level.waves;
+    // 原版 PickZombieWaves 581-586: 非首次冒险重玩 → 波数 <10 提到 20, ≥10 加 10 波
+    let baseWaves = level.waves;
+    if (level.replayBoost) baseWaves = baseWaves < 10 ? 20 : baseWaves + 10;
+    const numWaves = level.endless ? 200 : baseWaves;
     const wavesPerFlag = numWaves >= 10 ? 10 : numWaves;
     const intro = this.introZombieType();
     const out = [];
@@ -284,12 +291,19 @@ class Board {
         continue;
       }
       if (isFlag) {
+        // 原版 PickZombieWaves 617-629: 蹦极突袭 (5-5) 旗帜波先放 5 只蹦极;
+        //   非末波 → 该波仅有蹦极 (continue); 末波 → 蹦极 + 常规大波内容
+        if (!level.mode && lv === 45) {
+          types.push(['BUNGEE', 5]);
+          if (!isFinal) {
+            out.push({ flag: true, final: false, count: 5, types });
+            continue;
+          }
+        }
         const plain = Math.min(points, 8);
         points = Math.round(points * 2.5);
         types.push(['NORMAL', plain]);
         types.push(['FLAG', 1]);
-        // 5-5 蹦极闪电战 (原版: 旗波追加 5 只蹦极僵尸偷植物)
-        if (lv === 45) types.push(['BUNGEE', 5]);
       }
       if (intro && !isFlag) {
         if (w === Math.floor(numWaves / 2) || isFinal) types.push([intro, 1]);
