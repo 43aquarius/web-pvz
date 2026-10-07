@@ -196,7 +196,7 @@ const PROJECTILES = {
   pea:          { dmg: 20, speed: 333, img: 'projectilepea', splat: 'pea' },
   snowpea:      { dmg: 20, speed: 333, img: 'projectilesnowpea', splat: 'snowpea', chill: true },
   firepea:      { dmg: 40, speed: 333, splat: 'firepea', fire: true, reanim: 'FirePea' },
-  puff:         { dmg: 20, speed: 250, fume: true, reanim: 'Puff' },
+  puff:         { dmg: 20, speed: 333, fume: true, img: 'puffshroom_puff1', life: 0.75, puffAge: true, splat: 'puffsplat' },
   fume:         { dmg: 20, speed: 500, fume: true, reanim: 'fume' },
   gloom:        { dmg: 20, speed: 0, gloom: true, reanim: 'fume' },
   star:         { dmg: 20, speed: 333, img: 'projectile_star', splat: 'star' },

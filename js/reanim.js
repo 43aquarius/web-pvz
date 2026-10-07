@@ -196,6 +196,12 @@ const RE = (function () {
     }
     setFramesForLayer(animName) {
       const [s, c] = this.getAnimRange(animName);
+      if (c <= 0) {
+        // 缺失动画兜底: 原版 FindTrackIndex 失败回落轨道 0 区间; web 转换数据的
+        // 轨道序与原版不同, 采用"保持当前区间继续播放" — 避免 [0,1) 冻结帧 +
+        // animRate 残留引发的行走异常 (如舞王入场冻结/海豚过场僵死)
+        return;
+      }
       this.frameStart = s; this.frameCount = Math.max(1, c);
       if (this.animRate >= 0) this.animTime = 0; else this.animTime = 0.9999999;
       this.lastFrameTime = -1;
@@ -223,10 +229,13 @@ const RE = (function () {
     }
 
     // ---- 更新 (dt 秒; 内部按100Hz语义) ----
+    // 固定步长累积器: 高刷新率下不再因 Math.max(1,round(dt/0.01)) 倍速推进
     update(dt) {
       if (this.frameCount <= 0 || this.dead || !this.def) return;
-      const ticks = Math.max(1, Math.round(dt / SECONDS_PER_UPDATE));
-      this.updateTicks(ticks);
+      this._acc = (this._acc || 0) + dt / SECONDS_PER_UPDATE;
+      const ticks = Math.floor(this._acc);
+      this._acc -= ticks;
+      if (ticks > 0) this.updateTicks(ticks);
     }
     updateTicks(ticks) {
       if (this.frameCount <= 0 || this.dead) return;

@@ -7,7 +7,7 @@
 const { CONST, PLANTS, MUSHROOMS, AQUATIC, GROUNDCOVER } = require('./data');
 const RE = require('./reanim');
 const { Projectile } = require('./projectiles');
-const { PH } = require('./zombie');   // 大嘴花 miss 判定用 (撑杆跳阶段)
+const { PH, H } = require('./zombie');   // 大嘴花 miss 判定用 (撑杆跳阶段); 磁力菇筛选用 (相位/高度)
 // Sun 类延迟获取 (board 在 plants 之后加载)
 const getSunClass = () => { const m = (window.__mods && window.__mods['board']) || require('./board'); return m && m.Sun; };
 
@@ -533,17 +533,52 @@ class Plant {
         if (this.type === 'MAGNETSHROOM') {
           this.magnetCD -= dt;
           if (this.magnetCD <= 0) {
-            // 找5格内带铁器的僵尸
-            const targets = board.zombies.filter(z => !z.dead && !z.mindControlled &&
-              z.row >= this.row - 1 && z.row <= this.row + 1 &&
-              z.x - this.x < d.magnetRange * 80 && z.x > this.x &&
-              (z.helmMetal() || z.shieldMetal() || z.type === 'POGO'));
-            if (targets.length) {
-              const z = targets[0];
+            // 原版 UpdateMagnetShroom (Plant.cpp:2050-2130):
+            //   有头/非魅惑/地面正常/非破土; 行差≤2; 挖地矿工与腾极需持物;
+            //   铁桶/橄榄球盔/铁门/梯子/杰克盒可吸; 半径270(吃食中320)取最近
+            let best = null, bestDist = Infinity;
+            for (const z of board.zombies) {
+              if (z.dead || z.mindControlled || !z.hasHead) continue;
+              if (z.zombieHeight !== H.NORMAL || z.phase === PH.RISING_FROM_GRAVE) continue;
+              const diffY = z.row - this.row;
+              if (diffY > 2 || diffY < -2) continue;
+              const isDiggerOrPogo = (z.type === 'DIGGER' && (z.phase === PH.DIGGER_TUNNELING || z.phase === PH.DIGGER_STUNNED || z.phase === PH.DIGGER_WALKING)) || z.type === 'POGO';
+              if (isDiggerOrPogo) { if (!z.hasObject) continue; }
+              else if (!(z.helmMetal() || z.shieldMetal() || z.phase === PH.JACK_RUNNING)) continue;
+              const radius = z.isEating ? 320 : 270;
+              // 圆-僵尸包围盒相交 (原版 GetCircleRectOverlap)
+              const zx = Math.max(this.x, Math.min(z.x + 40, this.x + radius));
+              const zy = Math.max(this.y + 20, Math.min(z.y + 55, this.y + 20 + radius));
+              if (Math.hypot(zx - this.x, zy - (this.y + 20)) > radius) continue;
+              const dist = Math.hypot(z.x + 40 - this.x, z.y + 55 - (this.y + 20)) + Math.abs(diffY) * 80;
+              if (dist < bestDist) { best = z; bestDist = dist; }
+            }
+            if (best) {
               this.magnetCD = d.magnet;
               for (const L of this.anims) L.r.play('anim_shooting', RE.PLAY_ONCE_HOLD, 12);
-              z.magnetSteal(board);
+              best.magnetSteal(board);
               board.game.audio.play('magnetshroom');
+            } else {
+              // 原版: 无僵尸目标 → 吸走≤2格内的场上梯子 (GridItem LADDER)
+              let bestL = null, bestLD = Infinity;
+              for (const l of board.ladders) {
+                if (l.dead) continue;
+                const dx = Math.abs(l.col - this.col), dy = Math.abs(l.row - this.row);
+                const sq = Math.max(dx, dy);
+                if (sq <= 2) {
+                  const dist = sq + dy * 0.05;
+                  if (dist < bestLD) { bestL = l; bestLD = dist; }
+                }
+              }
+              if (bestL) {
+                this.magnetCD = d.magnet;
+                for (const L of this.anims) L.r.play('anim_shooting', RE.PLAY_ONCE_HOLD, 12);
+                const lx = board.gridX ? board.gridX(bestL.col) + 40 : bestL.col * 80 + 40;
+                const ly = board.cellY ? board.cellY(bestL.row, bestL.col) + 40 : bestL.row * 100 + 40;
+                try { board.addEffect('magnetitem', lx, ly, { img: 'zombie_ladder_1' }); } catch (e) { }
+                bestL.dead = true;
+                board.game.audio.play('magnetshroom');
+              }
             }
           }
         } else {
@@ -677,7 +712,16 @@ class Plant {
         break;
       }
       case 'PUFFSHROOM': case 'SCAREDYSHROOM': case 'SEASHROOM': {
-        board.projectiles.push(new Projectile('puff', this.x + 45, mouthY - 10, this.row, this, { maxDist: d.range * 80 }));
+        // 原版 Plant::FireWeapon 发射点 (Plant.cpp:4556-4565, 4603):
+        //   PUFFSHROOM (mX+40, mY+40) / SEASHROOM (mX+45, mY+63) / SCAREDYSHROOM (mX+29, mY+21)
+        //   弹种 PROJECTILE_PUFF: MOTION_PUFF 直线 3.33px/tick, 75tick 寿命 (#2)
+        const [ox, oy] = this.type === 'PUFFSHROOM' ? [40, 40]
+          : this.type === 'SEASHROOM' ? [45, 63] : [29, 21];
+        board.projectiles.push(new Projectile('puff', this.x + ox, this.y + oy, this.row, this, { maxDist: d.range * 80 }));
+        // 原版 PARTICLE_PUFFSHROOM_MUZZLE (Plant.cpp:4670/4675):
+        //   PUFFSHROOM 嘴前 +18/+13, SCAREDYSHROOM +27/+13 的喷雾云
+        const muzzleOff = this.type === 'SCAREDYSHROOM' ? 27 : 18;
+        board.addEffect('puffmuzzle', this.x + ox + muzzleOff, this.y + oy + 13);
         playShoot('anim_shooting');
         game.audio.play('puff');
         break;

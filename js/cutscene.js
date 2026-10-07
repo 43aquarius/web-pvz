@@ -401,7 +401,9 @@ const Cutscene = {
     const t = this.t * 1000;
     if (!this.daveAnim && RE.hasDef('CrazyDave')) {
       const d = Assets.reanim('CrazyDave');
-      d.x = 170; d.y = 88;
+      // #6: json 已修正中心语义 + 高清素材缩放 (模型 ~850px); 过场戴夫全身 ~420px
+      d.x = 130; d.y = 130;
+      d.overrideScale(0.5, 0.5);
       this.daveAnim = d;
     }
     if (!this.davePhase && t >= 1500) {

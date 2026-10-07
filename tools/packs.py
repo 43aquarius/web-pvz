@@ -244,6 +244,32 @@ def main():
         else:
             print(f'  ! boot 缺图: {f}')
 
+    # 0.5) 掉落肢体贴图强制归属 (#3/#4): 断臂/掉头/掉盔粒子图
+    #   - 通用部件 (zombie_outerarm_hand 等) 被 plant_CHOMPER 先占会导致普通僵尸关
+    #     加载不到 → 掉臂无贴图; 强制归 zombie_core (任何僵尸关必载)
+    #   - dancer/backup 残肢与手臂图在 misc 包同样不可达 → 归 zombie_dancer/zombie_backup
+    LIMB_FORCE_PACK = {
+        'zombie_outerarm_hand': 'zombie_core', 'zombie_outerarm_lower': 'zombie_core',
+        'zombie_outerarm_upper': 'zombie_core', 'zombie_outerarm_upper2': 'zombie_core',
+        'zombie_head': 'zombie_core',
+        'zombie_disco_outerarm_upper_bone': 'zombie_dancer',
+        'zombie_disco_outerarm_lower': 'zombie_dancer',
+        'zombie_disco_outerarm_upper': 'zombie_dancer',
+    }
+    for fname, pk in LIMB_FORCE_PACK.items():
+        # disk_images 键为带扩展名的小写文件名
+        for fl in (fname + '.png', fname + '.jpg'):
+            if fl in disk_images:
+                claim_img(disk_images[fl], pk)
+                break
+
+    # 0.6) 罐子解谜贴图强制归 fx (fx 为任何关卡必载包):
+    #   scary_pot.png 归 misc 时网络版首帧无罐 (靠异步自愈延迟显示) (#8 配套)
+    for fname in ('scary_pot', 'vase_chunks', 'brain'):
+        fl = fname + '.png'
+        if fl in disk_images:
+            claim_img(disk_images[fl], 'fx')
+
     # 1) 植物 (按解锁顺序 — 共享图归最早解锁者)
     for ptype in SEED_ORDER + [t for t in PLANT_REANIM if t not in SEED_ORDER]:
         rn = PLANT_REANIM[ptype]

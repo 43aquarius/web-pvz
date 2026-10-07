@@ -524,6 +524,7 @@ class Zombie {
     this.bodyReanim = r;
     r.loopType = RE.LOOP;
     r.isAttachment = true;
+    r.tickDriven = true;   // 由 board tick 循环逐 tick 推进 (原版 100Hz 同步语义)
     if (!this.isOnBoard) {
       if (Math.random() * 4 > 0 && r.animExists('anim_idle2')) {
         r.playReanim('anim_idle2', RE.LOOP, 0, 12 + Math.random() * 12);
@@ -623,6 +624,11 @@ class Zombie {
     r.loopType = loopType;
     r.loopCount = 0;
     r.setFramesForLayer(anim);
+    // 原版 Zombie::PlayZombieReanim (Zombie.cpp:2899): 切完动画区间后立即 UpdateAnimSpeed
+    //   — 用新 frameStart/frameCount 的 _ground 位移重算 animRate。
+    //   缺失此项时: 吃植物(animRate=36)结束切回 anim_walk, animRate 残留 36 →
+    //   getTrackVelocity 随 animRate 暴增 → 僵尸狂奔加速。(#1)
+    this.updateAnimSpeed();
   }
 
   // ---------------- 速度 ----------------
@@ -725,16 +731,22 @@ class Zombie {
   }
 
   get zombieNotWalking() {
+    // 原版 Zombie::ZombieNotWalking (Zombie.cpp:3954): 首行 mIsEating || IsImmobilizied
+    //   → 吃植物的僵尸原地不动 (web 此前缺失 → 吃植物时仍以 anim_eat 的 _ground 瞬时
+    //     位移前滑 ~6px/s, 挤过被吃的植物); 冰冻/黄油定身同样不再滑行
+    if (this.isEating || this.isImmobilized) return true;
     switch (this.phase) {
+      case PH.JACK_POPPING:
+      case PH.NEWSPAPER_MADDENING:
+      case PH.GARGANTUAR_SMASHING: case PH.GARGANTUAR_THROWING:
+      case PH.CATAPULT_LAUNCHING: case PH.CATAPULT_RELOADING:
       case PH.BUNGEE_DIVING: case PH.BUNGEE_DIVING_SCREAMING: case PH.BUNGEE_AT_BOTTOM:
       case PH.BUNGEE_GRABBING: case PH.BUNGEE_RISING: case PH.BUNGEE_HIT_OUCHY: case PH.BUNGEE_CUTSCENE:
       case PH.DIGGER_RISING: case PH.DIGGER_RISE_WITHOUT_AXE: case PH.DIGGER_STUNNED:
       case PH.DIGGER_TUNNELING_PAUSE_WITHOUT_AXE:
       case PH.DANCER_RISING: case PH.DANCER_SNAPPING_FINGERS: case PH.DANCER_SNAPPING_FINGERS_WITH_LIGHT:
       case PH.DANCER_SNAPPING_FINGERS_HOLD: case PH.DANCER_RAISE_LEFT_1: case PH.DANCER_RAISE_LEFT_2:
-      case PH.GARGANTUAR_SMASHING: case PH.GARGANTUAR_THROWING:
-      case PH.POGO_BOUNCING: case PH.POGO_HIGH_BOUNCE_1: case PH.POGO_HIGH_BOUNCE_2: case PH.POGO_HIGH_BOUNCE_3:
-      case PH.POGO_HIGH_BOUNCE_4: case PH.POGO_HIGH_BOUNCE_5: case PH.POGO_HIGH_BOUNCE_6:
+      case PH.DANCER_WALK_TO_RAISE:
       case PH.IMP_GETTING_THROWN: case PH.IMP_LANDING:
       case PH.LADDER_PLACING:
       case PH.BOBSLED_CRASHING:
@@ -744,8 +756,23 @@ class Zombie {
       case PH.BOSS_HEAD_IDLE_AFTER_SPIT: case PH.BOSS_HEAD_SPIT: case PH.BOSS_HEAD_LEAVE:
         return true;
       default:
-        return false;
+        break;
     }
+    if (this.zombieHeight === H.IN_TO_CHIMNEY || this.zombieHeight === H.GETTING_BUNGEE_DROPPED) return true;
+    if (this.type === 'BUNGEE' || this.type === 'BOSS') return true;
+    // 原版尾部: 舞王/伴舞群同步 — 领队或任一伴舞被定身/进食时整群停止
+    if (this.type === 'DANCER' || this.type === 'BACKUP') {
+      const leader = this.type === 'DANCER' ? this : this.relatedZombie;
+      if (leader && !leader.dead) {
+        if (leader.isImmobilized || leader.isEating) return true;
+        for (const f of (leader.followerZombies || [])) {
+          if (f && !f.dead && (f.isImmobilized || f.isEating)) return true;
+        }
+      }
+    }
+    return false;
+    // 注: 原版不含任何 POGO 相位 — 蹦极僵尸(POGO)靠 IsBouncingPogo→velX 移动,
+    //     此前误将 POGO_BOUNCING..HIGH_BOUNCE_6 加入 → 蹦极僵尸原地弹跳不前进
   }
 
   get isWalkingBackwards() {
@@ -755,9 +782,10 @@ class Zombie {
   }
 
   get isBouncingPogo() {
+    // 原版 Zombie::IsBouncingPogo (Zombie.cpp:1425): POGO_BOUNCING..POGO_FORWARD_BOUNCE_7 全区间
+    //   (FORWARD_BOUNCE_2/7 期间同样以 velX 直接驱动 — 修正后蹦极僵尸正常前进)
     if (this.type !== 'POGO') return false;
-    if (this.phase === PH.POGO_FORWARD_BOUNCE_2 || this.phase === PH.POGO_FORWARD_BOUNCE_7) return false;
-    return this.phase >= PH.POGO_BOUNCING && this.phase <= PH.POGO_HIGH_BOUNCE_6;
+    return this.phase >= PH.POGO_BOUNCING && this.phase <= PH.POGO_FORWARD_BOUNCE_7;
   }
 
   get isBobsledTeamWithSled() {
@@ -2712,12 +2740,53 @@ class Zombie {
   }
 
   setupReanimForLostArm(flags) {
-    // 原版: 断臂后隐藏外臂上/下/手
-    this.reanimShowPrefix('Zombie_outerarm_upper', RG.HIDDEN);
+    // 原版 Zombie::SetupReanimForLostArm (Zombie.cpp:3740-3878):
+    //   1) 外臂上臂换断臂残肢图 (SetImageOverride ××_outerarm_upper → ××_outerarm_upper2)
+    //   2) 隐藏外臂下臂/手; 掉落粒子从 Zombie_outerarm_lower 轨道实际位置生成
+    const r = this.bodyReanim;
+    // 断臂残肢图 (原版 SetImageOverride 表, 缺素材的类型用 default)
+    const STUMP = {
+      SNORKEL: ['Zombie_snorkle_outerarm_upper', 'zombie_snorkle_outerarm_upper2'],
+      DOLPHIN: ['Zombie_dolphinrider_outerarm_upper', 'zombie_dolphinrider_outerarm_upper2'],
+      POGO: ['Zombie_outerarm_upper', 'zombie_pogo_outerarm_upper2'],
+      FLAG: ['Zombie_outerarm_upper', 'zombie_outerarm_upper2'],
+      DANCER: ['Zombie_disco_outerarm_upper', 'zombie_disco_outerarm_upper_bone'],
+      LADDER: ['Zombie_ladder_outerarm_upper', 'zombie_ladder_outerarm_upper2'],
+      YETI: ['Zombie_yeti_outerarm_upper', 'zombie_yeti_outerarm_upper2'],
+      POLEVAULTER: ['Zombie_outerarm_upper', 'zombie_polevaulter_outerarm_upper2'],
+      BALLOON: ['Zombie_outerarm_upper', 'zombie_balloon_outerarm_upper2'],
+      BOBSLED: ['Zombie_outerarm_upper', 'zombie_bobsled_outerarm_upper2'],
+      DIGGER: ['Zombie_outerarm_upper', 'zombie_digger_outerarm_upper2'],
+      NEWSPAPER: ['Zombie_paper_leftarm_upper', 'zombie_paper_leftarm_upper2'],
+    };
+    const stump = STUMP[this.type] || ['Zombie_outerarm_upper', 'zombie_outerarm_upper2'];
+    if (r && r.trackExists(stump[0])) {
+      try { r.setImageOverride(stump[0], stump[1]); } catch (e) { }
+    }
     this.reanimShowPrefix('Zombie_outerarm_lower', RG.HIDDEN);
     this.reanimShowPrefix('Zombie_outerarm_hand', RG.HIDDEN);
     if (!(flags & DMG.DOESNT_LEAVE_BODY)) {
-      this.board.addLimbParticle('arm', this.x + 50, this.y + 40);
+      // 掉臂粒子从外臂下臂轨道实际位置 (原版 GetTrackPosition("Zombie_outerarm_lower"))
+      let px = this.x + 50, py = this.y + 40;
+      if (r && r.trackExists('Zombie_outerarm_lower')) {
+        const tp = this.getTrackPosition('Zombie_outerarm_lower');
+        if (tp) [px, py] = tp;
+      }
+      // 掉落贴图: 原版 PARTICLE_ZOMBIE_ARM OverrideImage 表 (#3 — 旧实现误用 84x125 的
+      // 打僵尸手骨图 zombie_hand_arm, 比原版手图大 3 倍)
+      const ARM_IMG = {
+        FOOTBALL: 'zombie_football_leftarm_hand',
+        NEWSPAPER: 'zombie_paper_leftarm_lower',
+        DANCER: 'zombie_dancer_outerarm_hand',
+        BACKUP: 'zombie_disco_outerarm_lower',
+        BOBSLED: 'zombie_bobsled_outerarm_hand',
+        IMP: 'zombie_imp_arm2',
+        YETI: 'zombie_yeti_outerarm_hand',
+        DIGGER: 'zombie_digger_outerarm_hand',
+        DOLPHIN: 'zombie_dolphinrider_outerarm_hand',
+        LADDER: 'zombie_ladder_outerarm_hand2',
+      };
+      this.board.addLimbParticle('arm', px, py, ARM_IMG[this.type] || 'zombie_outerarm_hand');
     }
   }
 
@@ -2739,7 +2808,19 @@ class Zombie {
       this.reanimShowPrefix('Zombie_tie', RG.HIDDEN);
     }
     if (!(flags & DMG.DOESNT_LEAVE_BODY)) {
-      this.board.addLimbParticle('head', this.x + 50, this.y);
+      // 原版 Zombie::DropHead (Zombie.cpp:3537): GetTrackPosition("anim_head1") 头部轨道实际位置
+      //   (旧实现用固定 (x+50,y) 偏移, 头掉落位置与头部脱节) (#4)
+      let px = this.x + 50, py = this.y;
+      const r = this.bodyReanim;
+      if (r) {
+        const track = r.trackExists('anim_head1') ? 'anim_head1'
+          : r.trackExists('Zombie_head') ? 'Zombie_head' : null;
+        if (track) {
+          const tp = this.getTrackPosition(track);
+          if (tp) [px, py] = tp;
+        }
+      }
+      this.board.addLimbParticle('head', px, py);
     }
     this.board.game.audio.play('limbspop');
   }
@@ -2813,18 +2894,96 @@ class Zombie {
   }
 
   detachShield() {
-    if (this.shieldType === 'ladder') {
-      this.reanimShowPrefix('Zombie_ladder_1', RG.HIDDEN);
-      this.reanimShowPrefix('Zombie_outerarm', RG.NORMAL);   // 原版: 恢复双臂
-      this.shieldType = null;
-      this.shieldHealth = 0;
-      // 原版 DetachShield: 相位回 NORMAL + 重选速度 (0.79→0.23-0.37 普通速) — 修复"放梯后速度不减"
-      this.phase = PH.NORMAL;
-      if (this.isEating) {
-        this.playZombieReanim('anim_eat', RE.LOOP, 20, 0);
-      } else {
-        this.startWalkAnim(0);
+    // 原版 Zombie::DetachShield (Zombie.cpp): DOOR/NEWSPAPER/LADDER 三分支 + 末尾无条件清 shield
+    const r = this.bodyReanim;
+    if (r) {
+      if (this.shieldType === 'door') {
+        // 原版 DOOR 分支: ShowDoorArms(false) — 门脱离时恢复双臂渲染
+        this.showDoorArms(false);
+      } else if (this.shieldType === 'newspaper') {
+        // 原版 NEWSPAPER 分支: 恢复报纸双手 (纸被吹走后双手持空)
+        this.reanimShowPrefix('Zombie_paper_hands', RG.NORMAL);
+      } else if (this.shieldType === 'ladder') {
+        this.reanimShowPrefix('Zombie_ladder_1', RG.HIDDEN);
+        this.reanimShowPrefix('Zombie_outerarm', RG.NORMAL);   // 原版: 恢复双臂
+        // 原版 DetachShield: 相位回 NORMAL + StartWalkAnim(0) (PickRandomSpeed 重随机,
+        //   0.79 快跑 → 0.23-0.37 普通速 — 修复"放梯后速度不减")
+        this.phase = PH.NORMAL;
+        if (this.isEating) {
+          this.playZombieReanim('anim_eat', RE.LOOP, 20, 0);
+        } else {
+          this.startWalkAnim(0);
+        }
       }
+    }
+    this.shieldType = null;
+    this.shieldHealth = 0;
+  }
+
+  // ---------------- 磁力菇 (原版 Plant.cpp:2090 筛选 / 1857 MagnetShroomAttactItem) ----------------
+  // 此前缺失 → 磁力菇吸取时抛 TypeError (magnetSteal is not a function) 完全失效
+  helmMetal() {
+    return this.helmType === 'bucket' || this.helmType === 'football';
+  }
+  shieldMetal() {
+    return this.shieldType === 'door' || this.shieldType === 'ladder';
+  }
+
+  magnetSteal(board) {
+    // 吸走物飞行动画 (原版 MagnetItem 飞向磁力菇并挂头; web 简化为原位上飞淡出)
+    const fly = (img, px, py) => { try { board.addEffect('magnetitem', px, py, { img }); } catch (e) { } };
+    const trackPos = (name) => {
+      if (this.bodyReanim && this.bodyReanim.trackExists(name)) {
+        try { return this.bodyReanim.getTrackPosition(name); } catch (e) { }
+      }
+      return null;
+    };
+    if (this.helmType === 'bucket') {
+      // 原版 PAIL 分支: 失去铁桶 (速度不变 — 铁桶僵尸本就是普通速)
+      const tp = trackPos('anim_bucket');
+      this.helmHealth = 0;
+      this.helmType = null;
+      this.reanimShowPrefix('anim_bucket', RG.HIDDEN);
+      this.reanimShowPrefix('anim_hair', RG.NORMAL);
+      fly('zombie_bucket1', tp ? tp[0] : this.x + 30, tp ? tp[1] : this.y + 20);
+    } else if (this.helmType === 'football') {
+      // 原版 FOOTBALL 分支: 失去橄榄球盔 (速度不变 — 原版行为, 橄榄球仍快跑)
+      const tp = trackPos('zombie_football_helmet');
+      this.helmHealth = 0;
+      this.helmType = null;
+      this.reanimShowPrefix('zombie_football_helmet', RG.HIDDEN);
+      this.reanimShowPrefix('anim_hair', RG.NORMAL);
+      fly('zombie_football_helmet', (tp ? tp[0] : this.x) + 37, (tp ? tp[1] : this.y + 60) - 60);
+    } else if (this.shieldType === 'door') {
+      // 原版 DOOR 分支: DetachShield + 恢复行走 (速度重随机 — 铁门僵尸恢复正常步速)
+      const tp = trackPos('anim_screendoor');
+      this.detachShield();
+      this.phase = PH.NORMAL;
+      if (!this.isEating) this.startWalkAnim(0);
+      fly('zombie_screendoor1', tp ? tp[0] : this.x + 20, tp ? tp[1] : this.y + 40);
+    } else if (this.shieldType === 'ladder') {
+      // 原版 LADDER 分支: DetachShield (速度重随机 0.79→0.23-0.37 — 扛梯快跑结束)
+      const tp = trackPos('Zombie_ladder_1');
+      this.detachShield();
+      fly('zombie_ladder_1', (tp ? tp[0] : this.x) + 31, (tp ? tp[1] : this.y) + 20);
+    } else if (this.type === 'POGO') {
+      // 原版 POGO 分支: PogoBreak — 弹跳杆被吸走, 僵尸落地变普通行走
+      const tp = trackPos('Zombie_pogo_stick');
+      this.pogoBreak(16);
+      fly('zombie_pogo_stick', (tp ? tp[0] : this.x) + 40, (tp ? tp[1] : this.y) + 84);
+    } else if (this.phase === PH.JACK_RUNNING) {
+      // 原版 JACK 分支: PickRandomSpeed 变慢 (0.66→0.23-0.37) + 失去盒子不再自爆
+      const tp = trackPos('Zombie_jackbox_box');
+      this.pickRandomSpeed();
+      this.phase = PH.NORMAL;
+      this.reanimShowPrefix('Zombie_jackbox_box', RG.HIDDEN);
+      this.reanimShowPrefix('Zombie_jackbox_handle', RG.HIDDEN);
+      fly('zombie_jackbox_box', tp ? tp[0] : this.x + 30, tp ? tp[1] : this.y + 40);
+    } else if (this.type === 'DIGGER') {
+      // 原版 DIGGER 分支: DiggerLoseAxe — 镐被吸走, 钻地停滞
+      const tp = trackPos('Zombie_digger_pickaxe');
+      this.diggerLoseAxe();
+      fly('zombie_digger_pickaxe', tp ? tp[0] : this.x + 30, tp ? tp[1] : this.y + 30);
     }
   }
 

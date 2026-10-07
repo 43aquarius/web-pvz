@@ -673,6 +673,46 @@ const UI = {
       ctx.restore();
     }
     const col = v.state === 'leaf' ? 1 : v.state === 'zombie' ? 2 : 0;
+    // ---- 灯笼花透视 (原版 GridItem::DrawScaryPot, GridItem.cpp:323-385) (#8) ----
+    //   mTransparentCounter>0: 行0空壳 → 内容物 (种子包0.7/僵尸0.4/阳光0.5) →
+    //   行1罐壳带 alpha 渐变 (counter 0→50 映射 255→58)
+    const trans = v.transparent || 0;
+    if (pot && trans > 0) {
+      ctx.save();
+      // 行0 = 罐内背景壳
+      ctx.drawImage(pot, col * 80, 0, 80, 100, x, y, 80, 100);
+      // 内容物 (原版 0.7/0.4/0.5 缩放与偏移)
+      if (v.isPlant && v.content) {
+        const th = this.getThumb ? this.getThumb(v.content) : null;
+        if (th) ctx.drawImage(th, x + 23 - 17.5, y + 33 - 24.5, 35, 49);   // 50x70 × 0.7
+      } else if (v.isSun) {
+        const sunImg = Assets.image('sun1.png');
+        if (sunImg) {
+          // 原版偏移表: (42,62) (45,42) (36,52) (48,57) (47,47)
+          const offs = [[42, 62], [45, 42], [36, 52], [48, 57], [47, 47]];
+          const n = Math.min(5, v.sunCount || 1);
+          for (let i = 0; i < n; i++) {
+            const w = sunImg.width * 0.5, h = sunImg.height * 0.5;
+            ctx.drawImage(sunImg, x + offs[i][0] - w / 2, y + offs[i][1] - h / 2, w, h);
+          }
+        }
+      } else if (v.content) {
+        // 僵尸缩略图 0.4 缩放 (原版 GARGANTUAR 0.3 + (15,26); FOOTBALL (1,16))
+        const zt = this.getZombieThumb ? this.getZombieThumb(v.content) : null;
+        if (zt) {
+          let ox = 6, oy = 19, sc = 0.4;
+          if (v.content === 'GARGANTUAR') { ox += 9; oy += 7; sc = 0.3; }
+          if (v.content === 'FOOTBALL') { ox = 1; oy = 16; }
+          ctx.drawImage(zt, x + ox, y + oy, zt.width * sc, zt.height * sc);
+        }
+      }
+      // 行1罐壳渐隐: alpha = 255→58 (counter 0→50, 线性)
+      const alpha = 255 - Math.round((255 - 58) * trans / 50);
+      ctx.globalAlpha = alpha / 255;
+      ctx.drawImage(pot, col * 80, 100, 80, 100, x, y, 80, 100);
+      ctx.restore();
+      return;
+    }
     if (pot) {
       // 行1 = 正面完整罐 (80x100/格)
       ctx.drawImage(pot, col * 80, 100, 80, 100, x, y, 80, 100);

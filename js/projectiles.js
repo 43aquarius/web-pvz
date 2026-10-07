@@ -88,7 +88,20 @@ class Projectile {
     // ---- 雾气类(fume/puff): 短程飞行 ----
     if (this.def.fume) {
       this.x += this.vx * dt;
-      if (this.x - this.startX > this.maxDist) { this.dead = true; return; }
+      // 原版 PUFF 尾迹 (Projectile.cpp:130): 构造时 AttachParticle(PARTICLE_PUFFSHROOM_TRAIL)
+      //   — 弹体后持续喷小水滴 (godot: 弹后-8px, ~20颗/s) (#2)
+      if (this.def.puffAge) {
+        this._trailAcc = (this._trailAcc || 0) + dt;
+        if (this._trailAcc >= 0.05) {
+          this._trailAcc = 0;
+          board.addEffect('pufftrail', this.x - 8, this.y);
+        }
+      }
+      // 原版 Projectile::CheckForCollision: PROJECTILE_PUFF 按 mProjectileAge>=75 tick (0.75s) 消亡
+      //   — 按寿命而非距离判定 (#2)
+      if (this.def.life) {
+        if (this.t >= this.def.life) { this.dead = true; return; }
+      } else if (this.x - this.startX > this.maxDist) { this.dead = true; return; }
       this.hitZombies(board);
       if (this.dead) return;
       return;
@@ -241,13 +254,21 @@ class Projectile {
   }
 
   splat(board, x) {
-    const y = board.gridY(this.row) + 35;
+    // 原版 DoImpact: aSplatPosX -= 20 (PUFF); 特效 y —— 豌豆类打在行基准面,
+    // PUFF 打在子弹实际高度 (原版 aSplatPosY = mPosY + 12, 否则命中云错行观感) (#2)
+    let y = board.gridY(this.row) + 35;
+    if (this.def.puffAge) {
+      y = this.y + 12;
+      x -= 20;
+    }
     board.addEffect(this.def.splat || 'splat', x, y);
-    // 原版豌豆命中音效: splat1/splat2/splat3 随机 (#12)
-    const snd = this.type === 'snowpea' ? 'snowpea_splat'
-      : this.type === 'firepea' ? 'firepea'
-      : 'splat' + (1 + Math.floor(Math.random() * 3));
-    board.game.audio.play(snd);
+    if (!this.def.puffAge) {
+      // 原版豌豆命中音效: splat1/splat2/splat3 随机 (#12)
+      const snd = this.type === 'snowpea' ? 'snowpea_splat'
+        : this.type === 'firepea' ? 'firepea'
+        : 'splat' + (1 + Math.floor(Math.random() * 3));
+      board.game.audio.play(snd);
+    }
   }
 
   land(board) {
@@ -315,6 +336,18 @@ class Projectile {
   draw(ctx, board) {
     if (this.delay > 0) return;
     if (this.dead) return;
+    // 原版 Projectile::Draw PUFF 分支: IMAGE_PUFFSHROOM_PUFF1 静态水滴孢子
+    //   + 年龄缩放 CURVE_LINEAR(0,30tick, 0.3→1.0) + 无阴影 (#2)
+    if (this.def.puffAge) {
+      const img = Assets.image(this.def.img);
+      if (img) {
+        const age = Math.min(1, this.t / 0.3);           // 30 tick = 0.3s
+        const s = 0.3 + 0.7 * age;
+        const w = img.width * s, h = img.height * s;
+        ctx.drawImage(img, this.x - w / 2, this.y - h / 2, w, h);
+        return;
+      }
+    }
     if (this.reanim) {
       this.reanim.setPosition(this.x, this.y);
       this.reanim.draw(ctx);

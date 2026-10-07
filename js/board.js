@@ -386,7 +386,12 @@ class Board {
     if (this.state === 'awarddrop') { this.updateLevelAward(dt); this.updateVisuals(dt); return; }
     this.time += dt;
     // 注: dt 已是乘过 speed 的秒数 (main.js: sdt = dt * board.speed), 此处不再二次乘速
-    const ticks = Math.max(1, Math.round(dt * 100));
+    // 固定步长累积器 (原版 100Hz): round→floor+余数进位, 高刷新率 (144/240Hz) 下
+    // 不再产生 Math.max(1,round) 的倍速 (原 bug: 240Hz 时僵尸 2.4 倍速 "莫名加快")
+    this._tickAcc = (this._tickAcc || 0) + dt * 100;
+    let ticks = Math.floor(this._tickAcc);
+    this._tickAcc -= ticks;
+    if (ticks > 50) { ticks = 50; this._tickAcc = 0; }   // 防死亡螺旋
     const tickDt = dt;
     // 波次与天降阳光 (秒)
     this.updateWaves(tickDt);
@@ -407,7 +412,14 @@ class Board {
     }
     // 实体: 僵尸/植物按tick, 子弹按帧
     for (let i = 0; i < ticks; i++) {
-      for (const z of this.zombies) if (!z.dead) z.update();
+      for (const z of this.zombies) {
+        if (z.dead) continue;
+        // 原版 100Hz 语义: 僵尸 reanim 与僵尸同一 tick 逐拍推进 —
+        // 否则本帧 N 个 tick 采样同一对帧, _ground 非均匀关键帧下产生
+        // "脉冲式突进" (快区 N×放大/慢区停滞), 视觉上僵尸莫名加快/顿挫
+        if (z.bodyReanim && !z.bodyReanim.dead) z.bodyReanim.updateTicks(1);
+        z.update();
+      }
       for (const p of this.plants) if (!p.dead) p.tick && p.tick();
       this.tick++;
     }
@@ -435,8 +447,13 @@ class Board {
   set tick(v) { this._tick = v; }
 
   updateVisuals(dt) {
-    // reanim 特效池
-    for (const r of this.reanims) r.update(dt);
+    // 僵尸 body reanim 在 playing 态由 tick 循环逐 tick 推进, 此处不重复驱动;
+    // win/lose/awarddrop 态 tick 循环未运行 → 用累积器按 dt 推进 (进屋/死亡动画继续)
+    const tickLoopRan = this.state === 'playing';
+    for (const r of this.reanims) {
+      if (r.tickDriven && tickLoopRan) continue;
+      r.update(dt);
+    }
     this.reanims = this.reanims.filter(r => !r.dead);
     for (const e of this.effects) e.update(dt, this);
     this.effects = this.effects.filter(e => !e.dead);
@@ -475,9 +492,9 @@ class Board {
     this.reanims.push(r);
     return r;
   }
-  addLimbParticle(kind, x, y) {
-    // 掉落肢体: 简化物理粒子 (原版为 AttachEffect + 掉落动画)
-    this.effects.push(new LimbParticle(kind, x, y));
+  addLimbParticle(kind, x, y, imgName) {
+    // 掉落肢体: 原版 PARTICLE_ZOMBIE_HEAD/ARM 粒子 — 抛出+落地弹跳+静止后淡出
+    this.effects.push(new LimbParticle(kind, x, y, imgName, this));
   }
 
   // ---------- 波次计时 (已验证原版移植) ----------
@@ -1200,7 +1217,9 @@ class Board {
     d.t += dt;
     if (!d.anim && RE.hasDef('CrazyDave')) {
       const a = Assets.reanim('CrazyDave');
-      a.x = 170; a.y = 88;
+      // #6: json 已修正中心语义 + 高清素材缩放; 罐子关轮间戴夫全身 ~420px
+      a.x = 130; a.y = 130;
+      a.overrideScale(0.5, 0.5);
       d.anim = a;
     }
     if (d.phase === 'enter') {
@@ -1365,15 +1384,32 @@ class Board {
       case 'vasebreaker': {
         // 轮间戴夫过场优先 (冒险 4-5, 原版 IsScaryPotterDaveTalking 冻结时间线)
         if (this.vaseDave) { this.updateVaseDave(dt); break; }
-        // 锤子动画推进
+        // 锤子动画推进 — 原版 Challenge::ScaryPotterUpdate (Challenge.cpp:3781):
+        //   STATECHALLENGE_SCARY_POTTER_MALLETING: aMalletReanim->mLoopCount > 0
+        //   (动画播完一次) → 立即 ScaryPotterOpenPot + 锤子 ReanimationDie。
+        //   旧实现用固定 0.42s 计时, 动画 0.2s 播完后定格 200ms 才开罐 → 停顿僵硬 (#7)
         if (this.mallet) {
           this.mallet.t += dt;
           if (this.mallet.anim) this.mallet.anim.update(dt);
-          if (this.mallet.t >= 0.42 && !this.mallet.opened) {
+          const done = this.mallet.anim ? this.mallet.anim.loopCount > 0 : this.mallet.t >= 0.25;
+          if (done && !this.mallet.opened) {
             this.mallet.opened = true;
             this.scaryPotterOpenPot(this.mallet.vase, this.game);
+            this.mallet = null;              // 原版: 开罐同时锤子 Die 立即消失
           }
-          if (this.mallet.t >= 0.55) this.mallet = null;
+        }
+        // 灯笼花透视 (原版 GridItem::UpdateScaryPot, GridItem.cpp:500-541):
+        //   场上存在 PLANTERN 且与罐子同行/列差 ≤1 (九宫格) → mTransparentCounter++
+        //   (上限 50); 否则 -- (下限 0)。50 tick ≈ 0.5s 渐变 (#8)
+        if (this.vases && this.vases.length) {
+          const lanterns = this.plants.filter(p => !p.dead && p.type === 'PLANTERN');
+          const step = Math.max(1, Math.round(dt * 100));   // 补偿帧率: 100Hz 语义
+          for (const v of this.vases) {
+            if (v.broken) continue;
+            const near = lanterns.some(p => Math.max(Math.abs(p.col - v.col), Math.abs(p.row - v.row)) <= 1);
+            const cur = v.transparent || 0;
+            v.transparent = Math.max(0, Math.min(50, cur + (near ? step : -step)));
+          }
         }
         // 可用种子包物理 (原版 Coin: vy 弹出+重力, 1500tick 后消失)
         for (const pk of this.vasePackets) {
@@ -1613,6 +1649,8 @@ class Board {
     let anim = null;
     if (RE.hasDef('Hammer')) {
       anim = Assets.reanim('Hammer');
+      // 原版 (Challenge.cpp:3813): PlayReanim("anim_pot_open", PLAY_ONCE_AND_HOLD, 0, 40.0f)
+      //   + FOLEY_SWING 点击瞬间挥击音效 (#7)
       anim.play('anim_open_pot', RE.PLAY_ONCE_HOLD, 40);
       anim.setPosition(x + 20, y - 45);
     }
@@ -1764,12 +1802,55 @@ class Effect {
         });
       }
     }
+    // 小喷菇命中水滴 (原版 PuffSplat: 10 颗水滴全向爆发 + 重力下落)
+    if (name === 'puffsplat') {
+      this.parts = [];
+      for (let i = 0; i < 10; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const sp = 50 + Math.random() * 30;
+        this.parts.push({
+          x: (Math.random() * 2 - 1) * 9.7, y: (Math.random() * 2 - 1) * 9.7,
+          vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+          rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 8,
+        });
+      }
+    }
+    // 小喷菇尾迹水滴 (原版 PARTICLE_PUFFSHROOM_TRAIL / godot bullet_003_puff 尾迹发射器:
+    //   弹后-8px 处持续喷 puff2 小水滴, 9.67半径散布, 随机角度, 无重力, 0.5s 淡出)
+    if (name === 'pufftrail') {
+      this.fx = (Math.random() * 2 - 1) * 9.7;
+      this.fy = (Math.random() * 2 - 1) * 9.7;
+      this.frot = Math.random() * Math.PI * 2;
+      const ang = Math.random() * Math.PI * 2;
+      this.fvx = Math.cos(ang) * 8;
+      this.fvy = Math.sin(ang) * 8;
+    }
+    if (name === 'puffmuzzle') this.life = 0.28;
   }
   update(dt, board) {
     this.t += dt;
     switch (this.name) {
       case 'splat': case 'snowsplat': case 'firesplat': if (this.t > 0.5) this.dead = true; break;
       case 'pow': if (this.t > 0.5) this.dead = true; break;   // 原版 PARTICLE_POW (锤击粉云 0.5s)
+      case 'puffsplat': {
+        // 原版 PuffSplat: 10 颗水滴, 重力 +100px/s², 0.5s 消散
+        for (const p of this.parts || []) {
+          p.vy += 100 * dt;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.rot += p.vr * dt;
+        }
+        if (this.t > 0.5) this.dead = true;
+        break;
+      }
+      case 'puffmuzzle': if (this.t > 0.28) this.dead = true; break;   // 原版 PuffShroomMuzzle 短促喷雾
+      case 'pufftrail': {
+        // 尾迹水滴: 微速漂移 + 0.5s 消散 (原版 PuffShroomTrail)
+        this.x += (this.fvx || 0) * dt;
+        this.y += (this.fvy || 0) * dt;
+        if (this.t > 0.5) this.dead = true;
+        break;
+      }
       case 'explosion': if (this.t > 0.9) this.dead = true; break;
       case 'spudow': if (this.t > 0.9) this.dead = true; break;
       case 'boom': if (this.t > 1.2) this.dead = true; break;
@@ -1799,21 +1880,57 @@ class Effect {
 
 // 掉落肢体粒子 (断臂/掉头/掉盔)
 class LimbParticle {
-  constructor(kind, x, y) {
+  // 原版 PARTICLE_ZOMBIE_HEAD / PARTICLE_ZOMBIE_ARM 粒子行为 (#4):
+  //   向上抛出 → 重力下落 → 落到行地面反弹 (高度衰减) → 弹跳滚动 →
+  //   静止停留 ~1.2s 后淡出消失 (旧实现: 一路掉出屏幕外, 无落地)
+  // 抛物参数 (godot ZombieHeadDrop / ZombieArm1Drop):
+  //   头: vx∈(-70,70) 双向随机上抛 vy∈(-200,-100), 转速 vx/50
+  //   手臂/掉落物: vx∈(-15,15) 水平小抛 vy=0 (旧实现恒向左上大抛 — 手臂飞过远)
+  constructor(kind, x, y, imgName, board) {
     this.kind = kind; this.x = x; this.y = y;
-    this.vx = 30 + Math.random() * 20;
-    this.vy = -180 - Math.random() * 60;
+    this.imgName = imgName || null;
+    // 地面 = 掉落点所在行格子底部 (兜底 y+60)
+    const rIdx = board ? board.pixelToGridY(x, y) : 0;
+    this.ground = board ? board.gridY(rIdx) + 78 : y + 60;
+    if (kind === 'head') {
+      this.vx = -70 + Math.random() * 140;
+      this.vy = -(100 + Math.random() * 100);
+      this.vr = this.vx / 50;
+    } else {
+      this.vx = -15 + Math.random() * 30;
+      this.vy = 0;
+      this.vr = -2 + Math.random() * 4;
+    }
     this.rot = 0;
-    this.vr = (Math.random() - 0.5) * 8;
     this.t = 0; this.dead = false;
+    this.bounces = 0;
+    this.rest = 0;             // 落地静止计时
   }
   update(dt) {
     this.t += dt;
-    this.vy += 500 * dt;
+    if (this.bounces >= 3 || this.rest > 0) {
+      // 静止期: 停在地上, 滚动停止, 1.2s 后淡出
+      this.rest += dt;
+      this.rot += Math.max(0, this.vr) * dt * 0.1;
+      if (this.rest > 1.2) this.dead = true;
+      return;
+    }
+    this.vy += 500 * dt;          // godot ZombieDropBase.gravity = 500
     this.x += this.vx * dt;
     this.y += this.vy * dt;
     this.rot += this.vr * dt;
-    if (this.t > 1.6) this.dead = true;
+    if (this.y >= this.ground) {
+      // 落地: 弹起 (vy 反弹衰减 0.5, 旋转衰减), 速度不足 30 进入静止
+      this.y = this.ground;
+      this.bounces++;
+      if (Math.abs(this.vy) < 30) {
+        this.rest = 0.001; this.vy = 0;
+      } else {
+        this.vy = -this.vy * 0.5;
+        this.vx *= 0.55;
+        this.vr *= 0.5;
+      }
+    }
   }
 }
 

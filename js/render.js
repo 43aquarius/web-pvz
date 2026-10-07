@@ -491,24 +491,61 @@ const Renderer = {
   },
 
   drawLimb(ctx, e) {
-    // 掉落肢体 (断臂/掉头/掉盔) — 原版独立贴图 (Zombie_head / Zombie_hand_arm / 原具分级图)
-    const imgMap = {
-      head: 'zombie_head',
-      arm: 'zombie_hand_arm',
-      cone: 'zombie_cone1',
-      bucket: 'zombie_bucket1',
-      door: 'zombie_screendoor1',
-      helm: e.imgName || 'zombie_football_helmet',
-      newspaper: 'zombie_paper_paper1',
-      ladder: 'zombie_ladder_2',
-    };
-    const img = Assets.image(e.imgName || imgMap[e.kind] || 'zombie_head');
+    // 掉落肢体 (断臂/掉头/掉盔) — 原版为多部件组合贴图 (godot Zombie001 NodeDrop):
+    //   掉头 = Zombie_head(脸) + Zombie_tongue(吐舌) + Zombie_jaw(张开的下颚) 叠放 (#4)
+    //   掉手 = Zombie_outerarm_hand(手) + Zombie_outerarm_lower(下臂) 小臂组合 (#3)
+    //   v8.3.0 误用 84x125 打僵尸手骨图 zombie_hand_arm (大 3 倍) + 单张头图 — 均已换组合
+    // 特殊僵尸手臂 (ARM_IMG 表) / 头盔 / 路障 / 铁桶等仍走单图模式
     ctx.save();
-    ctx.globalAlpha = Math.min(1, 1.6 - e.t);
+    // 淡出: 静止期结束前 0.4s 渐隐 (原版粒子 FadeOut)
+    const rest = e.rest || 0;
+    ctx.globalAlpha = rest > 0 ? Math.max(0, 1 - Math.max(0, rest - 0.8) / 0.4) : 1;
     ctx.translate(e.x, e.y);
     ctx.rotate(e.rot);
-    if (img) ctx.drawImage(img, -img.width / 2, -img.height / 2);
-    else { ctx.fillStyle = '#7a6a5a'; ctx.fillRect(-8, -8, 16, 16); }
+    if (!e.imgName && e.kind === 'head') {
+      // 头组合 (godot zombie_001_norm.tscn Node2D_Head_Drop 坐标, 以组合中心为原点, scale 0.8)
+      const P = [
+        ['zombie_head', -21.2, -25.9, 0.089],
+        ['zombie_tongue', 2.7, 14.5, 0.0915],
+        ['zombie_jaw', -11.3, 12.3, 0.121],
+      ];
+      for (const [name, dx, dy, rot] of P) {
+        const img = Assets.image(name);
+        if (img) {
+          ctx.save(); ctx.rotate(rot);
+          ctx.drawImage(img, dx, dy, img.width * 0.8, img.height * 0.8);
+          ctx.restore();
+        }
+      }
+    } else if (!e.imgName && e.kind === 'arm') {
+      // 小臂+手组合 (godot: hand(-9,-5.45) lower(-4.87,-21.19), 组合中心(3.5,0.18))
+      const P = [
+        ['zombie_outerarm_hand', -12.5, -5.6, -0.024],
+        ['zombie_outerarm_lower', -8.4, -21.4, -0.053],
+      ];
+      for (const [name, dx, dy, rot] of P) {
+        const img = Assets.image(name);
+        if (img) {
+          ctx.save(); ctx.rotate(rot);
+          ctx.drawImage(img, dx, dy, img.width * 0.8, img.height * 0.8);
+          ctx.restore();
+        }
+      }
+    } else {
+      const imgMap = {
+        head: 'zombie_head',
+        arm: 'zombie_outerarm_hand',
+        cone: 'zombie_cone1',
+        bucket: 'zombie_bucket1',
+        door: 'zombie_screendoor1',
+        helm: e.imgName || 'zombie_football_helmet',
+        newspaper: 'zombie_paper_paper1',
+        ladder: 'zombie_ladder_2',
+      };
+      const img = Assets.image(e.imgName || imgMap[e.kind] || 'zombie_head');
+      if (img) ctx.drawImage(img, -img.width / 2, -img.height / 2);
+      else { ctx.fillStyle = '#7a6a5a'; ctx.fillRect(-8, -8, 16, 16); }
+    }
     ctx.restore();
   },
 
@@ -589,6 +626,65 @@ const Renderer = {
           if (e.name === 'snowsplat') e.anim.colorOverride = [153, 217, 255, 255];
           if (e.name === 'firesplat') e.anim.colorOverride = [255, 190, 128, 255];
           e.anim.draw(ctx);
+          break;
+        }
+        case 'puffsplat': {
+          // 原版 PuffSplat 粒子 (PvzParticle.cpp:78) + godot bullet_003_puff 实测语义:
+          // 10 颗 PuffShroom_puff2 水滴全方向爆发 (初速 50-80px/s), 重力 +100px/s²
+          // 下落, 0.5s 生命, 缩放 0.53→0 渐小消散 — 修正旧实现静态云雾贴地的问题
+          const img = Assets.image('puffshroom_puff2');
+          if (img && e.parts) {
+            const life = 0.5;
+            const pr = Math.min(1, e.t / life);
+            const sc = 0.53 * (1 - pr);
+            if (sc > 0.02) {
+              ctx.save();
+              ctx.globalAlpha = 1 - pr * pr;
+              for (const part of e.parts) {
+                ctx.save();
+                ctx.translate(e.x + part.x, e.y + part.y);
+                ctx.rotate(part.rot);
+                ctx.drawImage(img, -img.width * sc / 2, -img.height * sc / 2, img.width * sc, img.height * sc);
+                ctx.restore();
+              }
+              ctx.restore();
+            }
+          }
+          break;
+        }
+        case 'puffmuzzle': {
+          // 原版 PARTICLE_PUFFSHROOM_MUZZLE (Plant.cpp:4670): 发射时蘑菇口的喷雾云
+          if (!e.anim) {
+            e.anim = Assets.reanim('Puff');
+            e.anim.play('anim_puff', RE.PLAY_ONCE_HOLD, 26);
+          }
+          e.anim.update(1 / 60);
+          const mp = Math.min(1, e.t / 0.28);
+          e.anim.setPosition(e.x, e.y);
+          e.anim.overrideScale(0.9 - 0.35 * mp, 0.9 - 0.35 * mp);
+          ctx.save();
+          ctx.globalAlpha = 0.9 - 0.9 * mp;
+          e.anim.draw(ctx);
+          ctx.restore();
+          break;
+        }
+        case 'pufftrail': {
+          // 原版 PARTICLE_PUFFSHROOM_TRAIL (Projectile.cpp:132): 弹体飞行尾迹小水滴
+          //   godot bullet_003_puff 尾迹发射器: puff2 纹理 + 9.67半径散布 + 随机角度,
+          //   scale 0.528→0 曲线, 0.5s 消散 (#2: 补齐缺失的水滴拖尾)
+          const img = Assets.image('puffshroom_puff2');
+          if (img) {
+            const p = Math.min(1, e.t / 0.5);
+            const sc = 0.528 * (1 - p);
+            if (sc > 0.02) {
+              ctx.save();
+              ctx.globalAlpha = 1 - p;
+              ctx.translate(e.x + (e.fx || 0), e.y + (e.fy || 0));
+              ctx.rotate(e.frot || 0);
+              ctx.drawImage(img, -img.width * sc / 2, -img.height * sc / 2, img.width * sc, img.height * sc);
+              ctx.restore();
+            }
+          }
           break;
         }
         case 'fumecloud': {

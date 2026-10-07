@@ -126,7 +126,10 @@ const Game = {
       const now = Date.now();
       let dt = (now - last) / 1000;
       last = now;
-      if (dt < 0 || dt > 0.25) dt = 1 / 60;
+      // 卡顿帧限幅 (不再重置为 1/60 丢失时间); 配合 board/reanim 的固定步长累积器,
+      // 任意刷新率 (60/120/144/240Hz) 下逻辑速率恒为 100Hz 原版语义
+      if (!(dt >= 0)) dt = 0;
+      if (dt > 0.25) dt = 0.25;
       try { this.update(dt); } catch (e) { window.__loopErr = window.__loopErr || []; window.__loopErr.push(String(e && e.stack || e).slice(0, 800)); }
       try { this.render(); } catch (e) { window.__loopErr = window.__loopErr || []; window.__loopErr.push('RENDER: ' + String(e && e.stack || e).slice(0, 800)); }
       requestAnimationFrame(loop);
@@ -781,8 +784,13 @@ const Game = {
     this.audio.playBGM(null);
     this.audio.play('winmusic');
     // 纸条/奖励素材分包预载 (misc 包: note1-5.png / notefinal.png)
+    //   + 新植物包 (#9: 被奖励植物是下一解锁, 不在本关卡池 → 缺此则奖励屏种子包图空白)
     if (Assets.ensurePacks && Assets.hasLazy && !Assets.state.embedMode) {
-      Assets.ensurePacks(['misc', 'ui', 'fx']);
+      const packs = ['misc', 'ui', 'fx'];
+      if (this.levelAward && this.levelAward.type === 'seed' && this.levelAward.plant) {
+        packs.push('plant_' + this.levelAward.plant);
+      }
+      Assets.ensurePacks(packs);
     }
     Transition.to(() => {
       if (this.levelAward && this.levelAward.type !== 'note') { this.state = 'award'; }
