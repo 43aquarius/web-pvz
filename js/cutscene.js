@@ -401,9 +401,9 @@ const Cutscene = {
     const t = this.t * 1000;
     if (!this.daveAnim && RE.hasDef('CrazyDave')) {
       const d = Assets.reanim('CrazyDave');
-      // #6: json 已修正中心语义 + 高清素材缩放 (模型 ~850px); 过场戴夫全身 ~420px
-      d.x = 130; d.y = 130;
-      d.overrideScale(0.5, 0.5);
+      // 原版: AddReanimation(0,0) + Board.cpp aScreenSpace(mTransX -= mX) → 屏幕空间 (0,0) 无缩放
+      // reanim 模型本身 353x853px (头 y≈106 脚 y≈959, 原版下半身在屏外, 占左侧约1/3屏)
+      d.x = 0; d.y = 0;
       this.daveAnim = d;
     }
     if (!this.davePhase && t >= 1500) {
@@ -512,33 +512,11 @@ const Cutscene = {
   drawDave(ctx) {
     if (!this.daveMode || !this.daveAnim) return;
     this.daveAnim.draw(ctx);
-    // 对话框 (原版风格: 羊皮纸圆角框 + 底部文字)
+    // 对话框 (原版 LawnApp::DrawCrazyDave: Store_SpeechBubble2 @ (285,20), 文本区 (310,26,233,144))
     if (this.davePhase === 'talk' || this.davePhase === 'gift') {
       const lines = this.daveLines();
       const text = lines[Math.min(this.daveLine, lines.length - 1)] || '';
-      const bx = 400, by = 470, bw = 560, bh = 88;
-      ctx.save();
-      ctx.globalAlpha = 0.96;
-      // 羊皮纸底
-      const grad = ctx.createLinearGradient(0, by, 0, by + bh);
-      grad.addColorStop(0, '#f5e7c0'); grad.addColorStop(1, '#e0c48a');
-      ctx.fillStyle = grad;
-      ctx.strokeStyle = '#7a5222'; ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.roundRect(bx - bw / 2, by, bw, bh, 16);
-      ctx.fill(); ctx.stroke();
-      // 文本 (自动换行)
-      ctx.fillStyle = '#4a2f10';
-      ctx.font = 'bold 19px "Noto Sans SC", "Microsoft YaHei", sans-serif';
-      ctx.textAlign = 'center';
-      this.wrapText(ctx, text, bx, by + 34, bw - 60, 26);
-      // 继续指示
-      const a = 0.5 + 0.5 * Math.sin(this.daveTalkT * 6);
-      ctx.globalAlpha = a;
-      ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
-      ctx.fillStyle = '#8a6a2a';
-      ctx.fillText('点击继续', bx, by + bh - 12);
-      ctx.restore();
+      drawDaveDialog(ctx, text, this.daveTalkT);
       // 赠送铲子高亮
       if (this.davePhase === 'gift') {
         const shovel = Assets.image('shovel_hi_res') || Assets.image('shovel.png');
@@ -684,4 +662,50 @@ const Transition = {
   busy() { return this.target === 1 || this.cb !== null; },
 };
 
-if (typeof module !== 'undefined') module.exports = { Cutscene, Banners, Transition, setZombieDefs, easeIO };
+// ============================================================
+// 戴夫对话框 (原版 LawnApp::DrawCrazyDave 2887-2960 完整移植)
+//   Store_SpeechBubble2 @ (285,20), 文本区 Rect(310,26,233,144) 黑字居中,
+//   "click to continue" @ (424,160) FONT_PICO129
+// ============================================================
+function drawDaveDialog(ctx, text, blinkT) {
+  const bubble = Assets.image('store_speechbubble2');
+  ctx.save();
+  if (bubble) {
+    ctx.drawImage(bubble, 285, 20);
+  } else {
+    // 兜底: 羊皮纸圆角框
+    const bx = 285, by = 20, bw = 280, bh = 183;
+    const grad = ctx.createLinearGradient(0, by, 0, by + bh);
+    grad.addColorStop(0, '#f5e7c0'); grad.addColorStop(1, '#e0c48a');
+    ctx.fillStyle = grad;
+    ctx.strokeStyle = '#7a5222'; ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.roundRect(bx, by, bw, bh, 16);
+    ctx.fill(); ctx.stroke();
+  }
+  // 文本 (FONT_BRIANNETOD16 ≈ 16px, 黑色, 水平垂直居中, 233px 宽自动换行)
+  ctx.fillStyle = '#1a1a1a';
+  ctx.font = '16px "Noto Sans SC", "Microsoft YaHei", sans-serif';
+  ctx.textAlign = 'center';
+  const chars = Array.from(text || '');
+  const lines = [];
+  let cur = '';
+  for (const ch of chars) {
+    if (ctx.measureText(cur + ch).width > 225) { lines.push(cur); cur = ch; }
+    else cur += ch;
+  }
+  if (cur) lines.push(cur);
+  const shown = lines.slice(0, 6);
+  const lineH = 22;
+  const startY = 98 - (shown.length - 1) * lineH / 2;   // 区域 (310..543, 26..170) 垂直居中
+  shown.forEach((ln, i) => ctx.fillText(ln, 426, startY + i * lineH));
+  // click to continue (闪烁)
+  const a = 0.55 + 0.45 * Math.sin((blinkT || 0) * 6);
+  ctx.globalAlpha = a;
+  ctx.font = '12px "Noto Sans SC", sans-serif';
+  ctx.fillStyle = '#333';
+  ctx.fillText('点击继续', 424, 165);
+  ctx.restore();
+}
+
+if (typeof module !== 'undefined') module.exports = { Cutscene, Banners, Transition, setZombieDefs, easeIO, drawDaveDialog };

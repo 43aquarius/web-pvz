@@ -1217,9 +1217,8 @@ class Board {
     d.t += dt;
     if (!d.anim && RE.hasDef('CrazyDave')) {
       const a = Assets.reanim('CrazyDave');
-      // #6: json 已修正中心语义 + 高清素材缩放; 罐子关轮间戴夫全身 ~420px
-      a.x = 130; a.y = 130;
-      a.overrideScale(0.5, 0.5);
+      // 原版: 罐子关戴夫与过场相同 — 屏幕空间 (0,0) 无缩放 (IsScaryPotterDaveTalking → aScreenSpace)
+      a.x = 0; a.y = 0;
       d.anim = a;
     }
     if (d.phase === 'enter') {

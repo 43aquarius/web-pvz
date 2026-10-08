@@ -1324,14 +1324,11 @@ Screens.shop = {
       }
       this.firstVisitDone = true;
     }
-    // 戴夫 reanim (原版 StoreScreen::Draw: gCrazyDave trans(-42,+68))
-    // #6: CrazyDave.json 已修正为部件中心语义 (左上→中心, scripts/patch_crazydave_center.js);
-    //   PVZ-Godot-Dream 素材为高清放大版 (模型全身 ~850px), 原版商店戴夫全身 ~460px
-    //   → 整体 overrideScale(0.54) + 定位 (67,41): 头 y≈100 脚 y≈555, 站车库左侧 (#11 旧值致下半身出屏)
+    // 戴夫 reanim (原版 StoreScreen::Draw: gCrazyDave = Graphics(*g); mTransX -= 42; mTransY += 68)
+    // 原版无缩放绘制: 屏幕空间 (-42, 68), 模型 353x853 → 头 y≈174, 躯干至屏底, 站汽车左侧
     if (!this.daveAnim && RE.hasDef('CrazyDave')) {
       const d = Assets.reanim('CrazyDave');
-      d.x = 67; d.y = 32;
-      d.overrideScale(0.54, 0.54);
+      d.x = -42; d.y = 68;
       d.play('anim_idle', RE.LOOP, 18);
       this.daveAnim = d;
     }

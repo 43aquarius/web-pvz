@@ -11,6 +11,7 @@
 const { CONST } = require('./data');
 const { SCENE_BG, sceneBgName, RENDER_LAYER } = require('./board');
 const RE = require('./reanim');
+const { drawDaveDialog } = require('./cutscene');
 
 const BG_OFFSET_X = -220; // 原版 BOARD_OFFSET=220
 
@@ -225,36 +226,7 @@ const Renderer = {
     if (d.anim) d.anim.draw(ctx);
     if (d.phase === 'talk' && d.line >= 0) {
       const text = d.lines[Math.min(d.line, d.lines.length - 1)] || '';
-      const bx = 400, by = 470, bw = 560, bh = 88;
-      ctx.save();
-      ctx.globalAlpha = 0.96;
-      const grad = ctx.createLinearGradient(0, by, 0, by + bh);
-      grad.addColorStop(0, '#f5e7c0'); grad.addColorStop(1, '#e0c48a');
-      ctx.fillStyle = grad;
-      ctx.strokeStyle = '#7a5222'; ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.roundRect(bx - bw / 2, by, bw, bh, 16);
-      ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#4a2f10';
-      ctx.font = 'bold 19px "Noto Sans SC", "Microsoft YaHei", sans-serif';
-      ctx.textAlign = 'center';
-      // 自动换行 (简单贪心)
-      const maxW = bw - 60;
-      const words = text.split('');
-      let line = '', lines = [];
-      for (const w of words) {
-        if (ctx.measureText(line + w).width > maxW) { lines.push(line); line = w; }
-        else line += w;
-      }
-      if (line) lines.push(line);
-      lines = lines.slice(0, 3);
-      lines.forEach((l, i) => ctx.fillText(l, bx, by + 34 + i * 26));
-      const a = 0.5 + 0.5 * Math.sin((d.talkT || 0) * 6);
-      ctx.globalAlpha = a;
-      ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
-      ctx.fillStyle = '#8a6a2a';
-      ctx.fillText('点击继续', bx, by + bh - 12);
-      ctx.restore();
+      drawDaveDialog(ctx, text, d.talkT || 0);
     }
   },
 
