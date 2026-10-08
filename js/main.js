@@ -312,11 +312,13 @@ const Game = {
         return;
       }
     }
-    // 传送带: 点击带上卡片 → 取卡 (原版 MouseHitTest: x = 91+i*50+offset)
+    // 传送带: 点击带上卡片 → 取卡 (原版 MouseHitTest: x = 91+i*50+offset; 带区裁剪 90..591 —
+    // 被裁剪的右侧入场区卡片不可点, 避免与传送带右侧铲子槽 (609) 的点击区重叠 #2)
     if (board.mode === 'conveyor' && board.belt) {
       for (let i = 0; i < board.belt.items.length; i++) {
         const it = board.belt.items[i];
         const x = 91 + i * 50 + it.offset;
+        if (x >= 591) continue;   // 带面裁剪区外的卡不可见不可点
         if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
           board.belt.items.splice(i, 1);
           // 原版 RemoveSeed: 后续卡 offsetX += 51 (视觉不动, 再滑入新槽位)
@@ -331,18 +333,21 @@ const Game = {
     }
     // 选卡期间: 选卡界面交互
     if (Cutscene.active && Cutscene.seedChoosing) { this.seedChooseClick(p); return; }
-    // 戴夫对话 (1-5 赠铲子): 点击推进
-    if (Cutscene.active && Cutscene.davePhase) { Cutscene.daveClick(); return; }
-    // 开场过场: 点击跳过 (不跳选卡关)
-    if (Cutscene.active) {
+    // 戴夫对话 (1-5 赠铲子): 点击推进; waitdig 挖掘等待期不拦截草坪/铲子点击 (#7)
+    if (Cutscene.active && Cutscene.davePhase) { if (Cutscene.daveClick()) return; }
+    // 开场过场: 点击跳过 (不跳选卡关; waitdig 挖掘期点击留给铲子交互)
+    if (Cutscene.active && !Cutscene.davePhase) {
       if (!Cutscene.board.level.chooseSeeds) Cutscene.t = Math.max(Cutscene.t, 5.9);
       return;
     }
-    // 铲子 (原版: (extra+456, 0) 70x72; 1-4 关无铲子, 1-5 戴夫赠送后解锁)
+    // 铲子 (原版 GetShovelButtonRect: x = extra+456; 传送带关银行容量恒10 → x=609 在带右侧;
+    //      1-4 关无铲子, 1-5 戴夫赠送后解锁)
     if (this.shovelUnlocked) {
-      const cards0 = board.seedCards;
-      const extra0 = cards0.length <= 6 ? 0 : cards0.length === 7 ? 60 : cards0.length === 8 ? 76 : cards0.length === 9 ? 112 : 153;
-      const sx = extra0 + 456;
+      const sx = board.mode === 'conveyor' ? 609 : (() => {
+        const cards0 = board.seedCards;
+        const extra0 = cards0.length <= 6 ? 0 : cards0.length === 7 ? 60 : cards0.length === 8 ? 76 : cards0.length === 9 ? 112 : 153;
+        return extra0 + 456;
+      })();
       if (p.x > sx && p.x < sx + 70 && p.y > 0 && p.y < 72) {
         this.shovelMode = !this.shovelMode;
         this.selectedCard = -1;
@@ -637,8 +642,9 @@ const Game = {
     // 小僵尸关 (原版 IsLittleTroubleLevel: 冒险 3-5 / 关卡25 + 小游戏"小僵尸大麻烦")
     // → 僵尸缩放0.5 + 血量÷4 (zombie.js ZombieInitialize)
     this.littleTrouble = !!level.littleTrouble || (!this.modeKey && lv === 25);
-    // 铲子解锁 (原版: 罐子关有铲子 — 可铲植物/砸罐 ADVICE_USE_SHOVEL_ON_POTS)
-    const specialNoShovel = ['bowling', 'bowling2', 'whack', 'izombie'].includes(level.fixed);
+    // 铲子解锁 (原版 CutScene.cpp 1338 ShowShovel: lv>4 均显示 — 含保龄球/传送带各关;
+    //          仅打僵尸(锤子光标)/我不是僵尸(僵尸卡)无铲子; 罐子关有铲子可砸罐)
+    const specialNoShovel = ['whack', 'izombie'].includes(level.fixed);
     const firstTime = this.progress.unlocked <= lv;
     if (specialNoShovel) this.shovelUnlocked = false;
     else if (lv === 5 && firstTime) this.shovelUnlocked = false;   // 1-5 首次: 由戴夫对话解锁
@@ -683,6 +689,17 @@ const Game = {
         }
       }
     }
+    // #7 首次 1-5 预置三棵豌豆射手 (原版 Challenge.cpp 167-172:
+    //   NewPlant(5,1)/(7,2)/(6,3) PEASHOOTER — 戴夫铲子教学用, 挖完开启保龄球)
+    if (!this.modeKey && lv === 5 && firstTime) {
+      for (const [c, r] of [[5, 1], [7, 2], [6, 3]]) {
+        if (board.grassRows.includes(r)) {
+          const p = new Plant('PEASHOOTER', r, c, board);
+          board.plants.push(p);
+          board.grid[r][c] = p;
+        }
+      }
+    }
     // 选卡融入开场过场 (原版): CutScene 在 t=4.25s 暂停等玩家选卡
     this.beginPlay();
   },
@@ -699,7 +716,8 @@ const Game = {
     this.audio.playBGM(level.bgm);
     // 特殊玩法: 简短过场 (无选卡/无戴夫/无 RSP)
     const quiet = ['whack', 'vasebreaker', 'izombie'].includes(level.fixed);
-    if (quiet) { level.noReadySet = true; }
+    // #1 僵王关无 READY-SET-PLANT (原版 CutScene.cpp 1308: IsFinalBossLevel 不添加 RSP)
+    if (quiet || level.fixed === 'boss') { level.noReadySet = true; }
     Cutscene.start(board);
     if (quiet) { Cutscene.t = 4.5; }   // 跳过镜头平移直接就位
   },
@@ -902,6 +920,8 @@ const Game = {
       case 'zengarden': Screens.zengarden.draw(ctx); break;
       case 'modewin': Screens.modeWin.draw(ctx, this); break;
       case 'playing': {
+        // 异步关卡加载期间 board 可能为空 (startLevel 先 await 分包) — 渲染守卫
+        if (!this.board) { Transition.draw(ctx); break; }
         Renderer.drawBoard(ctx, this.board);
         UI.drawGameHUD(ctx, this.board);
         Banners.draw(ctx);

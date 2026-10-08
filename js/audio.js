@@ -20,6 +20,13 @@ const Audio2 = (function () {
     roof: 'BGM/roof.mp3',
     mini_game: 'BGM/mini_game.mp3',
     garden: 'BGM/garden.mp3',
+    // #1/#9 原版 Music.cpp 对应曲 (从 mainmusic.mo3 解码提取):
+    //   Loonboon(保龄球/打僵尸/小僵尸/蹦极) / Conveyer(X-10 传送带) /
+    //   Cerebrawl(罐子/我是僵尸) / Brainiac Maniac(5-10 僵王战)
+    loonboon: 'BGM/loonboon.mp3',
+    conveyor: 'BGM/conveyor.mp3',
+    cerebrawl: 'BGM/cerebrawl.mp3',
+    brainiac_maniac: 'BGM/brainiac_maniac.mp3',
   };
 
   const SFX_MAP = {
@@ -81,6 +88,9 @@ const Audio2 = (function () {
     coblauncher: 'sounds/coblaunch.ogg', coblaunch: 'sounds/coblaunch.ogg',
     bossintro: 'sounds/evillaugh.ogg', bossdie: 'sounds/bossexplosion.ogg',
     bossfireball: 'sounds/ignite.ogg', bossiceball: 'sounds/lightfill.ogg', bossstomp: 'sounds/thunder.ogg',
+    // #1 僵王原版音效: 液压臂/吐球/丢露营车
+    hydraulic: 'sounds/hydraulic.ogg', hydraulic_short: 'sounds/hydraulic_short.ogg',
+    bossboulder: 'sounds/bossboulderattack.ogg', RVthrow: 'sounds/RVthrow.ogg',
     bungee_scream: 'SFX/zombie/bungee_scream.ogg',
     groan_spawn: 'SFX/zombie/groan/groan3.ogg',
     vase_breaking: 'sounds/vase_breaking.ogg',

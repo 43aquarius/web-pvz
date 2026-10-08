@@ -74,6 +74,19 @@ const Renderer = {
   },
 
   drawScene(ctx, board) {
+    // ---- 坚果保龄球出球线 (#8 原版 Challenge::DrawBackdrop: IsWallnutBowlingLevel && mShowBowlingLine
+    //      → IMAGE_WALLNUT_BOWLINGSTRIPE @ (268,77) 画在背景层, 位于草地/植物/僵尸之下, 世界坐标随镜头平移) ----
+    if (board.level && (board.level.fixed === 'bowling' || board.level.fixed === 'bowling2')) {
+      const stripe = Assets.image('wallnut_bowlingstripe.png');
+      if (stripe) {
+        ctx.drawImage(stripe, 268, 77);
+      } else {
+        ctx.save();
+        ctx.fillStyle = 'rgba(216,48,40,0.85)';
+        ctx.fillRect(268, 90, 6, 400);
+        ctx.restore();
+      }
+    }
     // ---- I, Zombie 红线 (原版 Challenge::DrawBackdrop: IMAGE_WALLNUT_BOWLINGSTRIPE 背景层) ----
     // 层级在草地/僵尸之下、cutscene 戴夫之下, 且随 camera pan 移动 (#4a)
     if (board.mode === 'izombie') {

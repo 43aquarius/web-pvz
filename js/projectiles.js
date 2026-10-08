@@ -53,9 +53,14 @@ class Projectile {
     this.img = this.def.img ? Assets.image(this.def.img) : null;
     this.reanim = this.def.reanim && RE.hasDef(this.def.reanim) ? Assets.reanim(this.def.reanim) : null;
     if (this.reanim) {
-      // Puff 只有 anim_puff 区间; FirePea 用 anim_idle (兜底)
-      const a = this.reanim.animExists('anim_puff') ? 'anim_puff' : 'anim_idle';
-      this.reanim.play(a, RE.LOOP, 24);
+      if (this.type === 'bossfire' || this.type === 'bossice') {
+        // #1 僵王吐球 (原版 BossHeadSpitContact): anim_form 聚形 → anim_role 循环滚动
+        this.reanim.play('anim_form', RE.PLAY_ONCE_HOLD, 16);
+      } else {
+        // Puff 只有 anim_puff 区间; FirePea 用 anim_idle (兜底)
+        const a = this.reanim.animExists('anim_puff') ? 'anim_puff' : 'anim_idle';
+        this.reanim.play(a, RE.LOOP, 24);
+      }
     }
     this.trail = [];
   }
@@ -123,6 +128,15 @@ class Projectile {
         const groundZ = (board.gridY(this.row) + 30) - this.baseY;
         // 命中高度窗口 (z 相对发射点)
         if (this.z >= minColZ) {
+          // #1 僵王可被任意行抛射命中 (原版 Projectile.cpp 237/441: BOSS 行差强制归零,
+          //   命中矩形 (700,80,90,430) 覆盖全部行)
+          const boss = board.bossZombie;
+          if (boss && !boss.dead && !boss.isDeadOrDying && this.x > 690 && this.x < 800) {
+            boss.takeDamage(this.def.dmg, board, { chill: this.def.chill });
+            this.splat(board, this.x);
+            this.dead = true;
+            return;
+          }
           for (const z of board.zombies) {
             if (z.dead || z.row !== this.row || z.hittable === false || z.boss || z.underground || z.underwater) continue;
             // 原版碰撞盒重叠: 僵尸盒~90px宽 × 子弹盒~40px宽 → 中心距<62
@@ -215,6 +229,14 @@ class Projectile {
   }
 
   hitZombies(board) {
+    // #1 僵王可被直线弹命中 (原版: BOSS 行差归零 + 矩形重叠)
+    const boss = board.bossZombie;
+    if (boss && !boss.dead && !boss.isDeadOrDying && !boss.mindControlled && this.x > 690 && this.x < 800) {
+      boss.takeDamage(this.def.dmg, board, { chill: this.def.chill });
+      this.splat(board, this.x);
+      this.dead = true;
+      return;
+    }
     for (const z of board.zombies) {
       if (z.dead || z.row !== this.row || z.hittable === false || z.phase === 'dying' || z.boss) continue;
       if (z.underground || z.underwater) continue;
@@ -300,18 +322,31 @@ class Projectile {
   // ---------- 僵尸方子弹 ----------
   updateZombieProj(dt, board) {
     if (this.type === 'bossfire' || this.type === 'bossice') {
+      // #1 僵王火球/冰球 (原版 Zombie::UpdateBossFireball 10144-10216):
+      //   向左滚动 (y = 行地面-90 跟随屋项坡度), 压毁经过格植物 + 割草机, x<-180 消失
       this.x -= this.def.speed * dt;
-      // 命中植物
+      this.y = board.getPosYBasedOnRow(this.x + 75, this.row) - 90;
+      if (this.reanim) {
+        if (this.reanim.loopType === RE.PLAY_ONCE_HOLD && this.reanim.loopCount > 0) {
+          this.reanim.play('anim_role', RE.LOOP, 24);
+        }
+        this.reanim.setPosition(this.x, this.y);
+      }
+      // 压毁所过格子的植物 (原版 SquishAllInSquare: 即死)
+      const col = Math.floor((this.x + 75 - CONST.LAWN_XMIN) / 80);
       for (const p of board.plants) {
-        if (p.dead || p.row !== this.row) continue;
-        if (Math.abs(p.x + 40 - this.x) < 40) {
-          // 火球烧毁一列植物(到左边?) 原版: 摧毁接触的植物
-          p.dead = true;
-          board.addEffect('fire', p.x + 40, p.y + 40, { hold: 0.6 });
-          board.game.audio.play('firepea');
+        if (p.dead || p.row !== this.row || p.col !== col) continue;
+        try { p.squish(); } catch (e) { p.dead = true; }
+      }
+      // 割草机被压毁 (原版 LawnMower::SquishMower)
+      for (const m of board.mowers) {
+        if (m.row !== this.row || m.state !== 'idle') continue;
+        if (m.x > this.x && m.x < this.x + 50) {
+          m.state = 'gone';
+          board.addEffect('boom', m.x, board.gridY(this.row) + 30, {});
         }
       }
-      if (this.x < -60) this.dead = true;
+      if (this.x < -180) this.dead = true;
       return;
     }
     // 篮球(抛物线, 原版物理)

@@ -9,7 +9,7 @@
 'use strict';
 
 const { CONST, PLANTS, ZOMBIES, MODE_LEVELS, CONVEYOR_POOLS, VASE_RECIPES, VASE_ADVENTURE_STAGES, zombieAllowedOnLevel, WAVE, MUSHROOMS, AQUATIC, GROUNDCOVER, availablePlants, awardForLevel } = require('./data');
-const { Zombie, H } = require('./zombie');
+const { Zombie, H, PH } = require('./zombie');
 const RE = require('./reanim');
 const { Projectile } = require('./projectiles');
 const { Banners } = require('./cutscene');
@@ -272,6 +272,9 @@ class Board {
   }
   buildWaves(level) {
     const lv = level.id > 50 ? 50 : level.id;   // 额外模式(生存等)按满级僵尸池
+    // #1 僵王关 (5-10): 无常规波次 — 原版 Challenge::UpdateZombieSpawning 对 IsFinalBossLevel
+    //   返回 true 屏蔽常规刷怪, 出怪全部由僵王状态机召唤 (Board.cpp 5309)
+    if (level.fixed === 'boss') return [];
     // 原版 PickZombieWaves 581-586: 非首次冒险重玩 → 波数 <10 提到 20, ≥10 加 10 波
     let baseWaves = level.waves;
     if (level.replayBoost) baseWaves = baseWaves < 10 ? 20 : baseWaves + 10;
@@ -362,8 +365,8 @@ class Board {
   spawnZombieForWave(type, row, waveIdx) {
     const z = new Zombie(type, row, this, waveIdx + 1);
     this.zombies.push(z);
-    // 戴夫的耙子 (原版: 商店购买, 自动消灭本关第一只僵尸)
-    if (this.game && this.game.purchased && this.game.purchased['rake'] && !this.rakeUsed && z.fromWave !== -2) {
+    // 戴夫的耙子 (原版: 商店购买, 自动消灭本关第一只僵尸; 僵王免疫 — 原版耙子只打普通僵尸)
+    if (this.game && this.game.purchased && this.game.purchased['rake'] && !this.rakeUsed && z.fromWave !== -2 && z.type !== 'BOSS') {
       this.rakeUsed = true;
       z.takeDamage(99999, null, { noFlash: true });
       this.addEffect('text', z.posX + 20, z.posY + 40, { hold: 1.2, txt: '耙子!', c: '#ff5a3c', size: 22 });
@@ -376,6 +379,26 @@ class Board {
     const m = this.mowers.find(m => m.row === zombie.row && m.state === 'idle');
     if (!m) {
       this.triggerLose(zombie.row);
+    }
+  }
+
+  // 僵王实体引用 (#1: 进度条/投手瞄准/胜负判定共用)
+  get bossZombie() {
+    return this.zombies.find(z => z.type === 'BOSS' && !z.dead) || null;
+  }
+
+  // #1 僵王火球/冰球被克制消除 (原版 Plant::DoSpecial → BossDestroyFireball /
+  //   BurnRow → BossDestroyIceballInRow: 寒冰菇冻爆火球, 辣椒烤化同行冰球)
+  destroyBossBall(kind, row) {
+    for (const pr of this.projectiles) {
+      if (pr.dead || (pr.type !== 'bossfire' && pr.type !== 'bossice')) continue;
+      if (kind === 'fire' && pr.type !== 'bossfire') continue;
+      if (kind === 'ice' && pr.type !== 'bossice') continue;
+      if (kind === 'ice' && row !== undefined && pr.row !== row) continue;
+      const fxName = kind === 'fire' ? 'fire' : 'dust';
+      try { this.addEffect(fxName, pr.x + 40, pr.y + 40, { hold: 0.5 }); } catch (e) { }
+      this.game.audio.play(kind === 'fire' ? 'iceshroom' : 'jalapeno');
+      pr.dead = true;
     }
   }
 
@@ -857,8 +880,8 @@ class Board {
       a.y += a.vy * dt;
       if (a.y >= a.groundY) {
         a.y = a.groundY;
-        if (Math.abs(a.vy) > 60) { a.vy = -a.vy * 0.35; }
-        else { a.vy = 0; a.phase = 'wait'; a.t = 0; }
+        if (Math.abs(a.vy) > 60) { a.vy = -a.vy * 0.35; a.vx *= 0.5; }
+        else { a.vy = 0; a.vx = 0; a.phase = 'wait'; a.t = 0; }   // #6 落地停稳: 水平速度一并归零 (原版 Coin 落地即停)
       }
     } else if (a.phase === 'fly') {
       // 原版 COIN_MOTION_LEVEL_TARGET: 0.5s 飞向屏幕中央 + 放大 + 旋转
@@ -1273,7 +1296,9 @@ class Board {
   }
 
   updateMode(dt) {
-    if (this.state !== 'playing') return;
+    // 传送带在过场期间同样运转 (原版 SeedBank::UpdateConveyorBelt 不受 GameScene 门控 —
+    // 1-5 挖掘教学期带面滚动/发卡, 卡片不会停在铲子槽位置)
+    if (this.state !== 'playing' && !(this.state === 'intro' && this.mode === 'conveyor')) return;
     switch (this.mode) {
       case 'conveyor': {
         // 原版 SeedBank::UpdateConveyorBelt: counter 每4tick全卡左移1px (25px/s)
@@ -1315,6 +1340,11 @@ class Board {
               } else if (t === 'FLOWERPOT') {
                 const cap = 35;
                 w = totalCount >= cap ? 1 : Math.max(1, Math.round(base - (base - 1) * totalCount / cap));
+                // #1 原版 Challenge.cpp 1653: 僵王丢RV期间 FLOWERPOT 权重 = 500 (补盆窗口)
+                if (b.isBoss) {
+                  const boss = this.bossZombie;
+                  if (boss && boss.phase === PH.BOSS_DROP_RV) w = 500;
+                }
               }
               return Math.max(0, w);
             });
@@ -1410,14 +1440,19 @@ class Board {
             v.transparent = Math.max(0, Math.min(50, cur + (near ? step : -step)));
           }
         }
-        // 可用种子包物理 (原版 Coin: vy 弹出+重力, 1500tick 后消失)
+        // 可用种子包物理 (原版 Coin::UpdateFall: 弹出+重力, 落地即停 + 1500tick 后消失)
+        // #6 根因: 落地后 vx 未归零 → 卡牌/种子包永久缓慢平移 → 落地停稳时同时归零 vx
         for (const pk of this.vasePackets) {
           if (pk.taken) continue;
           pk.t += dt;
           pk.vy += 600 * dt;
           pk.y += pk.vy * dt;
           pk.x += pk.vx * dt;
-          if (pk.y > pk.ground) { pk.y = pk.ground; pk.vy = -pk.vy * 0.35; if (Math.abs(pk.vy) < 40) pk.vy = 0; }
+          if (pk.y > pk.ground) {
+            pk.y = pk.ground;
+            if (Math.abs(pk.vy) < 40) { pk.vy = 0; pk.vx = 0; }
+            else { pk.vy = -pk.vy * 0.35; pk.vx *= 0.5; }
+          }
           pk.life -= dt;
         }
         this.vasePackets = this.vasePackets.filter(pk => !pk.taken && pk.life > 0);
@@ -1775,7 +1810,8 @@ class Coin {
     }
     this.vy += 300 * dt;
     this.x += this.vx * dt; this.y += this.vy * dt;
-    if (this.y > this.ground) { this.y = this.ground; this.vy = 0; }
+    // #6 原版 Coin::UpdateFall 落地分支: mPosY=mGroundY 吸附, 速度不再使用 → 落地即停
+    if (this.y > this.ground) { this.y = this.ground; this.vy = 0; this.vx = 0; }
     this.life -= dt;
     if (this.life <= 0) this.dead = true;
   }

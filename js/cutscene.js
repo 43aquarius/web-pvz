@@ -82,12 +82,16 @@ const Cutscene = {
     this.daveFirst = !!(board.game && board.game.daveSeen && !board.game.daveSeen[level.id]);
     this.daveDialog = this.daveDialogFor(level, this.daveFirst);
     this.daveMode = !!this.daveDialog;
-    this.davePhase = null;        // null → enter → talk → gift → leave → null
+    this.davePhase = null;        // null → enter → talk → gift → waitdig → talk → leave → null
     this.daveT = 0;
     this.daveLine = 0;
     this.daveAnim = null;
     this.daveTalkT = 0;
     this.daveGrab = false;        // 5-10: 被飞贼抓走演出
+    this._digAnnounced = false;  // #7 1-5 挖完豌豆后的惊喜对话只触发一次
+    this._bossSpawned = false;   // #1 5-10 僵王过场入场只触发一次
+    // 过场期间僵尸更新标志 (原版: BOSS 在 LEVEL_INTRO 期间入场行走 — zombie.js 833)
+    if (board.game) board.game.cutsceneRunning = true;
     // 房子文案 (原版 [PLAYERS_HOUSE])
     this.houseMsg = level.scene === 'day' || level.scene === 'night' ? '玩家之家'
       : level.scene === 'pool' || level.scene === 'fog' ? '玩家的后院' : '玩家的屋顶';
@@ -258,6 +262,13 @@ const Cutscene = {
 
     // ---- READY-SET-PLANT (原版: 6000+550+sod+grave 起, reanim 13帧@12fps) ----
     const rspStart = 6000 + T.MOWER_TIME + this.sodTime + this.graveTime;
+    // #1 僵王入场 (原版 CutScene.cpp 1290-1296: aTimeBossEnter = ReadySetPlant起点+割草机+戴夫时间
+    //   → 过场尾声 Zombot 走入, 期间 0.24/0.79 处跺脚震屏 — updateBoss SCENE_LEVEL_INTRO 分支)
+    if (this.board.level.fixed === 'boss' && !this._bossSpawned && t >= rspStart) {
+      this._bossSpawned = true;
+      const boss = this.board.spawnZombieForWave('BOSS', 0, 0);
+      if (boss) this.board.game.audio.play('bossintro');   // 原版 SOUND_EVILLAUGH 入场奸笑
+    }
     if (!level.noReadySet && !this.rspDone && !this.rspAnim && t >= rspStart && RE.hasDef('StartReadySetPlant')) {
       this.rspDone = true;      // 防止播完后被重置重新创建 (重复bug根因)
       const r = Assets.reanim('StartReadySetPlant');
@@ -276,12 +287,15 @@ const Cutscene = {
     }
 
     // ---- 结束 ----
-    const endT = (6000 + T.MOWER_TIME + this.sodTime + this.graveTime + (level.noReadySet ? 0 : T.RSP_TIME)) / 1000;
+    // #1 僵王关: RSP 时段 (1830ms) 保留给僵王入场动画 (原版 mBossTime + mReadySetPlantTime 均计入时间轴)
+    const rspWin = (level.noReadySet && level.fixed !== 'boss') ? 0 : T.RSP_TIME;
+    const endT = (6000 + T.MOWER_TIME + this.sodTime + this.graveTime + rspWin) / 1000;
     if (this.t >= endT) {
       this.active = false;
       this.phase = 'done';
       this._chooserShown = false;
       this._sodDone = false;
+      if (this.board.game) this.board.game.cutsceneRunning = false;   // 过场结束恢复常规更新门控
       board.cameraX = 0;
       board.sodDone = true;
       delete board.cutsceneSod;
@@ -357,12 +371,17 @@ const Cutscene = {
   daveIdsFor(level, firstTime) {
     const lv = level.id;
     // [原版 CutScene::StartLevel 场景→ID映射表]
-    if (lv === 5) return firstTime ? { ids: range(2400, 2406), giftAt: 2405 } : { ids: [2410, 2411], giftAt: null };
+    // #7 1-5: 首次 2400-2406 (介绍+铲子教学) → 玩家挖完 3 棵预置豌豆 → 2410-2415 (保龄球惊喜);
+    //        重玩直接 2411-2415 (原版 mCrazyDaveDialogStart=2411, SHOW_WALLNUT 在 2412)
+    if (lv === 5) return firstTime
+      ? { ids: range(2400, 2406), giftAt: 2405, dig: true }
+      : { ids: range(2411, 2415), giftAt: null, walnutAt: 2412 };
     if (lv === 15) return { ids: range(401, 406), giftAt: null };                    // 2-5 打僵尸 (锤子)
     if (lv === 25) return { ids: range(701, 703), giftAt: null };                    // 3-5 小僵尸
     if (lv === 35) return firstTime ? { ids: range(2500, 2502), giftAt: null } : null; // 4-5 罐子
     if (lv === 45) return firstTime ? { ids: range(1301, 1311), giftAt: null } : { ids: range(1304, 1311), giftAt: null }; // 5-5 蹦极
-    if (lv === 50) return { ids: range(2300, 2302), giftAt: null, boss: true };      // 5-10 僵王
+    // 5-10 僵王开场白 (原版 2300-2310 全文: "攻击他的胰腺!" 段子 + 被飞贼抓走)
+    if (lv === 50) return { ids: range(2300, 2310), giftAt: null, boss: true };      // 5-10 僵王
     // 我不是僵尸 / 花瓶终结者 首次
     if (level.fixed === 'izombie' && firstTime) return { ids: range(2200, 2203), giftAt: null };
     if (level.fixed === 'vasebreaker' && firstTime) return { ids: range(3000, 3002), giftAt: null };
@@ -387,6 +406,8 @@ const Cutscene = {
       lines,
       gift: spec.giftAt ? lines.slice(lines.length - (spec.ids.length - spec.ids.indexOf(spec.giftAt))) : null,
       boss: !!spec.boss,
+      dig: !!spec.dig,                                          // #7 1-5 铲子挖掘教学
+      walnutLine: spec.walnutAt != null ? spec.ids.indexOf(spec.walnutAt) : -1,   // SHOW_WALLNUT 行
     };
   },
 
@@ -439,6 +460,27 @@ const Cutscene = {
     } else if (this.davePhase === 'gift') {
       this.daveT += dt;
       if (this.daveAnim) this.daveAnim.update(dt);
+    } else if (this.davePhase === 'waitdig') {
+      // #7 1-5 铲子教学: 戴夫留在原地等玩家挖完 3 棵预置豌豆射手
+      // (原版 TUTORIAL_SHOVEL_KEEP_DIGGING → 挖完 TUTORIAL_SHOVEL_COMPLETED →
+      //  mCutsceneTime=1500 + mCrazyDaveDialogStart=2410 重开对话)
+      this.daveT += dt;
+      if (this.daveAnim) this.daveAnim.update(dt);
+      if (this.daveTalkT !== undefined) this.daveTalkT += dt;
+      const left = this.board.plants.filter(p => !p.dead && p.type === 'PEASHOOTER').length;
+      if (left <= 0 && !this._digAnnounced) {
+        this._digAnnounced = true;
+        // 惊喜对话 2410-2415 (含 SHOW_WALLNUT 坚果展示)
+        const ids = range(2410, 2415);
+        const lines = ids.map(id => this.daveText(id)).filter(tx => tx);
+        this.daveDialog = { lines, gift: null, boss: false, dig: false, walnutLine: ids.indexOf(2412) };
+        this.daveLine = 0;
+        this.daveTalkT = 0;
+        this.davePhase = 'talk';
+        if (this.daveAnim) this.daveAnim.play('anim_mediumtalk', RE.LOOP, 18);
+        game.audio.play('dave_medium');
+        game.audio.play('dave_crazy');
+      }
     } else if (this.davePhase === 'leave') {
       this.daveT += dt;
       if (this.daveAnim) this.daveAnim.update(dt);
@@ -460,6 +502,10 @@ const Cutscene = {
   daveClick() {
     const game = this.board.game;
     if (this.davePhase === 'enter') { this.daveT = Math.max(this.daveT, 0.74); return true; }
+    if (this.davePhase === 'waitdig') {
+      // #7 挖掘等待期: 不吞掉点击 → 让铲子/草坪交互接管 (main.js gameClick 继续走)
+      return false;
+    }
     if (this.davePhase === 'talk') {
       const lines = this.daveLines();
       const giftLines = this.daveDialog && this.daveDialog.gift ? this.daveDialog.gift.length : 0;
@@ -494,13 +540,22 @@ const Cutscene = {
       return true;
     }
     if (this.davePhase === 'gift') {
-      // 点击推进赠礼台词 → 最后离场
+      // 点击推进赠礼台词 → 最后离场; 1-5 首次改为等待挖掘 (#7)
       const lines = this.daveLines();
       this.daveLine++;
       if (this.daveLine >= lines.length) {
-        if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
-        this.davePhase = 'leave';
-        this.daveT = 0;
+        if (this.daveDialog && this.daveDialog.dig) {
+          // 进入铲子挖掘教学: 戴夫留在场上, 玩家挖完 3 棵预置豌豆后继续 2410-2415
+          this.davePhase = 'waitdig';
+          this.daveT = 0;
+          this.daveTalkT = 0;
+          if (this.daveAnim) this.daveAnim.play('anim_smalltalk', RE.LOOP, 10);
+          game.audio.play('dave_short');
+        } else {
+          if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
+          this.davePhase = 'leave';
+          this.daveT = 0;
+        }
       }
       game.audio.play('dave_short');
       return true;
@@ -513,7 +568,7 @@ const Cutscene = {
     if (!this.daveMode || !this.daveAnim) return;
     this.daveAnim.draw(ctx);
     // 对话框 (原版 LawnApp::DrawCrazyDave: Store_SpeechBubble2 @ (285,20), 文本区 (310,26,233,144))
-    if (this.davePhase === 'talk' || this.davePhase === 'gift') {
+    if (this.davePhase === 'talk' || this.davePhase === 'gift' || this.davePhase === 'waitdig') {
       const lines = this.daveLines();
       const text = lines[Math.min(this.daveLine, lines.length - 1)] || '';
       drawDaveDialog(ctx, text, this.daveTalkT);
@@ -530,6 +585,43 @@ const Cutscene = {
           ctx.restore();
         }
       }
+      // SHOW_WALLNUT 坚果展示 (原版 2412 "嘿, 拿好这个坚果!")
+      if (this.davePhase === 'talk' && this.daveDialog && this.daveDialog.walnutLine >= 0 &&
+          this.daveLine >= this.daveDialog.walnutLine) {
+        const walnut = Assets.image('wallnut_body') || Assets.image('wallnut');
+        if (walnut) {
+          const bob = Math.sin(this.daveT * 4) * 6;
+          ctx.save();
+          ctx.translate(560, 300 + bob);
+          ctx.rotate(-0.25 + Math.sin(this.daveT * 2) * 0.08);
+          ctx.shadowColor = 'rgba(255,240,140,0.9)'; ctx.shadowBlur = 24;
+          ctx.drawImage(walnut, -35, -45, 70, 90);
+          ctx.restore();
+        }
+      }
+    }
+    // #7 挖掘教学提示: 原版 ADVICE_CLICK_SHOVEL + TutorialArrow 指向铲子槽
+    if (this.davePhase === 'waitdig') {
+      const bob = Math.sin(this.daveT * 5) * 5;
+      ctx.save();
+      ctx.font = 'bold 20px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(20,12,0,0.85)'; ctx.lineJoin = 'round';
+      ctx.strokeText('点击铲子， 挖掉草坪上的植物！', 400, 130);
+      ctx.fillStyle = '#ffe9a8';
+      ctx.fillText('点击铲子， 挖掉草坪上的植物！', 400, 130);
+      // 下箭头指向铲子槽 (传送带右侧 x=609..679)
+      const ax = 644, ay = 84 + bob;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay + 16);
+      ctx.lineTo(ax - 11, ay - 4);
+      ctx.lineTo(ax + 11, ay - 4);
+      ctx.closePath();
+      ctx.fillStyle = '#ffe36a';
+      ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = '#3a2a10';
+      ctx.stroke();
+      ctx.restore();
     }
   },
 

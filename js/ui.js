@@ -196,7 +196,8 @@ const UI = {
     const nCards = board.seedCards.length;
     // ---- 传送带种子银行 (原版 SeedBank::Draw: BACKDROP@83,0 + 6帧带面@90,63 + clip 90..591) ----
     if (board.mode === 'conveyor' && board.belt) {
-      const bankY = cs.active ? cs.seedBankY : 0;
+      // #7 1-5 挖掘教学期提前显示种子银行+铲子 (原版: 教学时 HUD 可交互)
+      const bankY = (cs.active && cs.davePhase !== 'waitdig') ? cs.seedBankY : 0;
       if (bankY > -87) {
         const backdrop = Assets.image('conveyorbelt_backdrop.png');
         if (backdrop) {
@@ -240,6 +241,20 @@ const UI = {
           ctx.save();
           this.drawSeedCard(ctx, board.seedCards[0].type, 20, 8 + bankY, { selected: game.selectedCard >= 0, noCost: true });
           ctx.restore();
+        }
+        // ---- 铲子槽 (#2 原版: 传送带种子银行容量恒为 10 → GetSeedBankExtraWidth(10)=153 →
+        //      GetShovelButtonRect x = 153+456 = 609, 即传送带背景板 83..599 右侧) ----
+        if (game.shovelUnlocked) {
+          const shovelBank = Assets.image('shovelbank.png');
+          const shX = 609;
+          if (shovelBank) ctx.drawImage(shovelBank, shX, bankY);
+          else { ctx.fillStyle = '#8a6642'; ctx.fillRect(shX, bankY, 70, 72); }
+          const shovel = Assets.image('shovel.png');
+          if (shovel && !game.shovelMode) ctx.drawImage(shovel, shX + 4, bankY + 4);
+          if (game.shovelMode) {
+            ctx.strokeStyle = '#ffef7a'; ctx.lineWidth = 3;
+            ctx.strokeRect(shX - 2, bankY - 2, 74, 76);
+          }
         }
       }
       // 进度条 + 菜单按钮
@@ -494,6 +509,10 @@ const UI = {
     const celW = 158, celH = 27;
     // 底条 (cell 0)
     if (fm) ctx.drawImage(fm, 0, 0, celW, celH, 600, 575, celW, celH);
+    // #1 僵王关 (原版 UpdateProgressMeter 5421-5430): 进度条 = 僵王受损比例 (无旗帜无波次)
+    //   mProgressMeterWidth = 150 * (max-health)/max — 打得越多条越满
+    const isBoss = board.level.fixed === 'boss';
+    const boss = board.bossZombie;
     // 进度填充 (cell 1 从右揭示, 原版 aClipWidth 0..143)
     // 打僵尸模式: 原版 ProgressMeterHasFlags=false → 无旗帜, 进度按 whackWave/whackWaves
     const isWhack = board.mode === 'whack';
@@ -501,7 +520,9 @@ const UI = {
     const cur = isWhack ? board.whackWave : board.wave;
     // 原版 UpdateProgressMeterWidth: 波次+血量比例 → 此处用波次与计时近似
     let progress;
-    if (cur >= total) progress = 150;
+    if (isBoss) {
+      progress = boss ? Math.round(150 * (boss.bodyMaxHealth - Math.max(1, boss.bodyHealth)) / boss.bodyMaxHealth) : 150;
+    } else if (cur >= total) progress = 150;
     else if (cur > 0) {
       const per = 150 / Math.max(1, total - 1);
       const inWave = isWhack
@@ -514,8 +535,8 @@ const UI = {
       const srcX = celW - clip - 7;
       ctx.drawImage(fm, srcX, celH, clip, celH, celW - clip + 593, 575, clip, celH);
     }
-    // 旗帜 (原版: 每10波1旗, 波次到达时升起; 原版 ProgressMeterHasFlags: 打僵尸无旗帜)
-    if (fm && total >= 10 && !isWhack) {
+    // 旗帜 (原版: 每10波1旗, 波次到达时升起; 原版 ProgressMeterHasFlags: 打僵尸无旗帜; 僵王关无旗)
+    if (fm && total >= 10 && !isWhack && !isBoss) {
       const perFlag = total >= 10 ? 10 : total;
       const nFlagWaves = Math.floor(total / perFlag);
       const flagsPosEnd = 590 + celW;
@@ -906,11 +927,9 @@ const UI = {
         break;
       }
       case 'conveyor': {
-        // 坚果保龄球: 出球线 (原版 Challenge::DrawBackdrop: BOWLINGSTRIPE @ (268,77))
-        if (board.level.fixed === 'bowling' || board.level.fixed === 'bowling2') {
-          const stripe = Assets.image('wallnut_bowlingstripe.png');
-          if (stripe) ctx.drawImage(stripe, 268, 77);
-        }
+        // 坚果保龄球出球线已移至 render.js drawScene 背景层 (#8:
+        // 原版 Challenge::DrawBackdrop BOWLINGSTRIPE @ (268,77) 画在草地/僵尸之下的背景层,
+        // 旧实现画在 HUD 层 → 盖在植物僵尸之上且不随镜头平移)
         break;
       }
       case 'whack': {

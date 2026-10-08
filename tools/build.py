@@ -137,6 +137,8 @@ def audio_list():
     base = os.path.join(WEB, 'assets/audio')
     for root, dirs, files in os.walk(base):
         for f in files:
+            if f.endswith('.mo3'):  # 原版音源存档 (提取用), 游戏不加载 — 不内嵌
+                continue
             rel = os.path.relpath(os.path.join(root, f), base).replace(os.sep, '/')
             out.append(rel)
     return sorted(out)

@@ -164,6 +164,14 @@ class Plant {
         this.timer = 30; break;
       case 'COBCANNON':
         this.cobCD = 3; break;
+      case 'GRAVEBUSTER':
+        // #5 原版 Plant.cpp 356-369: 种下即播 anim_land (PLAY_ONCE_AND_HOLD) + 咬合音
+        this.state = 'landing';
+        for (const L of this.anims) {
+          if (L.r.animExists('anim_land')) L.r.play('anim_land', RE.PLAY_ONCE_HOLD, 24);
+        }
+        try { board.game.audio.play('gravebusterchomp'); } catch (e) { }
+        break;
     }
     // 产阳光植物首次时间
     if (d.sunRate) {
@@ -194,8 +202,9 @@ class Plant {
     const iz = board.mode === 'izombie';
     for (const L of this.anims) {
       L.r.update(dt);   // animRate=0 时自然静止; 射击动画(rate>0)正常推进
-      // 头部射击动画播完 → 回到基础待机 (izombie 下保持定格: 原版 PLAY_ONCE_AND_HOLD 末帧)
-      if (L.head && L.shooting && L.r.loopCount > 0) {
+      // 射击动画播完 → 回到基础待机 (izombie 下保持定格: 原版 PLAY_ONCE_AND_HOLD 末帧)
+      // #3: 身体层植物(投手/忧郁菇等)同样需要复位 — 不再限头层
+      if (L.shooting && L.r.loopCount > 0) {
         L.shooting = false;
         if (iz) { L.r.play(L.base, RE.PLAY_ONCE_HOLD, 0); }
         else L.r.play(L.base, RE.LOOP, 12);
@@ -513,9 +522,16 @@ class Plant {
         break;
       }
       case 'GRAVEBUSTER': {
-        if (this.state === 'idle') {
-          this.state = 'eating';
-          this.timer = d.graveEat;
+        // #5 原版 UpdateGraveBuster (Plant.cpp 1104-1129):
+        //   LANDING(anim_land 捭完) → EATING(anim_idle + 400tick 倒计时, 期间整体下沉 0→30px)
+        //   → 计尽 → 墓碑消亡 + 植物消亡
+        if (this.state === 'landing') {
+          const body = this.anims[0] && this.anims[0].r;
+          if (!body || !body.animExists('anim_land') || body.loopCount > 0) {
+            this.state = 'eating';
+            this.timer = d.graveEat;
+            for (const L of this.anims) if (L.r.animExists('anim_idle')) L.r.play('anim_idle', RE.LOOP, 12);
+          }
         } else {
           this.timer -= dt;
           const g = board.graves.find(g => g.row === this.row && g.col === this.col);
@@ -666,8 +682,19 @@ class Plant {
         hasTarget = board.zombies.some(z => !z.dead && !z.boss && z.hittable !== false && !z.mindControlled);
         break;
       case 'CABBAGEPULT': case 'KERNELPULT': case 'MELONPULT': case 'WINTERMELON':
-        hasTarget = inRow(this.row);
+        // 原版 FindTargetZombie: BOSS 行差强制归零 → 僵王关投手无僵尸时也会朝僵王开火
+        hasTarget = inRow(this.row) || !!(board.bossZombie && !board.bossZombie.dead && !board.bossZombie.isDeadOrDying);
         break;
+    }
+
+    // #3 投手延迟发射 (原版 mShootingCounter): 投掷臂到位瞬间出手
+    if (this._pendingShot) {
+      this._pendingShot.t -= dt;
+      if (this._pendingShot.t <= 0) {
+        const ps = this._pendingShot;
+        this._pendingShot = null;
+        this.launchCatapult(board, ps.isButter);
+      }
     }
 
     if (hasTarget && this.timer <= 0) {
@@ -677,17 +704,46 @@ class Plant {
     if (this.timer < 0 && !hasTarget) this.timer = Math.min(this.timer + dt, 0);
   }
 
+  // 投手真正出手 (原版 Plant::Fire 弹道计算 — 由 _pendingShot 延迟触发)
+  launchCatapult(board, isButter) {
+    const d = this.def;
+    // 原版 Plant.cpp 4688: 攻击矩形 Rect(mX+60, mY, BOARD_WIDTH, mH) — 全屏找本行最左僵尸
+    // 瞄准: ZombieTargetLeadX(50) - aOriginX - 30 = 僵尸中心 - 速度×50tick - 30px (120tick 飞行落点补偿)
+    const z = board.firstZombieInRow(this.row, this.x + 60, this.x + 900)
+      || (board.bossZombie && !board.bossZombie.dead && !board.bossZombie.isDeadOrDying ? board.bossZombie : null);
+    let tx, ty;
+    if (z) {
+      let spd = (z.row === this.row ? (z.velX || 0) : 0);   // 僵王固定不动
+      if (z.isMovingAtChilledSpeed) spd *= 0.5;
+      if (z.isEating || z.butter > 0 || z.frozen > 0 || z.stunTimer > 0) spd = 0;  // 原版 ZombieNotWalking
+      tx = Math.max(z.hitX() - spd * 50 - 30, this.x + 10 + 40);
+      ty = z.row === this.row ? z.y + 35 : board.gridY(this.row) + 40;
+      if (z === board.bossZombie) { tx = z.hitX(); ty = board.gridY(this.row) + 35; }   // 打僵王: 盯其头部区域
+    } else {
+      tx = this.x + 400;
+      ty = board.gridY(this.row) + 40;
+    }
+    if (tx < this.x + 10 + 40) tx = this.x + 10 + 40;   // 原版 aRangeX >= 40
+    const projType = isButter ? 'butter' : d.proj;
+    board.projectiles.push(new Projectile(projType, this.x + 10, this.y + 5, this.row, this, { tx, ty }));
+    board.game.audio.play(isButter ? 'butter' : 'throw');
+  }
+
   fire(board) {
     const d = this.def;
     const game = board.game;
     const mouthY = this.y + 30;
     const playShoot = (a, rate) => {
-      // 头层切换到射击动画
+      // 头层切换到射击动画; 身体层植物(投手/仙人掌/忧郁菇)同样播放 (原版 Plant::Fire:
+      // PlayBodyReanim("anim_shooting", PLAY_ONCE_AND_HOLD, 20, 35) — #3 投手投掷动画)
       for (const L of this.anims) {
         if (L.head) {
           const shootAnim = a || L.base.replace('idle', 'shooting');
           if (L.r.animExists(shootAnim)) { L.r.play(shootAnim, RE.PLAY_ONCE_HOLD, rate || 24); L.shooting = true; }
           else if (L.r.animExists(L.base)) L.r.play(L.base, RE.LOOP, 12);
+        } else if (a && !L.attached && L.r.animExists(a)) {
+          L.r.play(a, RE.PLAY_ONCE_HOLD, rate || 24);
+          L.shooting = true;
         }
       }
     };
@@ -795,26 +851,14 @@ class Plant {
         break;
       }
       case 'CABBAGEPULT': case 'KERNELPULT': case 'MELONPULT': case 'WINTERMELON': {
-        // 原版 Plant::Fire (Plant.cpp 4688): 攻击矩形 Rect(mX+60, mY, BOARD_WIDTH, mH) — 全屏找本行最左僵尸
-        // 瞄准: ZombieTargetLeadX(50) - aOriginX - 30 = 僵尸中心 - 速度×50tick - 30px (120tick 飞行落点补偿)
-        const z = board.firstZombieInRow(this.row, this.x + 60, this.x + 900);
-        let tx, ty;
-        if (z) {
-          let spd = z.velX || 0;   // px/frame (原版 tick 单位同语义)
-          if (z.isMovingAtChilledSpeed) spd *= 0.5;
-          if (z.isEating || z.butter > 0 || z.frozen > 0 || z.stunTimer > 0) spd = 0;  // 原版 ZombieNotWalking
-          tx = z.hitX() - spd * 50 - 30;
-          ty = z.y + 35;
-        } else {
-          tx = this.x + 400;
-          ty = board.gridY(this.row) + 40;
-        }
-        if (tx < this.x + 10 + 40) tx = this.x + 10 + 40;   // 原版 aRangeX >= 40
+        // #3 原版 Plant::Fire 两段式 (Plant.cpp 742-790):
+        //   1) FindTargetZombie 命中 → PlayBodyReanim("anim_shooting", PLAY_ONCE_AND_HOLD, 20, 35)
+        //      + mShootingCounter = 卷心菜32/玉米30/西瓜36 tick
+        //   2) UpdateShooter 计数归零时才 Fire 真正发射 → 弹体在投掷臂释放瞬间出手
+        const DELAY = { CABBAGEPULT: 0.32, KERNELPULT: 0.30, MELONPULT: 0.36, WINTERMELON: 0.36 };
         const isButter = this.type === 'KERNELPULT' && Math.random() < d.butterChance;
-        const projType = isButter ? 'butter' : d.proj;
-        board.projectiles.push(new Projectile(projType, this.x + 10, this.y + 5, this.row, this, { tx, ty }));
-        playShoot('anim_shooting', 15);
-        game.audio.play(isButter ? 'butter' : 'throw');
+        this._pendingShot = { t: DELAY[this.type] || 0.32, isButter };
+        playShoot('anim_shooting', 35);
         break;
       }
     }
@@ -844,6 +888,8 @@ class Plant {
         }
         // 融化冰道
         board.iceTrails = board.iceTrails.filter(t => t.row !== this.row);
+        // #1 原版 BurnRow → BossDestroyIceballInRow: 辣椒烤化同行的僵王冰球
+        if (board.destroyBossBall) board.destroyBossBall('ice', this.row);
         board.game.audio.play('jalapeno');
         break;
       case 'ICESHROOM':
@@ -852,6 +898,8 @@ class Plant {
         for (const z of board.zombies) {
           if (!z.dead) z.hitIceTrap();
         }
+        // #1 原版 DoSpecial → BossDestroyFireball: 寒冰菇冻结并消除僵王火球
+        if (board.destroyBossBall) board.destroyBossBall('fire');
         break;
       case 'BLOVER':
         // 原版: 吹走浓雾 (mFogBlownCountDown=2000 tick=20s) + 气球/被抛小鬼
@@ -915,6 +963,13 @@ class Plant {
   // 渲染y (浮动等)
   drawY(board) {
     let oy = H_OFFSET[this.type] || 0;
+    // #5 墓碑吞噬者吞噬下沉 (原版 Plant.cpp 2779: STATE_GRAVEBUSTER_EATING 时
+    //   offsetY += AnimateCurveFloat(400, 0, mStateCountdown, 0, 30, LINEAR) → 4秒线性下沉 30px)
+    if (this.type === 'GRAVEBUSTER' && this.state === 'eating') {
+      const total = this.def.graveEat || 4;
+      const left = Math.max(0, Math.min(total, this.timer));
+      oy += 30 * (1 - left / total);
+    }
     // 水上浮动
     if (board.isWater(this.row, this.col) && !AQUATIC.has(this.type) === false) { /*lily上植物*/ }
     if (AQUATIC.has(this.type) && board.isWater(this.row, this.col)) {
