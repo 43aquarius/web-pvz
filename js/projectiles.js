@@ -6,12 +6,16 @@
 const { CONST, PROJECTILES } = require('./data');
 const RE = require('./reanim');
 
+// 僵王冰火球发光层渲染组 (原版 RENDER_GROUP_BOSS_FIREBALL_ADDITIVE)
+const RG_BALL_GLOW = 15;
+
 class Projectile {
   constructor(type, x, y, row, owner, opts = {}) {
     this.type = type;
     this.def = PROJECTILES[type];
     this.x = x; this.y = y; this.row = row;
     this.owner = owner;
+    if (opts && opts.owner) this.owner = opts.owner;   // addProjectile 路径经 opts 传递属主 (僵王吐球)
     this.dead = false;
     this.t = 0;
     this.delay = opts.delay || 0;
@@ -45,6 +49,14 @@ class Projectile {
         this.spin = 0; this.spinSpeed = -(0.2 - Math.random() * 0.12) * 60;
       }
     }
+    // #fix(cob-nodamage) 玉米加农炮弹着点初始化 — 旧实现 fireCob 传 {tx} 但构造函数
+    //   仅 lob 分支读取 → this.tx=undefined → 弹道/爆炸 NaN → 无伤害无特效 (静默失效)
+    if (this.def.cob) {
+      this.tx = opts.tx !== undefined ? opts.tx : x + 320;
+      this.sx = x; this.sy = y;
+      this.dur = 0.9;
+      this.arcH = this.def.arcH || 250;
+    }
     // 追踪弹
     if (this.def.homing && opts.target) {
       this.target = opts.target;
@@ -54,8 +66,16 @@ class Projectile {
     this.reanim = this.def.reanim && RE.hasDef(this.def.reanim) ? Assets.reanim(this.def.reanim) : null;
     if (this.reanim) {
       if (this.type === 'bossfire' || this.type === 'bossice') {
-        // #1 僵王吐球 (原版 BossHeadSpitContact): anim_form 聚形 → anim_role 循环滚动
+        // #修复(僵王吐球) 原版 BossHeadSpitContact (Zombie.cpp 10114-10141):
+        //   anim_form 聚形 → anim_role 循环滚动 (rate 2.0 慢滚)
+        //   发光层 (火: additive/superglow, 冰: ice_highlight) 归入自定义组 → additive 混合绘制
         this.reanim.play('anim_form', RE.PLAY_ONCE_HOLD, 16);
+        if (this.type === 'bossfire') {
+          this.reanim.assignRenderGroupToTrack('additive', RG_BALL_GLOW);
+          this.reanim.assignRenderGroupToTrack('superglow', RG_BALL_GLOW);
+        } else {
+          this.reanim.assignRenderGroupToTrack('ice_highlight', RG_BALL_GLOW);
+        }
       } else {
         // Puff 只有 anim_puff 区间; FirePea 用 anim_idle (兜底)
         const a = this.reanim.animExists('anim_puff') ? 'anim_puff' : 'anim_idle';
@@ -182,6 +202,17 @@ class Projectile {
           if (z.dead || z.boss) continue;
           if (Math.abs(z.hitX() - this.tx) < 160 && Math.abs(z.row - this.row) <= 1) {
             z.takeDamage(this.def.dmg, board, { exploded: true });
+          }
+        }
+        // #fix(boss-attackable) 原版 KillAllZombiesInRadius: BOSS 行差归零 +
+        //   GetCircleRectOverlap(弹着点, 160, (700,80,90,430)) — 命中即受满额伤害
+        const boss = board.bossZombie;
+        if (boss && !boss.dead && !boss.isDeadOrDying) {
+          const cx = this.tx, cy = board.gridY(this.row) + 40;
+          const nx = Math.max(700, Math.min(cx, 790));
+          const ny = Math.max(80, Math.min(cy, 510));
+          if (Math.hypot(nx - cx, ny - cy) < 160) {
+            boss.takeDamage(this.def.dmg, board, { exploded: true, noFlash: true });
           }
         }
         board.game.audio.play('coblauncher');
@@ -387,13 +418,18 @@ class Projectile {
   // ---------- 僵尸方子弹 ----------
   updateZombieProj(dt, board) {
     if (this.type === 'bossfire' || this.type === 'bossice') {
-      // #1 僵王火球/冰球 (原版 Zombie::UpdateBossFireball 10144-10216):
-      //   向左滚动 (y = 行地面-90 跟随屋项坡度), 压毁经过格植物 + 割草机, x<-180 消失
-      this.x -= this.def.speed * dt;
+      // #修复(僵王吐球) 原版 Zombie::UpdateBossFireball (Zombie.cpp 10141-10216):
+      //   速度 = _ground 轨道速度 × SECONDS_PER_UPDATE × animRate (px/tick)
+      //   → anim_form(16fps)期间缓慢右移聚形, anim_role(2fps)时以 ~37px/s 左滚;
+      //   y 跟随屋顶坡度 (GetPosYBasedOnRow(x+75, row) - 90)
+      const v = this.reanim ? this.reanim.getTrackVelocity('_ground') : 0;
+      this.x -= (isFinite(v) ? v : 0) * 100 * dt;   // px/tick → px/s
       this.y = board.getPosYBasedOnRow(this.x + 75, this.row) - 90;
       if (this.reanim) {
         if (this.reanim.loopType === RE.PLAY_ONCE_HOLD && this.reanim.loopCount > 0) {
-          this.reanim.play('anim_role', RE.LOOP, 24);
+          // 原版: anim_form 播完 → anim_role LOOP @ rate 2.0 (慢滚)
+          this.reanim.play('anim_role', RE.LOOP, 2);
+          this._rolling = true;
         }
         this.reanim.setPosition(this.x, this.y);
       }
@@ -409,6 +445,16 @@ class Projectile {
         if (m.x > this.x && m.x < this.x + 50) {
           m.state = 'gone';
           board.addEffect('boom', m.x, board.gridY(this.row) + 30, {});
+        }
+      }
+      // #修复(尾迹): 原版每 tick 1/10 概率在球后方地面刷 FIREBALL/ICEBALL_TRAIL 粒子
+      if (this._rolling) {
+        this._trailAcc = (this._trailAcc || 0) + dt;
+        if (this._trailAcc >= 0.1) {
+          this._trailAcc = 0;
+          const tx = this.x + 100 + Math.random() * 20;
+          const ty = board.getPosYBasedOnRow(tx - 40, this.row) + 90 - Math.random() * 50;
+          board.addEffect(this.type === 'bossfire' ? 'firetrail' : 'icetrail', tx, ty);
         }
       }
       if (this.x < -180) this.dead = true;
@@ -451,6 +497,13 @@ class Projectile {
     if (this.reanim) {
       this.reanim.setPosition(this.x, this.y);
       this.reanim.draw(ctx);
+      // #修复(僵王吐球): 发光层 additive 混合 (原版 DrawBossFireBall: DRAWMODE_ADDITIVE)
+      if (this.type === 'bossfire' || this.type === 'bossice') {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        this.reanim.drawRenderGroup(ctx, RG_BALL_GLOW);
+        ctx.restore();
+      }
       return;
     }
     if (this.img) {

@@ -372,9 +372,12 @@ const RE = (function () {
     // ---- 速度 (GetTrackVelocity) ----
     getTrackVelocity(name) {
       if (!this.def) return 0;
+      if (!this.trackExists(name)) return 0;
       const ti = this.trackIndex(name);
+      if (!this.def.tracks[ti]) return 0;
       const [ib, ia] = this.frameTime();
       const F = this.def.tracks[ti].F;
+      if (!F || ib * 8 + 7 >= F.length || ia * 8 + 7 >= F.length) return 0;
       const dis = F[ia * 8] - F[ib * 8];
       return dis * SECONDS_PER_UPDATE * this.animRate;
     }
@@ -499,7 +502,9 @@ const RE = (function () {
         if (tI.attachments.length) {
           for (const att of tI.attachments) {
             if (att.dead || !att.reanim) continue;
-            // 附件按其所在组绘制; 附件自身死亡或轨道空白时仍绘制 (原版 !aTrackDrawn 语义)
+            // 原版 AttachmentDraw(parentHidden = !aTrackDrawn): 父轨道隐藏时跳过
+            //   mDontDrawIfParentHidden 的附件 (僵王博士驾驶员: 头部轨道隐藏时不绘制)
+            if (!drawn && att.dontDrawIfParentHidden) continue;
             att.reanim.draw(ctx);
           }
         }

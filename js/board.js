@@ -1864,6 +1864,10 @@ class Effect {
       this.fvy = Math.sin(ang) * 8;
     }
     if (name === 'puffmuzzle') this.life = 0.28;
+    // #修复(僵王尾迹): 原版 PARTICLE_FIREBALL/ICEBALL_TRAIL 地面火苗/冰晶粒子
+    //   素材条: fire 208×17 = 13帧×16, ice 152×23 = 8帧×19
+    if (name === 'firetrail') this.fi = Math.floor(Math.random() * 13);
+    if (name === 'icetrail') this.fi = Math.floor(Math.random() * 8);
     // #修复(碎西瓜): 原版 PARTICLE_MELONSPLASH / PARTICLE_WINTERMELON — 9 块瓜皮红瓢碎块弹飞
     //   (原素材 melonpult_particles / wintermelon_particles 334×37 精确分段盒, 尺寸递减)
     if (name === 'melonchunks') {
@@ -1903,6 +1907,10 @@ class Effect {
         if (this.t > 0.5) this.dead = true;
         break;
       }
+      case 'firetrail': case 'icetrail':
+        // 僵王冰火球地面尾迹 (原版 TRAIL 粒子 0.6s 淡出, 火苗轻微上飘)
+        if (this.t > 0.6) this.dead = true;
+        break;
       case 'puffmuzzle': if (this.t > 0.28) this.dead = true; break;   // 原版 PuffShroomMuzzle 短促喷雾
       case 'pufftrail': {
         // 尾迹水滴: 微速漂移 + 0.5s 消散 (原版 PuffShroomTrail)

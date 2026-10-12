@@ -210,8 +210,9 @@ const PROJECTILES = {
   wintermelon:  { dmg: 80, speed: 0, lob: true, arcH: 200, splashDmg: true, chill: true, img: 'wintermelon_melon' },
   basketball:   { dmg: 30, speed: 300, lob: true, img: 'zombie_catapult_basketball', arcH: 120, zproj: true },
   cob:          { dmg: 2250, speed: 0, cob: true, img: 'cobcannon_cob', arcH: 250, splash: 0 },
-  bossfire:     { dmg: 2000, speed: 220, reanim: 'Zombie_boss_fireball', zproj: true },
-  bossice:      { dmg: 2000, speed: 220, reanim: 'Zombie_boss_iceball', zproj: true },
+  // 僵王冰火球: 速度由 _ground 轨道速度驱动 (原版 UpdateBossFireball, 聚形期右移/滚动期 ~37px/s)
+  bossfire:     { dmg: 2000, reanim: 'Zombie_boss_fireball', zproj: true },
+  bossice:      { dmg: 2000, reanim: 'Zombie_boss_iceball', zproj: true },
 };
 
 // ---------- 关卡 (冒险模式 1-1 ~ 5-10, 原版精确数据) ----------

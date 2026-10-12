@@ -643,6 +643,30 @@ const Renderer = {
           e.anim.draw(ctx);
           break;
         }
+        case 'firetrail': case 'icetrail': {
+          // #修复(僵王尾迹): 原版 PARTICLE_FIREBALL/ICEBALL_TRAIL — 球后地面火苗/冰晶粒子
+          //   素材条: fire 208×17 (13帧×16) / ice 152×23 (8帧×19), 0.6s 淡出, 火苗轻微上飘
+          const strip = Assets.image(e.name === 'firetrail'
+            ? 'zombie_boss_fireball_groundparticles.png' : 'zombie_boss_iceball_groundparticles.png');
+          const p = Math.min(1, e.t / 0.6);
+          const rise = e.name === 'firetrail' ? p * 8 : 0;
+          ctx.save();
+          ctx.globalAlpha = (1 - p) * 0.9;
+          if (strip) {
+            const n = e.name === 'firetrail' ? 13 : 8;
+            const fw = strip.width / n;
+            const fi = (e.fi || 0) % n;
+            ctx.drawImage(strip, fi * fw, 0, fw, strip.height,
+              e.x - fw / 2, e.y - strip.height / 2 - rise, fw, strip.height);
+          } else {
+            ctx.fillStyle = e.name === 'firetrail' ? '#ff7b2b' : '#9fe8ff';
+            ctx.beginPath();
+            ctx.arc(e.x, e.y - rise, 7 * (1 - p * 0.4), 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
+          break;
+        }
         case 'melonchunks': {
           // #修复(碎西瓜): 9 块碎瓜弹飞 (原版 PARTICLE_MELONSPLASH/WINTERMELON)
           //   贴片源自 melonpult_particles / wintermelon_particles 334×37 精确分段

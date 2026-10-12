@@ -269,8 +269,10 @@ class Plant {
           }
         } else if (this.state === 'armed') {
           // 触发: 僵尸靠近
+          // #fix(boss-attackable) 原版 FindZombieInRow 命中盒含 BOSS (700-790) — 右缘土豆雷可被僵王触发
           for (const z of board.zombies) {
-            if (!z.dead && z.row === this.row && !z.underwater && Math.abs(z.hitX() - (this.x + 40)) < 55 && !z.boss) {
+            const near = Math.abs(z.hitX() - (this.x + 40)) < 55;
+            if (!z.dead && !z.underwater && near && (z.type === 'BOSS' || z.row === this.row)) {
               // 原版: 半径60行内0, TakeDamage(1800, 18U) → 火系致命伤 → 僵尸烧焦化灰烬 (#11)
               this.explode(board, d.radius, d.dmg, { fire: true });
               board.game.audio.play('spudow');
@@ -433,12 +435,16 @@ class Plant {
         const body = this.anims[0].r;
         const biteFind = () => {
           // 原版攻击矩形 Rect(mX+80, mY, 40, mH) × 僵尸盒~90px 重叠 → 锚点窗口 (mX-10, mX+120)
+          // #fix(boss-attackable) 原版 FindTargetZombie BOSS 行差归零 — 右缘大嘴花可咬僵王 (heavy 40 伤路径)
           let best = null;
+          const cand = (z) => z.type === 'BOSS' ? 740 : z.x;   // 僵王锚点=命中区中心
           for (const z of board.zombies) {
-            if (z.dead || z.row !== this.row || z.hittable === false || z.boss) continue;
+            if (z.dead || z.hittable === false) continue;
             if (z.underground || z.underwater || z.flyingHigh) continue;
-            if (z.x > this.x - 10 && z.x < this.x + 120) {
-              if (!best || z.x < best.x) best = z;
+            if (z.type !== 'BOSS' && z.row !== this.row) continue;
+            const ax = cand(z);
+            if (ax > this.x - 10 && ax < this.x + 120) {
+              if (!best || cand(best) > ax) best = z;
             }
           }
           return best;
@@ -494,9 +500,11 @@ class Plant {
       case 'SQUASH': {
         if (!this.squashTarget) {
           // 找同格或前一格僵尸
+          // #fix(boss-attackable) 原版 FindTargetZombie BOSS 行差归零 — 右缘窝瓜可压僵王机体 (1800)
           let best = null;
           for (const z of board.zombies) {
-            if (z.dead || z.row !== this.row || z.underwater || z.boss || z.hittable === false) continue;
+            if (z.dead || z.underwater || z.hittable === false) continue;
+            if (z.type !== 'BOSS' && z.row !== this.row) continue;
             const dx = z.hitX() - (this.x + 40);
             if (dx > -70 && dx < 110) { if (!best || z.hitX() < best.hitX()) best = z; }
           }
@@ -514,8 +522,14 @@ class Plant {
             for (const L of this.anims) L.r.play('anim_jumpdown', RE.PLAY_ONCE_HOLD, 24);
             board.game.audio.play('squash_hmm');
             // 压死范围内僵尸
+            // #fix(boss-attackable): BOSS 不限行 — 命中区 700-790 与压落点重叠即受 1800
             for (const z of board.zombies) {
-              if (!z.dead && z.row === this.row && Math.abs(z.hitX() - (this.x + 40)) < 60) {
+              if (z.dead) continue;
+              if (z.type === 'BOSS') {
+                if (Math.abs(z.hitX() - (this.x + 40)) < 60) z.takeDamage(1800, board, { squashed: true, noFlash: true });
+                continue;
+              }
+              if (z.row === this.row && Math.abs(z.hitX() - (this.x + 40)) < 60) {
                 z.takeDamage(1800, board, { squashed: true });
               }
             }
@@ -927,8 +941,16 @@ class Plant {
       case 'JALAPENO':
         // 整行火焰
         board.addEffect('jala_row', this.x, this.row, { row: this.row, hold: 0.8 });
+        // #fix(boss-attackable) 原版 Plant::BurnRow (Plant.cpp 4234): BOSS 无条件命中 (不限行)
+        //   → RemoveColdEffects + ApplyBurn (Zombie.cpp 8666: BOSS 分支 = 1800 伤)
         for (const z of board.zombies) {
-          if (!z.dead && z.row === this.row && !z.boss) z.takeDamage(d.dmg, board, { fire: true });
+          if (z.dead) continue;
+          if (z.type === 'BOSS') {
+            try { z.removeColdEffects && z.removeColdEffects(); } catch (e) { }
+            try { z.applyBurn && z.applyBurn(); } catch (e) { z.takeDamage(1800, board, { noFlash: true }); }
+            continue;
+          }
+          if (z.row === this.row) z.takeDamage(d.dmg, board, { fire: true });
         }
         // 融化冰道
         board.iceTrails = board.iceTrails.filter(t => t.row !== this.row);
@@ -972,6 +994,17 @@ class Plant {
         // 樱桃炸弹/末日菇/土豆雷 burn=true → 烧焦僵尸化灰烬 (原版 ApplyBurn)
         const fire = !!opts.fire || this.type === 'CHERRYBOMB' || this.type === 'DOOMSHROOM' || this.type === 'EXPLODEONUT';
         z.takeDamage(dmg, board, { exploded: true, noFlash: true, fire });
+      }
+    }
+    // #fix(boss-attackable) 原版 KillAllZombiesInRadius (Board.cpp 9303): BOSS 行差归零,
+    //   GetCircleRectOverlap(爆心, 半径, (700,80,90,430)) — 命中则 ApplyBurn (BOSS 分支 1800 伤)
+    const boss = board.bossZombie;
+    if (boss && !boss.dead && !boss.isDeadOrDying) {
+      const nx = Math.max(700, Math.min(cx, 790));
+      const ny = Math.max(80, Math.min(cy, 510));
+      if (Math.hypot(nx - cx, ny - cy) < radius + 30) {
+        try { boss.removeColdEffects && boss.removeColdEffects(); } catch (e) { }
+        try { boss.applyBurn && boss.applyBurn(); } catch (e) { boss.takeDamage(1800, board, { noFlash: true }); }
       }
     }
     this.dead = true;

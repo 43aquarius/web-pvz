@@ -1932,7 +1932,12 @@ class Zombie {
       if (drv) {
         drv.play('anim_idle', RE.LOOP, 18);
         const att = r.attachToTrack('Boss_head2', drv, 28, -84);
-        if (att) att.offset = [1.2, 0, 0, 1.2, 28, -84];
+        if (att) {
+          att.offset = [1.2, 0, 0, 1.2, 28, -84];
+          // 原版 BossSetupReanim: mDontDrawIfParentHidden = true
+          //   头部轨道隐藏(站立姿态)时驾驶员不绘制 (Zombie.cpp 10520)
+          att.dontDrawIfParentHidden = true;
+        }
         r.frameBasePose = 0;
         this.bossDriver = drv;
       }
@@ -2175,6 +2180,12 @@ class Zombie {
 
   bossBungeeLeave() {
     this.phase = PH.BOSS_BUNGEES_LEAVE;
+    // 原版 BossBungeeLeave: 黄油定身的蹦极僵尸直接死亡掉宝 (Zombie.cpp 9906-9913)
+    for (const z of (this.bossBungeeRefs || [])) {
+      if (z && !z.dead && z.butteredCounter > 0) {
+        try { z.dieWithLoot(); } catch (e) { try { z.dieNoLoot(); } catch (e2) { z.dead = true; } }
+      }
+    }
     this.playZombieReanim('anim_bungee_1_leave', RE.PLAY_ONCE_HOLD, 20, 18);
   }
 
@@ -2218,6 +2229,10 @@ class Zombie {
   bossHeadSpit() {
     const r = this.bodyReanim;
     this.phase = PH.BOSS_HEAD_SPIT;
+    // 原版: 吐新球前学旧球消亡 (同屏仅一球, Zombie.cpp 10013-10018)
+    for (const pr of this.board.projectiles) {
+      if (!pr.dead && (pr.type === 'bossfire' || pr.type === 'bossice')) pr.dead = true;
+    }
     this.bossFireballRow = this.board.grassRows[Math.floor(Math.random() * this.board.grassRows.length)];
     this.bossIsFire = Math.random() < 0.5;
     const anim = 'anim_head_attack_' + (1 + Math.min(4, this.bossFireballRow));
@@ -2242,13 +2257,9 @@ class Zombie {
     const isFire = this.bossIsFire;
     const row = this.bossFireballRow;
     const y = b.getPosYBasedOnRow(455 + 75, row) - 90;
-    try {
-      b.addProjectile(isFire ? 'bossfire' : 'bossice', 455, y, row, this, { zProj: true });
-    } catch (e) {
-      // addProjectile 不存在时直接 push
-      const P = require('./projectiles');
-      b.projectiles.push(new P.Projectile(isFire ? 'bossfire' : 'bossice', 455, y, row, this, { zProj: true }));
-    }
+    // #修复(冰火球不动/右飞): addProjectile 签名 (type,x,y,row,opts) — 旧调用多传 this
+    //   导致 opts 被挤掉 → zombieProj=false → 球走植物直弹道 (speed=0 原地悬浮)
+    b.addProjectile(isFire ? 'bossfire' : 'bossice', 455, y, row, { zProj: true, owner: this });
     if (this.bossDriver) this.bossDriver.play('anim_laugh', RE.LOOP, 18);
     b.game.audio.play('hydraulic_short');
   }
@@ -3390,6 +3401,16 @@ class Zombie {
     this.updateAnimSpeed();
   }
 
+  // 原版 Zombie::RemoveColdEffects (Zombie.cpp 8647): 解冻 + 移除减速
+  //   (辣椒/爆炸类对 BOSS 无条件调用 — 僵王解冻并受 1800 伤)
+  removeColdEffects() {
+    if (this.iceTrapCounter > 0) this.removeIceTrap();
+    if (this.chilledCounter > 0) {
+      this.chilledCounter = 0;
+      this.updateAnimSpeed();
+    }
+  }
+
   applyBurn() {
     if (this.isDeadOrDying) return;
     // 原版 Zombie::ApplyBurn: BOSS/高血量烧不死 → 只受 1800 伤害
@@ -3812,6 +3833,11 @@ class Zombie {
       ctx.clip();
     }
 
+    // #修复(冰冻特效): 原版 Zombie::Draw 6301 — 冰块后层在主体之前绘制
+    if (this.iceTrapCounter > 0) {
+      this.drawIceTrap(ctx, dp, false);
+    }
+
     // 颜色状态 (DrawReanim)
     let fadeAlpha = 255;
     if (this.zombieFade >= 0) fadeAlpha = clamp(255 * this.zombieFade / 10, 0, 255);
@@ -3821,6 +3847,17 @@ class Zombie {
     if (this.phase === PH.BURNED) {
       // 烧焦: charred reanim 自带暗色; 旧僵尸保持黑色 tint
       colorOverride = this._charredReanim ? [255, 255, 255, fadeAlpha] : [0, 0, 0, fadeAlpha];
+    } else if (this.type === 'BOSS' && this.phase !== PH.DYING && this.bodyHealth < this.bodyMaxHealth / 10) {
+      // 原版 Zombie.cpp 5683: 僵王血量 < 1/10 → 灰白呼吸闪烁 (CURVE_BOUNCE 0-39帧 155↔255)
+      const mc = (this.board.mainCounter != null ? this.board.mainCounter : Date.now() / 10) % 40;
+      const t = mc / 39;
+      const gray = Math.round(155 + 100 * (1 - Math.abs(2 * t - 1)));
+      if (this.chilledCounter > 0 || this.iceTrapCounter > 0) {
+        const cold = Math.round(65 + 10 * (1 - Math.abs(2 * t - 1)));
+        colorOverride = [cold, cold, gray, fadeAlpha];
+      } else {
+        colorOverride = [gray, gray, gray, fadeAlpha];
+      }
     } else if (this.mindControlled) {
       colorOverride = [128, 64, 192, fadeAlpha];
       extraAdditive = [128, 64, 192, fadeAlpha / 2];
@@ -3841,9 +3878,9 @@ class Zombie {
 
     // 绘制主体 (普通组)
     if (this.type === 'BOSS') {
-      // #1 僵王分层绘制 (原版 DrawBossPart): 后腿 → 后臂 → 主体+驾驶员 → 前腿
+      // #1 僵王分层绘制 (原版 DrawBossPart): 后腿 → 后臂(带目标偏移) → 主体+驾驶员 → 前腿
       r.drawRenderGroup(ctx, RG.BOSS_BACK_LEG);
-      r.drawRenderGroup(ctx, RG.BOSS_BACK_ARM);
+      this.drawBossBackArm(ctx);
       r.drawRenderGroup(ctx, RG.NORMAL);
       r.drawRenderGroup(ctx, RG.BOSS_FRONT_LEG);
     } else if (this.type === 'BOBSLED') {
@@ -3894,8 +3931,103 @@ class Zombie {
       r.drawRenderGroup(ctx, RG.OVER_SHIELD);
     }
 
+    // #修复(冰冻/黄油特效): 原版 Zombie::Draw (Zombie.cpp 6301-6323)
+    //   主体后 → 冰块前层(icetrap) → 黄油(cornpult_butter_splat 在头顶)
+    if (this.iceTrapCounter > 0) {
+      this.drawIceTrap(ctx, dp, true);
+    }
+    if (this.butteredCounter > 0) {
+      this.drawButter(ctx, dp);
+    }
+
     if (clipSave) { /* clip 在外层 restore 中一并释放 */ }
     ctx.restore();   // BeginDraw/EndDraw
+  }
+
+  // 原版 Zombie::DrawBossBackArm (Zombie.cpp 9729-9754): 内臂(丢RV/放蹦极的手)
+  //   绘制时叠加运行时偏移使手臂伸向目标行列 (否则手在默认位而落点在别处 → 视觉脱节)
+  drawBossBackArm(ctx) {
+    const r = this.bodyReanim;
+    if (!r) return;
+    let ox = 0, oy = 0;
+    if (this.phase === PH.BOSS_DROP_RV) {
+      // RV: 目标(行 targetRow, 列 targetCol) → 偏移 (col×80, (row-1)×85 - col×20 屋顶坡度)
+      oy = ((this.bossTargetRow || 0) - 1) * 85 - (this.bossTargetCol || 0) * 20;
+      ox = (this.bossTargetCol || 0) * 80;
+    } else if (this.phase === PH.BOSS_BUNGEES_ENTER || this.phase === PH.BOSS_BUNGEES_DROP || this.phase === PH.BOSS_BUNGEES_LEAVE) {
+      // 蹦极: 手臂横移到目标列 (col×80 - 23)
+      ox = (this.bossTargetCol || 0) * 80 - 23;
+    }
+    if (ox || oy) {
+      r.overlay[4] += ox;
+      r.overlay[5] += oy;
+      r.drawRenderGroup(ctx, RG.BOSS_BACK_ARM);
+      r.overlay[4] -= ox;
+      r.overlay[5] -= oy;
+    } else {
+      r.drawRenderGroup(ctx, RG.BOSS_BACK_ARM);
+    }
+  }
+
+  // 原版 Zombie::DrawIceTrap (Zombie.cpp 6198-6237): 冰冻冰晶前后两层
+  //   icetrap2(后层, 主体之前绘) / icetrap(前层冰晶) @ 僵尸局部 (46, bodyY+92)
+  drawIceTrap(ctx, dp, front) {
+    if (this.inPool || this.type === 'BOSS') return;   // 原版: 泳池/僵王不画冰块
+    const img = Assets.image(front ? 'icetrap' : 'icetrap2');
+    if (!img) return;
+    let ox = 46, oy = dp.bodyY + 92, s = 1;
+    switch (this.type) {
+      case 'POGO': ox -= 10; oy += 20; break;
+      case 'GARGANTUAR': case 'REDEYE': ox -= 20; oy -= 7; s = 1.6; break;
+      case 'BUNGEE': ox -= 45; oy -= 23; s = 1.2; break;
+      case 'DIGGER': ox -= 27; break;
+      case 'CATAPULT': ox += 32; break;
+      case 'BALLOON': ox -= 9; oy += 27; break;
+    }
+    if (s === 1) {
+      ctx.drawImage(img, ox, oy);
+    } else {
+      ctx.drawImage(img, ox, oy, img.width * s, img.height * s);
+    }
+  }
+
+  // 原版 Zombie::DrawButter (Zombie.cpp 6240-6289): 黄油贴在头部轨道位置
+  //   GetTrackPosition(anim_head1) → 局部坐标 - (29,36) + 类型微调
+  drawButter(ctx, dp) {
+    const img = Assets.image('cornpult_butter_splat');
+    if (!img) return;
+    const r = this.bodyReanim;
+    let x = dp.imageOffsetX + dp.headX + 11;
+    let y = dp.imageOffsetY + dp.headY + dp.bodyY + 21;
+    let s = 1;
+    if (r) {
+      // 头部轨道屏幕位置 (overlay + track变换, 等价原版 GetTrackPosition)
+      // trackIndex 对缺失轨道返回 0 → 必须用 trackExists 判定
+      const trackName = this.phase === PH.NEWSPAPER_MADDENING ? 'anim_head_look'
+        : this.type === 'CATAPULT' ? 'Zombie_catapult_driver_head'
+          : 'anim_head1';
+      if (r.trackExists && r.trackExists(trackName)) {
+        try {
+          const ti = r.trackIndex(trackName);
+          const t = r.curTransform(ti, r.frameTime());
+          if (t && t.x != null) {
+            x = r.overlay[4] + t.x;
+            y = r.overlay[5] + t.y;
+          }
+        } catch (e) { }
+      }
+    }
+    x -= 29; y -= 36;   // 原版: aOffsetX -= mPosX+29; aOffsetY -= mPosY+36 (局部坐标系转换)
+    switch (this.type) {
+      case 'POGO': y -= 5; break;
+      case 'GARGANTUAR': case 'REDEYE': x -= 5; y -= 15; s = 1.2; break;
+      case 'SQUASH_HEAD': x += 6; y -= 9; break;
+    }
+    if (s === 1) {
+      ctx.drawImage(img, x, y);
+    } else {
+      ctx.drawImage(img, x, y, img.width * s, img.height * s);
+    }
   }
 
   drawBobsledReanim(ctx, dp, before) {
