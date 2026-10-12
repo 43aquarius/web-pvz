@@ -238,8 +238,20 @@ const UI = {
         ctx.restore();
         // 最左槽位: 当前持有的传送带卡 (放下时也常显, 点击可重新拿起) (#15)
         if (board.seedCards && board.seedCards[0]) {
+          // #fix(conveyor): 取卡 0.25s ease-out 飞行动画 — 卡牌从带位水平滑向最左槽位
+          //   (用户报告: 卡牌不会"跑"到最左边, 而是在当前位置被选中); 槽位与带位同高, 纯水平过渡
+          let sx = 20;
+          const fly = game.beltFly;
+          if (fly) {
+            const p = Math.min(1, (performance.now() - fly.t0) / (fly.dur || 250));
+            if (p >= 1) { game.beltFly = null; }
+            else {
+              const e = 1 - (1 - p) * (1 - p);   // ease-out
+              sx = fly.x0 + (20 - fly.x0) * e;
+            }
+          }
           ctx.save();
-          this.drawSeedCard(ctx, board.seedCards[0].type, 20, 8 + bankY, { selected: game.selectedCard >= 0, noCost: true });
+          this.drawSeedCard(ctx, board.seedCards[0].type, sx, 8 + bankY, { selected: game.selectedCard >= 0, noCost: true });
           ctx.restore();
         }
         // ---- 铲子槽 (#2 原版: 传送带种子银行容量恒为 10 → GetSeedBankExtraWidth(10)=153 →

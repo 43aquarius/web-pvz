@@ -637,7 +637,34 @@ const Renderer = {
           e.anim.overrideScale(sc, sc);
           if (e.name === 'snowsplat') e.anim.colorOverride = [153, 217, 255, 255];
           if (e.name === 'firesplat') e.anim.colorOverride = [255, 190, 128, 255];
+          // #修复(碎西瓜): 汁液飞溅云染色 — 普通西瓜红瓢汁 / 冰西瓜冰蓝 (原版 MelonImpact 粒子伴随汁液)
+          if (e.name === 'melonsplat') e.anim.colorOverride = (e.opts && e.opts.winter)
+            ? [168, 224, 255, 255] : [255, 130, 130, 255];
           e.anim.draw(ctx);
+          break;
+        }
+        case 'melonchunks': {
+          // #修复(碎西瓜): 9 块碎瓜弹飞 (原版 PARTICLE_MELONSPLASH/WINTERMELON)
+          //   贴片源自 melonpult_particles / wintermelon_particles 334×37 精确分段
+          const sheet = Assets.image(e.opts && e.opts.winter ? 'wintermelon_particles.png' : 'melonpult_particles.png');
+          if (sheet && e.parts) {
+            const life = 1.1;
+            const pr = Math.min(1, e.t / life);
+            const alpha = pr < 0.72 ? 1 : 1 - (pr - 0.72) / 0.28;
+            if (alpha > 0.02) {
+              ctx.save();
+              ctx.globalAlpha = alpha;
+              for (const p of e.parts) {
+                ctx.save();
+                ctx.translate(e.x + p.x, e.y + p.y);
+                ctx.rotate(p.rot);
+                const w = p.sw * p.sc, h = p.sh * p.sc;
+                ctx.drawImage(sheet, p.sx, p.sy, p.sw, p.sh, -w / 2, -h / 2, w, h);
+                ctx.restore();
+              }
+              ctx.restore();
+            }
+          }
           break;
         }
         case 'puffsplat': {

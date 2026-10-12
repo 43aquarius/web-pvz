@@ -159,7 +159,15 @@ const Assets = (function () {
       if (t === 'BOSS') continue;
       if (zombieAllowedOnLevel(t, lv)) for (const p of zombiePacksFor(t)) packs.add(p);
     }
-    if (level.fixed === 'boss') { for (const p of zombiePacksFor('BOSS')) packs.add(p); }
+    if (level.fixed === 'boss') {
+      for (const p of zombiePacksFor('BOSS')) packs.add(p);
+      // #fix(pogo-invisible): 僵王召唤池 (bossSummonZombies gBossZombieList) 全类型分包随关预载 —
+      //   旧实现只预载 boss 自身包; 召唤出的 POGO/JACK/LADDER 等因分包未加载
+      //   reanim 无定义 → 僵尸生成后永久隐形 (用户报告: 跳跳僵尸不显示)
+      for (const t of ['CONE', 'BUCKET', 'FOOTBALL', 'POLEVAULTER', 'JACK', 'LADDER', 'ZAMBONI', 'CATAPULT', 'POGO', 'NEWSPAPER', 'DOOR', 'GARGANTUAR']) {
+        for (const p of zombiePacksFor(t)) packs.add(p);
+      }
+    }
     if (level.fixed === 'bungee') { for (const p of zombiePacksFor('BUNGEE')) packs.add(p); }
     // 蹦极闪电战 (5-5): BUNGEE + LADDER
     if (level.id === 45) { for (const p of zombiePacksFor('BUNGEE')) packs.add(p); for (const p of zombiePacksFor('LADDER')) packs.add(p); }

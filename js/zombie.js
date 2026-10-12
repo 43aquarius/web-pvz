@@ -2661,10 +2661,8 @@ class Zombie {
       case PH.BUNGEE_RISING: {
         this.altitude += 8;
         if (this.altitude >= 600) {
-          if (this.stolenPlant) {
-            this.stolenPlant.dead = true;
-            this.stolenPlant = null;
-          }
+          // #修复(植物残留): 原版此处直接 DieNoLoot → BungeeDie 统一处置携带植物
+          //   (mPlantsEaten++ + aPlant->Die()); 旧实现手工 dead=true 不清格 → 被偷格永远无法复种
           this.dieNoLoot();
         }
         break;
@@ -2713,8 +2711,33 @@ class Zombie {
       p.bungeeZombie = this;
       this.stolenPlant = p;
       this.board.game.audio.play('floop');
+      // #修复(植物残留): 原版 RISING_WITH_BUNGEE = NotOnGround → 不再计入该格占用
+      //   (CanPlantAt 视为空地) — 提起瞬间释放格子, 被偷格立刻可复种
+      p._clearGrid();
     }
     this.targetPlant = null;
+  }
+
+  // #修复(植物残留): 原版 Zombie::BungeeDie (Zombie.cpp 7375-7407) 完整移植
+  //   蹦极僵尸死亡(被打死/完成上升)时统一处置携带植物:
+  //   - grabbed (抓取动画中, 尚未提起) → 植物掉回原格继续存活 (BungeeDropPlant: NOT_ON_BUNGEE)
+  //   - rising (已被提起) → mPlantsEaten++ + aPlant->Die() (清格, 可复种)
+  //   旧实现: 蹦极被打死时携带植物永久滞留 grabbed/rising 状态 — 隐形但占格, 无法复种也无法交互
+  bungeeDie() {
+    const p = this.targetPlant || this.stolenPlant;
+    if (p && !p.dead) {
+      if (p.onBungeeState === 'grabbed') {
+        // 掉回: 恢复植物正常状态 (原版 BungeeDropPlant: GETTING_GRABBED → NOT_ON_BUNGEE)
+        p.onBungeeState = null;
+        p.bungeeZombie = null;
+        this.renderOrder = this.row * 10000 + 301000 + 7;   // 恢复原渲染层
+      } else if (p.onBungeeState === 'rising') {
+        this.board.plantsEaten = (this.board.plantsEaten || 0) + 1;
+        p.die();                    // die() → dead + _clearGrid → 格子立即可复种
+      }
+    }
+    this.targetPlant = null;
+    this.stolenPlant = null;
   }
 
   // ---------------- 践踏 ----------------
@@ -2768,7 +2791,7 @@ class Zombie {
   }
 
   // ---------------- 伤害 ----------------
-  // 兼容两种签名: takeDamage(dmg, flags) | takeDamage(dmg, board, {noFlash, chill, exploded, squashed, fire})
+  // 兼容两种签名: takeDamage(dmg, flags) | takeDamage(dmg, board, {noFlash, chill, exploded, squashed, fire, bypassesShield, hitsShieldAndBody})
   takeDamage(dmg, flagsOrBoard = 0, opts = null) {
     let flags = 0;
     let fire = false;
@@ -2779,6 +2802,9 @@ class Zombie {
       if (opts && (opts.noFlash || opts.exploded)) flags |= DMG.DOESNT_CAUSE_FLASH;
       if (opts && opts.chill) flags |= DMG.FREEZE;
       if (opts && opts.squashed) flags |= DMG.DOESNT_LEAVE_BODY;
+      // #修复(西瓜溅射): 原版 GetDamageFlags — 抛物线弹 BYPASSES_SHIELD / 溅射弹 HITS_SHIELD_AND_BODY
+      if (opts && opts.bypassesShield) flags |= DMG.BYPASSES_SHIELD;
+      if (opts && opts.hitsShieldAndBody) flags |= DMG.HITS_SHIELD_AND_BODY;
       if (opts && opts.fire) fire = true;
     }
     if (this.phase === PH.JACK_POPPING || this.isDeadOrDying) return;
@@ -3565,6 +3591,8 @@ class Zombie {
         if (fz && !fz.dead) fz.bobsledDie();
       }
     }
+    // #修复(植物残留): 原版 DieNoLoot — BUNGEE 死亡时 BungeeDie() 处置携带植物
+    if (this.type === 'BUNGEE') this.bungeeDie();
   }
 
   bobsledDie() {

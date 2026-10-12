@@ -132,8 +132,10 @@ class Projectile {
           //   命中矩形 (700,80,90,430) 覆盖全部行)
           const boss = board.bossZombie;
           if (boss && !boss.dead && !boss.isDeadOrDying && this.x > 690 && this.x < 800) {
-            boss.takeDamage(this.def.dmg, board, { chill: this.def.chill });
-            this.splat(board, this.x);
+            // #修复(西瓜溅射): 僵王命中同样走原版 DoImpact → DoSplashDamage (直击 80 + 溅射区 26)
+            if (this.def.splashDmg) this.splashDamage(board, boss);
+            else boss.takeDamage(this.def.dmg, board, { chill: this.def.chill, bypassesShield: this.def.lob });
+            this.impactFx(board);
             this.dead = true;
             return;
           }
@@ -141,11 +143,17 @@ class Projectile {
             if (z.dead || z.row !== this.row || z.hittable === false || z.boss || z.underground || z.underwater) continue;
             // 原版碰撞盒重叠: 僵尸盒~90px宽 × 子弹盒~40px宽 → 中心距<62
             if (Math.abs(z.hitX() - this.x) < 62) {
-              const flags = { chill: this.def.chill };
-              z.takeDamage(this.def.dmg, board, flags);
-              if (this.def.stun) z.butter = this.def.stun;
-              if (this.type === 'butter') board.game.audio.play('butterhit');
-              this.splat(board, this.x);
+              if (this.def.splashDmg) {
+                // #修复(西瓜溅射): 中弹走 DoSplashDamage — 直击全额 + 溅射区(行±1)内其余僵尸 dmg/3
+                this.splashDamage(board, z);
+                this.impactFx(board);
+              } else {
+                // 原版 GetDamageFlags: 抛物线非溅射弹 BYPASSES_SHIELD (卷心菜/玉米/黄油直穿铁门盾)
+                z.takeDamage(this.def.dmg, board, { chill: this.def.chill, bypassesShield: this.def.lob });
+                if (this.def.stun) z.butter = this.def.stun;
+                if (this.type === 'butter') board.game.audio.play('butterhit');
+                this.splat(board, this.x);
+              }
               this.dead = true;
               return;
             }
@@ -295,28 +303,85 @@ class Projectile {
 
   land(board) {
     const y = board.gridY(this.row) + 35;
-    // 落点僵尸判定
-    let hitAny = false;
-    for (const z of board.zombies) {
-      if (z.dead || z.row !== this.row || z.hittable === false || z.boss || z.underground || z.underwater) continue;
-      if (Math.abs(z.hitX() - this.x) < 55) {
-        hitAny = true;
-        const flags = { chill: this.def.chill };
-        z.takeDamage(this.def.dmg, board, flags);
-        if (this.def.stun) z.butter = this.def.stun;
-        // 黄油命中音
-        if (this.type === 'butter') board.game.audio.play('butterhit');
-      } else if (this.def.splash && Math.abs(z.hitX() - this.x) < 110) {
-        z.takeDamage(this.def.splash, board, { chill: this.def.chill, noFlash: true });
-        hitAny = true;
-      }
-    }
     // 落点植物(僵尸篮球)
     if (this.zombieProj) { /* handled elsewhere */ }
-    // 特效
-    board.addEffect(this.type === 'melon' || this.type === 'wintermelon' ? 'melonsplat' : 'splat', this.x, y);
-    board.game.audio.play(this.type === 'melon' || this.type === 'wintermelon' ? 'melonimpact' : 'splat3');
+    if (this.def.splashDmg) {
+      // #修复(西瓜溅射): 原版落地 = DoImpact(null) → DoSplashDamage(null)
+      //   溅射区内 (投影矩形×行±1) 全部僵尸吃 dmg/3 (26), 无直击全额目标
+      this.splashDamage(board, null);
+      this.impactFx(board);
+    } else {
+      // 落点僵尸判定 (卷心菜/玉米/黄油)
+      for (const z of board.zombies) {
+        if (z.dead || z.row !== this.row || z.hittable === false || z.boss || z.underground || z.underwater) continue;
+        if (Math.abs(z.hitX() - this.x) < 55) {
+          z.takeDamage(this.def.dmg, board, { chill: this.def.chill, bypassesShield: true });
+          if (this.def.stun) z.butter = this.def.stun;
+          if (this.type === 'butter') board.game.audio.play('butterhit');
+        }
+      }
+      board.addEffect('splat', this.x, y);
+      board.game.audio.play('splat3');
+    }
     this.dead = true;
+  }
+
+  // ---------- #修复(西瓜溅射) 原版 DoSplashDamage (Projectile.cpp 460-494) ----------
+  // 西瓜/冰西瓜命中(直击僵尸或落地): 直击目标吃全额 80 (HITS_SHIELD_AND_BODY);
+//   溅射区 (IsZombieHitBySplash: 投影矩形 Rect(x+20,y,60,80) × 僵尸矩形重叠, 行差±1, BOSS 归零)
+  //   内其余僵尸各吃 dmg/3 (26); 总量上限 dmg*7, 超限按原版公式重分配
+  splashDamage(board, directTarget) {
+    const def = this.def;
+    const chill = !!def.chill;
+    const inZone = (z) => {
+      if (z.dead || z.isDeadOrDying) return false;
+      if (z.mindControlled) return false;              // 原版 EffectedByDamage: 魅惑僵尸不受友方弹溅射
+      if (z.underground || z.underwater) return false;
+      let rowDev = z.row - this.row;
+      if (z.boss) rowDev = 0;                          // 原版: BOSS 行差强制归零
+      if (rowDev > 1 || rowDev < -1) return false;
+      const pr = { x: this.x + 20, y: this.y, w: 60, h: 80 };   // 原版 GetProjectileRect(西瓜)
+      const zr = z.getZombieRect();
+      const ow = Math.min(pr.x + pr.w, zr.x + zr.w) - Math.max(pr.x, zr.x);
+      const oh = Math.min(pr.y + pr.h, zr.y + zr.h) - Math.max(pr.y, zr.y);
+      return ow > 0 && oh > 0;
+    };
+    // 统计溅射人数 (不含直击目标 — 原版 aZombiesGetSplashed)
+    let n = 0;
+    for (const z of board.zombies) {
+      if (z === directTarget) continue;
+      if (inZone(z)) n++;
+    }
+    const original = def.dmg;
+    let splash = Math.floor(original / 3);              // 原版 aSplashDamage = mDamage/3
+    const maxTotal = original * 7;                     // 原版 aMaxSplashDamageAmount
+    const total = splash * n;
+    if (total > maxTotal) {
+      splash = Math.max(1, Math.floor(original * maxTotal / (total * 3)));
+    }
+    for (const z of board.zombies) {
+      if (!inZone(z)) continue;
+      if (z === directTarget) {
+        // 直击: 全额 + 盾身同伤 (原版 DAMAGE_HITS_SHIELD_AND_BODY) + 冬瓜冰冻
+        z.takeDamage(original, board, { chill, hitsShieldAndBody: true });
+      } else {
+        z.takeDamage(splash, board, { chill, noFlash: false, hitsShieldAndBody: true });
+      }
+    }
+  }
+
+  // ---------- #修复(碎西瓜) 命中特效/音效 — 中弹与落地统一 ----------
+  impactFx(board) {
+    if (this.def.splashDmg) {
+      const y = board.gridY(this.row) + 35;
+      const winter = this.type === 'wintermelon';
+      // 碎西瓜块粒子 (原版 PARTICLE_MELONSPLASH/WINTERMELON) + 汁液飞溅云
+      board.addEffect('melonchunks', this.x, y, { winter });
+      board.addEffect('melonsplat', this.x + 12, y, { winter });
+      board.game.audio.play('melonimpact');
+    } else {
+      this.splat(board, this.x);
+    }
   }
 
   // ---------- 僵尸方子弹 ----------

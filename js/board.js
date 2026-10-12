@@ -600,7 +600,8 @@ class Board {
     this._waveHP = hp;
     if (w.boss) {
       this.spawnZombieForWave('BOSS', 0, this.wave - 1);
-      this.game.audio.play('bossintro');
+      // #fix(boss-audio): 原版 Boss 生成 (PlayBossEnter/AddZombie) 不播任何音效 —
+      //   evillaugh 属主菜单"冒险"按钮音 (GameSelector mStartingGameCounter==125)
     }
     // 原版: 最后一波刷出后 200tick → 墓碑/泳池/天空额外僵尸 (SpawnZombiesFromGraves/Pool/Sky)
     if (this.wave === this.totalWaves && !this.level.endless) {
@@ -1863,6 +1864,28 @@ class Effect {
       this.fvy = Math.sin(ang) * 8;
     }
     if (name === 'puffmuzzle') this.life = 0.28;
+    // #修复(碎西瓜): 原版 PARTICLE_MELONSPLASH / PARTICLE_WINTERMELON — 9 块瓜皮红瓢碎块弹飞
+    //   (原素材 melonpult_particles / wintermelon_particles 334×37 精确分段盒, 尺寸递减)
+    if (name === 'melonchunks') {
+      this.parts = [];
+      const SHEET = [ // [x0, x1, y0, y1] — 透明分段实测盒
+        [4, 31, 2, 34], [39, 70, 4, 34], [76, 107, 2, 35], [115, 143, 3, 34], [152, 179, 6, 29],
+        [193, 213, 7, 28], [233, 248, 8, 29], [271, 283, 12, 25], [311, 319, 15, 22],
+      ];
+      for (let i = 0; i < SHEET.length; i++) {
+        const [x0, x1, y0, y1] = SHEET[i];
+        const dir = (i % 2 === 0 ? -1 : 1) * (0.4 + Math.random() * 0.6);   // 左右交替半球向外
+        this.parts.push({
+          sx: x0, sy: y0, sw: x1 - x0 + 1, sh: y1 - y0 + 1,
+          x: 0, y: 0,
+          vx: dir * (60 + Math.random() * 110),
+          vy: -(90 + Math.random() * 170),
+          vr: (Math.random() - 0.5) * 14,
+          rot: Math.random() * Math.PI * 2,
+          sc: 1 + (i < 4 ? 0.25 : 0),   // 大块稍放大增强可见性
+        });
+      }
+    }
   }
   update(dt, board) {
     this.t += dt;
@@ -1907,6 +1930,17 @@ class Effect {
           p.rot += p.vr * dt;
         }
         if (this.t > 1.4) this.dead = true;
+        break;
+      }
+      case 'melonchunks': {
+        // #修复(碎西瓜): 9 块碎瓜弹飞 — 重力 700, 自旋, 1.1s 消散
+        for (const p of this.parts || []) {
+          p.vy += 700 * dt;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.rot += p.vr * dt;
+        }
+        if (this.t > 1.1) this.dead = true;
         break;
       }
       default: if (this.t > 1) this.dead = true;

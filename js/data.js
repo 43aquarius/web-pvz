@@ -205,8 +205,9 @@ const PROJECTILES = {
   cabbage:      { dmg: 40, speed: 0, lob: true, arcH: 180, img: 'cabbagepult_cabbage' },
   corn:         { dmg: 20, speed: 0, lob: true, arcH: 180, img: 'cornpult_kernal' },
   butter:       { dmg: 20, speed: 0, lob: true, arcH: 180, img: 'cornpult_butter', stun: 4 },
-  melon:        { dmg: 80, speed: 0, lob: true, arcH: 200, splash: 40, img: 'melonpult_melon' },
-  wintermelon:  { dmg: 80, speed: 0, lob: true, arcH: 200, splash: 40, chill: true, img: 'wintermelon_melon' },
+  // splashDmg: 原版 IsSplashDamage (西瓜/冰西瓜) — 命中/落地走 DoSplashDamage: 直击全额 + 区内其余 dmg/3
+  melon:        { dmg: 80, speed: 0, lob: true, arcH: 200, splashDmg: true, img: 'melonpult_melon' },
+  wintermelon:  { dmg: 80, speed: 0, lob: true, arcH: 200, splashDmg: true, chill: true, img: 'wintermelon_melon' },
   basketball:   { dmg: 30, speed: 300, lob: true, img: 'zombie_catapult_basketball', arcH: 120, zproj: true },
   cob:          { dmg: 2250, speed: 0, cob: true, img: 'cobcannon_cob', arcH: 250, splash: 0 },
   bossfire:     { dmg: 2000, speed: 220, reanim: 'Zombie_boss_fireball', zproj: true },

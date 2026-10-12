@@ -86,8 +86,15 @@ const Audio2 = (function () {
     bowling: 'SFX/plant/bowling.ogg', bowlingpin: 'SFX/bullet/bowlingimpact.ogg', bowlingpin2: 'SFX/bullet/bowlingimpact2.ogg',
     coffee: 'sounds/coffee.ogg',
     coblauncher: 'sounds/coblaunch.ogg', coblaunch: 'sounds/coblaunch.ogg',
-    bossintro: 'sounds/evillaugh.ogg', bossdie: 'sounds/bossexplosion.ogg',
-    bossfireball: 'sounds/ignite.ogg', bossiceball: 'sounds/lightfill.ogg', bossstomp: 'sounds/thunder.ogg',
+    // #fix(boss-audio): 原版 SOUND_EVILLAUGH 属主菜单"冒险"按钮 (GameSelector mStartingGameCounter==125),
+    //   僵王入场 (PlayBossEnter) 不播任何音效 — 见 cutscene.js; 键名更名避免误用
+    evil_laugh: 'sounds/evillaugh.ogg', bossdie: 'sounds/bossexplosion.ogg',
+    // #fix(boss-audio): 原版僵王入场跺脚 = FOLEY_THUMP (SOUND_GARGANTUAR_THUMP), 非 thunder;
+    //   thunder.ogg 属暴雨夜闪电信效 (FOLEY_THUNDER)
+    bossfireball: 'sounds/ignite.ogg', bossiceball: 'sounds/lightfill.ogg',
+    bossstomp: 'SFX/zombie/gargantuar_thump.ogg',
+    // #fix(missing-sfx): 原版 FOLEY_THUMP 键缺失 — 蹦极落地触地/巨人砸击一直无声
+    thump: 'SFX/zombie/gargantuar_thump.ogg',
     // #1 僵王原版音效: 液压臂/吐球/丢露营车
     hydraulic: 'sounds/hydraulic.ogg', hydraulic_short: 'sounds/hydraulic_short.ogg',
     bossboulder: 'sounds/bossboulderattack.ogg', RVthrow: 'sounds/RVthrow.ogg',

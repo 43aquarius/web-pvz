@@ -546,7 +546,7 @@ class Plant {
               board.graves = board.graves.filter(x => x !== g);
               board.game.audio.play('gravebusterchomp');
             }
-            this.dead = true;
+            this.die();   // #fix(plant-residue): gravebuster finished -> die() clears grid
           }
         }
         break;
@@ -625,7 +625,7 @@ class Plant {
             z.spikeDamage(d.spikeDmg * dt, board, this);
             if ((z.type === 'ZAMBONI' || z.type === 'CATAPULT')) {
               // 被压毁(地刺王撑更久)
-              if (this.type === 'SPIKEWEED') { this.dead = true; }
+              if (this.type === 'SPIKEWEED') this.die();   // #fix(plant-residue): crushed by zamboni -> die() clears gridSpikes
             }
           }
         }
@@ -984,7 +984,7 @@ class Plant {
     this.hp -= dmg;
     this.eatFlash = 0.15;
     if (this.hp <= 0) {
-      this.dead = true;
+      this.die();   // #fix(plant-residue): original TakeDamage lethal -> Plant::Die() clears grid (old: dead=true left cell occupied forever)
       // 大蒜: 死前驱赶
       if (this.type === 'GARLIC') { /* 已在啃食时处理换行 */ }
     }
@@ -1031,10 +1031,16 @@ class Plant {
   get recentlyEatenCountdown() { return this._recentlyEaten || 0; }
   set recentlyEatenCountdown(v) { this._recentlyEaten = v; if (v > 0) this.eatFlash = Math.min(0.3, v / 200); }
   get isAsleep() { return this.sleeping; }
-  get notOnGround() { return this.type === 'COFFEEBEAN' || this.type === 'GRAVEBUSTER' || this.type === 'SQUASH' && this.state === 'rising'; }
+  get notOnGround() {
+    // #fix(plant-residue): original Plant::NotOnGround (Plant.cpp 2877) full semantics —
+    //   squash rising / coffeebean / gravebuster / squished / bungee-rising / dead
+    if (this.type === 'SQUASH' && this.state === 'rising') return true;
+    if (this.type === 'COFFEEBEAN' || this.type === 'GRAVEBUSTER') return true;
+    return !!(this.squished || this.dead || this.onBungeeState === 'rising');
+  }
   get isSpiky() { return this.type === 'SPIKEWEED' || this.type === 'SPIKEROCK'; }
   getPlantRect() { return { x: this.x, y: this.y + 10, w: 80, h: 70 }; }
-  spikeRockTakeDamage() { this.hp -= 20; if (this.hp <= 0) this.dead = true; }
+  spikeRockTakeDamage() { this.hp -= 20; if (this.hp <= 0) this.die(); }  // #fix(plant-residue): spikerock smashed -> die() clears gridSpikes
   die() {
     // 我不是僵尸: 向日葵死亡掉剩余阳光 (原版 IZombiePlantDropRemainingSun: remainingHP/40+1 个)
     if (!this.dead && this.board && this.board.mode === 'izombie' && this.type === 'SUNFLOWER') {

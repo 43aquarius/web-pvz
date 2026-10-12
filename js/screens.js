@@ -516,6 +516,9 @@ Screens.menu = {
       if (b.disabled) { game.audio.play('buzzer'); return; }
       if (b.k === 'adventure') {
         game.audio.play('gravebutton');
+        // #fix(boss-audio): 原版 GameSelector.cpp 795-796 — 点击"冒险"按钮启动游戏时
+        //   (mStartingGameCounter==125) 播 SOUND_EVILLAUGH (evillaugh.ogg)
+        game.audio.play('evil_laugh');
         this.inst && this.inst.setImageOverride('SelectorScreen_StartAdventure_button', null);
         game.startAdventure();
       } else if (b.k === 'minigames') {

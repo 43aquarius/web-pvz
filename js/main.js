@@ -315,17 +315,23 @@ const Game = {
     // 传送带: 点击带上卡片 → 取卡 (原版 MouseHitTest: x = 91+i*50+offset; 带区裁剪 90..591 —
     // 被裁剪的右侧入场区卡片不可点, 避免与传送带右侧铲子槽 (609) 的点击区重叠 #2)
     if (board.mode === 'conveyor' && board.belt) {
+      // #fix(conveyor): 点击区 y 需随种子银行 bankY 校正 — 与绘制位置 (8+bankY) 一致;
+      //   旧实现固定 7..77, 过场期银行滑入阶段 (bankY<0) 视觉卡与命中区错位
+      const beltBankY = Cutscene.active ? Cutscene.seedBankY : 0;
       for (let i = 0; i < board.belt.items.length; i++) {
         const it = board.belt.items[i];
         const x = 91 + i * 50 + it.offset;
         if (x >= 591) continue;   // 带面裁剪区外的卡不可见不可点
-        if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
+        if (p.x > x && p.x < x + 50 && p.y > beltBankY + 7 && p.y < beltBankY + 77) {
           board.belt.items.splice(i, 1);
           // 原版 RemoveSeed: 后续卡 offsetX += 51 (视觉不动, 再滑入新槽位)
           for (let j = i; j < board.belt.items.length; j++) board.belt.items[j].offset += 51;
           board.seedCards = [{ type: it.type, cd: 0 }];
           this.selectedCard = 0;
           this.shovelMode = false;
+          // #fix(conveyor): 取卡后卡牌从带位滑向最左槽位 (用户报告: 卡牌不会"跑"到最左边,
+          //   旧实现瞬移无过渡) — 记录起点/时刻供 ui.js 绘制 0.25s ease-out 飞行动画
+          this.beltFly = { x0: x + 25, t0: performance.now(), dur: 250 };
           this.audio.play('seedlift');
           return;
         }
@@ -522,6 +528,16 @@ const Game = {
     // 墓碑吞噬者必须种在墓碑上
     if (type === 'GRAVEBUSTER') {
       if (!board.graves.some(g => g.row === row && g.col === col)) { this.audio.play('buzzer'); return; }
+    }
+    // #fix(plant-residue): 占位检查前兜底清理 — 该格所有网格数组中残留的已死植物引用
+    //   一律视为空地 (防御未知死亡路径漏清格; 已知路径均已改走 die()/_clearGrid, 见 plants.js)
+    //   涵盖: 被蹦极偷走/被砸死/被吃死/被压扁 — 用户报告: 植物已消失但仍无法复种
+    {
+      const grids5 = [board.grid, board.gridLily, board.gridPot, board.gridPumpkin, board.gridSpikes];
+      for (const g of grids5) {
+        const cellRef = g[row] && g[row][col];
+        if (cellRef && cellRef.dead) g[row][col] = null;
+      }
     }
     // 占位检查 (保龄球: 坚果直接滚动不占格)
     if (bowling) {

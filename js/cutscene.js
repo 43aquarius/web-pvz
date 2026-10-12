@@ -266,8 +266,11 @@ const Cutscene = {
     //   → 过场尾声 Zombot 走入, 期间 0.24/0.79 处跺脚震屏 — updateBoss SCENE_LEVEL_INTRO 分支)
     if (this.board.level.fixed === 'boss' && !this._bossSpawned && t >= rspStart) {
       this._bossSpawned = true;
-      const boss = this.board.spawnZombieForWave('BOSS', 0, 0);
-      if (boss) this.board.game.audio.play('bossintro');   // 原版 SOUND_EVILLAUGH 入场奸笑
+      this.board.spawnZombieForWave('BOSS', 0, 0);
+      // #fix(boss-audio): 原版 Challenge::PlayBossEnter (CutScene.cpp 1294) = 仅 AddZombie(ZOMBIE_BOSS),
+      //   不播任何音效; 旧实现误播 evillaugh — 即主菜单进入冒险模式时的音效 (GameSelector.cpp 796
+      //   mStartingGameCounter==125 处), 用户报告: 僵王刚出场出现该音效, 正常没有.
+      //   入场跺脚 (FOLEY_THUMP=gargantuar_thump) 由 updateBoss 0.24/0.79 处触发, 已修键映射.
     }
     if (!level.noReadySet && !this.rspDone && !this.rspAnim && t >= rspStart && RE.hasDef('StartReadySetPlant')) {
       this.rspDone = true;      // 防止播完后被重置重新创建 (重复bug根因)
