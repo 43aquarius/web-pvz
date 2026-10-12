@@ -270,6 +270,14 @@ def main():
         if fl in disk_images:
             claim_img(disk_images[fl], 'fx')
 
+    # 0.7) 蹦极僵尸战斗贴图强制归 zombie_bungee (#修复: 蹦极绳索/目标十字标志):
+    #   bungeecord/bungeetarget 无 reanim 引用而落入 misc (关卡永不加载) →
+    #   蹦极关卡绳索与预警标志无贴图 (僵尸"不显示"/标志缺失根因)
+    for fname in ('bungeecord', 'bungeetarget'):
+        fl = fname + '.png'
+        if fl in disk_images:
+            claim_img(disk_images[fl], 'zombie_bungee')
+
     # 1) 植物 (按解锁顺序 — 共享图归最早解锁者)
     for ptype in SEED_ORDER + [t for t in PLANT_REANIM if t not in SEED_ORDER]:
         rn = PLANT_REANIM[ptype]

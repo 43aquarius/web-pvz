@@ -622,6 +622,8 @@ class Zombie {
   playZombieReanim(anim, loopType, blendTime, rate) {
     const r = this.bodyReanim;
     if (!r) return;
+    // #修复(分包竞态): 记录最近动画 — reanim 定义延迟就绪重建后可恢复
+    this._lastAnim = { anim, loopType, rate: (rate !== 0 && rate != null) ? rate : this.originalAnimRate };
     if (blendTime > 0) r.startBlend(blendTime);
     if (rate !== 0 && rate != null) {
       r.animRate = rate;
@@ -833,6 +835,12 @@ class Zombie {
   // ---------------- 主更新 (1 tick = 10ms) ----------------
   update() {
     if (this.dead) return;
+    // #修复(分包竞态自愈): 生成时分包尚未下载完 → reanim 无定义 (frameCount=0) 僵尸永久隐形;
+    //   周期检测定义就绪后重建 reanim 并恢复动画 (植物侧已有 _rebuildAnims 同类机制)
+    if ((!this.bodyReanim || !this.bodyReanim.def) && this.def && this.def.reanim) {
+      this._healTick = (this._healTick || 0) + 1;
+      if (this._healTick % 10 === 0) this._healReanim();
+    }
     this.zombieAge++;
     let doUpdate = false;
     if (this.board.state === 'playing' || !this.isOnBoard || this.fromWave === WAVE_WINNER) doUpdate = true;
@@ -872,6 +880,34 @@ class Zombie {
     this.x = Math.floor(this.posX);
     this.y = Math.floor(this.posY);
     this.updateReanim();
+  }
+
+  // 分包就绪后重建 reanim (恢复最近动画 + 类型特定渲染分组)
+  _healReanim() {
+    try {
+      if (!RE.hasDef(this.def.reanim)) return;
+      const old = this.bodyReanim;
+      const r = this.board.addReanimEffect(this.def.reanim, 0, 0, 0);
+      r.loopType = RE.LOOP;
+      r.isAttachment = true;
+      r.tickDriven = true;
+      this.bodyReanim = r;
+      if (this._lastAnim && r.animExists(this._lastAnim.anim)) {
+        this.playZombieReanim(this._lastAnim.anim, this._lastAnim.loopType, 0, this._lastAnim.rate);
+      } else if (this.isOnBoard) {
+        this.startWalkAnim(0);
+      }
+      // BUNGEE 渲染分组 (初始化时因无定义而未生效)
+      if (this.type === 'BUNGEE') {
+        r.assignRenderGroupToPrefix('Zombie_bungi_rightarm_lower2', RG.ARMS);
+        r.assignRenderGroupToPrefix('Zombie_bungi_rightarm_hand2', RG.ARMS);
+        r.assignRenderGroupToPrefix('Zombie_bungi_leftarm_lower2', RG.ARMS);
+        r.assignRenderGroupToPrefix('Zombie_bungi_leftarm_hand2', RG.ARMS);
+        r.setTruncateDisappearingFrames(null, false);
+      }
+      if (old) { try { old.dead = true; } catch (e) { } }
+      this.updateReanim();
+    } catch (e) { }
   }
 
   updatePlaying() {
@@ -2050,29 +2086,32 @@ class Zombie {
     else if (age < 8000) type = 'CONE';
     else if (age < 12500) type = 'BUCKET';
     else {
-      // 原版 gBossZombieList 随机 (第0行不出巨人)
+      // 原版 gBossZombieList 随机 (BossSpawnContact: 第0行不出巨人 — 末位 gargantuar 剔除)
       const pool = ['CONE', 'BUCKET', 'FOOTBALL', 'POLEVAULTER', 'JACK', 'LADDER', 'ZAMBONI', 'CATAPULT', 'POGO', 'NEWSPAPER', 'DOOR', 'GARGANTUAR'];
-      type = pool[Math.floor(Math.random() * pool.length)];
+      let n = pool.length;
+      if (this.bossTargetRow === 0) n--;
+      type = pool[Math.floor(Math.random() * n)];
     }
-    const rows = b.grassRows.filter(rr => !(type === 'GARGANTUAR' && rr === 0));
-    const row = rows[Math.floor(Math.random() * rows.length)];
-    const z = b.spawnZombieForWave(type, row, b.wave - 1);
+    // #修复(放僵位置): 原版 AddZombieInRow(type, mTargetRow) — 与手部动画 (anim_spawn_N)
+    //   同一行; 旧实现随机选行 → 手伸向一行但僵尸出现在另一行
+    const z = b.spawnZombieForWave(type, this.bossTargetRow, b.wave - 1);
     if (z) { z.posX = 600; z.x = 600; }
   }
 
-  // 原版 BossStompAttack: 只踩有植物的行 (BossCanStompRow: 第5列及以右有植物)
+  // 原版 BossStompAttack: 只踩有植物的 0-3 行 (BossCanStompRow: 目标行×2 第5列及以右有植物)
   bossStompAttack() {
     this.phase = PH.BOSS_STOMPING;
     const b = this.board;
-    const rows = b.grassRows.filter(rr => {
+    // #修复(踩踏行): 原版仅 0-3 行参与 (anim_stomp_1..4); 第4行无对应动画
+    const rows = [];
+    for (let rr = 0; rr < 4 && rr < b.rows; rr++) {
       for (let c = 5; c < 9; c++) {
         const p = b.grid[rr] && b.grid[rr][c];
-        if (p && !p.dead) return true;
+        if (p && !p.dead) { rows.push(rr); break; }
       }
-      return false;
-    });
+    }
     this.bossTargetRow = rows.length ? rows[Math.floor(Math.random() * rows.length)]
-      : b.grassRows[Math.floor(Math.random() * b.grassRows.length)];
+      : Math.floor(Math.random() * Math.min(4, b.rows));
     this.bossStompCounter = 5500 + Math.floor(Math.random() * 1000);
     this.playZombieReanim('anim_stomp_' + (1 + Math.min(3, this.bossTargetRow)), RE.PLAY_ONCE_HOLD, 20, 12);
     this.board.game.audio.play('hydraulic_short');
@@ -2113,8 +2152,10 @@ class Zombie {
       const z = b.spawnZombieForWave('BUNGEE', 0, b.wave - 1);
       if (z) {
         // 原版 PickBungeeZombieTarget(targetCol+i): 指定列选格 + 从僵王手臂高度落下
+        // (BossBungeeSpawn: mAltitude = mPosY - 30 — 低空快速落下, 非天顶 3000)
         z.bungeeTargetCol = this.bossTargetCol + i;
         try { z.pickBungeeTarget(z.bungeeTargetCol); } catch (e) { }
+        if (!z.dead) z.altitude = Math.max(60, z.posY - 30);
         this.bossBungeeRefs.push(z);
       }
     }
@@ -2576,6 +2617,10 @@ class Zombie {
   }
 
   updateZombieBungee() {
+    // ---- 原版 UpdateZombieBungee (Zombie.cpp 1341-1390) 时序 ----
+    //   下落: -8/tick (3.75s 从 3000 落地; 旧实现 -24 → 仅 1.3s 且大部分在屏外, 观感"不显示")
+    //   落地: AT_BOTTOM 悬停 300tick + anim_idle 摆动 → 抓取 anim_grab → 上升 +8/tick
+    //   上升: 至 600 (出屏) 即消失 (旧实现升满 3000 — 屏外隐形多飞 2s)
     switch (this.phase) {
       case PH.BUNGEE_CUTSCENE: {
         this.phaseCounter--;
@@ -2584,45 +2629,38 @@ class Zombie {
         }
         break;
       }
-      case PH.BUNGEE_DIVING: {
-        this.altitude -= 24;
-        if (this.altitude <= 0) {
-          this.altitude = 0;
-          this.phase = PH.BUNGEE_AT_BOTTOM;
-          this.phaseCounter = 50;
-          this.board.game.audio.play('thump');
+      case PH.BUNGEE_DIVING: case PH.BUNGEE_DIVING_SCREAMING: {
+        const oldAlt = this.altitude;
+        this.altitude -= 8;
+        // 原版 BungeeLanding: alt<1500 → 尖叫 (非僵王关)
+        if (this.phase === PH.BUNGEE_DIVING && this.altitude < 1500 && !(this.board.level && this.board.level.bossNight)) {
+          this.board.game.audio.play('bungee_scream');
+          this.phase = PH.BUNGEE_DIVING_SCREAMING;
         }
+        // 原版: 目标标志落地音 (穿过 2600 时 grassstep)
+        if (this.altitude <= BUNGEE_ZOMBIE_HEIGHT - 404 && oldAlt > BUNGEE_ZOMBIE_HEIGHT - 404) {
+          this.board.game.audio.play('grassstep');
+        }
+        this.bungeeLanding();
         break;
       }
       case PH.BUNGEE_AT_BOTTOM: {
-        if (this.phaseCounter === 25) {
-          const p = this.board.getTopPlantAt(this.targetCol, this.row, 'bungee');
-          if (p) {
-            this.targetPlant = p;
-            p.onBungeeState = 'grabbed';
-            this.phase = PH.BUNGEE_GRABBING;
-          }
-        }
         if (this.phaseCounter <= 0) {
-          this.phase = PH.BUNGEE_RISING;
-          this.playZombieReanim('anim_raise', RE.PLAY_ONCE_HOLD, 0, 36);
+          this.bungeeStealTarget();
+          this.phase = PH.BUNGEE_GRABBING;
         }
         break;
       }
       case PH.BUNGEE_GRABBING: {
         if (this.bodyReanim.loopCount > 0) {
-          const p = this.targetPlant;
-          if (p && !p.dead) {
-            this.bungeeStealTarget();
-          }
+          this.bungeeLiftTarget();
           this.phase = PH.BUNGEE_RISING;
-          this.playZombieReanim('anim_raise', RE.PLAY_ONCE_HOLD, 0, 36);
         }
         break;
       }
       case PH.BUNGEE_RISING: {
-        this.altitude += 12;
-        if (this.altitude >= BUNGEE_ZOMBIE_HEIGHT) {
+        this.altitude += 8;
+        if (this.altitude >= 600) {
           if (this.stolenPlant) {
             this.stolenPlant.dead = true;
             this.stolenPlant = null;
@@ -2634,18 +2672,49 @@ class Zombie {
     }
   }
 
-  bungeeStealTarget() {
-    const p = this.targetPlant;
-    if (!p || p.dead) return;
-    if (p.type === 'SPIKEROCK' || p.type === 'SPIKEWEED' || p.type === 'LILYPAD' || p.type === 'FLOWERPOT' || p.type === 'PUMPKIN' ||
-      p.type === 'CHERRYBOMB' || p.type === 'JALAPENO' || p.type === 'BLOVER' || p.type === 'ICESHROOM' || p.type === 'DOOMSHROOM') {
-      // 原版: 这些被蹦极抓走直接销毁
-      this.board.game.audio.play('bang');
+  // 原版 BungeeLanding (Zombie.cpp 1286-1338): 触地判定 → 悬停/弹开/释放
+  bungeeLanding() {
+    if (this.altitude > 40) return;
+    if (this.altitude > 0) {
+      this.altitude = Math.max(0, this.altitude);
+      if (this.altitude > 0) return;
     }
-    p.onBungeeState = 'rising';
-    p.bungeeZombie = this;
-    this.stolenPlant = p;
-    this.board.game.audio.play('bungeesteal');
+    this.altitude = 0;
+    this.phase = PH.BUNGEE_AT_BOTTOM;
+    this.phaseCounter = 300;                                  // 原版: 300tick 悬停
+    this.playZombieReanim('anim_idle', RE.LOOP, 5, 24);
+    this.bodyReanim.animTime = 0.5;
+    this.board.game.audio.play('thump');
+  }
+
+  // 原版 BungeeStealTarget (Zombie.cpp 1229): 播抓取动画 + 锁定植物
+  bungeeStealTarget() {
+    this.playZombieReanim('anim_grab', RE.PLAY_ONCE_HOLD, 20, 24);
+    const p = this.board.getTopPlantAt(this.targetCol, this.row, 'bungee');
+    if (p && !p.dead && p.type !== 'COBCANNON' && p.type !== 'GRAVEBUSTER') {
+      this.targetPlant = p;
+      p.onBungeeState = 'grabbed';
+      // 原版: 抓到植物后渲染层提升至子弹层 (植物随蹦极绘制在最前)
+      this.renderOrder = this.row * 10000 + 305000;
+    }
+  }
+
+  // 原版 BungeeLiftTarget (Zombie.cpp 1247): 抓走植物 → 上升
+  bungeeLiftTarget() {
+    this.playZombieReanim('anim_raise', RE.PLAY_ONCE_HOLD, 0, 36);
+    const p = this.targetPlant;
+    if (p && !p.dead) {
+      // 原版: 地刺/花盆/睡莲/南瓜/即时引爆类被蹦极抓走直接销毁 (bang)
+      if (p.type === 'SPIKEROCK' || p.type === 'SPIKEWEED' || p.type === 'LILYPAD' || p.type === 'FLOWERPOT' || p.type === 'PUMPKIN' ||
+        p.type === 'CHERRYBOMB' || p.type === 'JALAPENO' || p.type === 'BLOVER' || p.type === 'ICESHROOM' || p.type === 'DOOMSHROOM') {
+        this.board.game.audio.play('bang');
+      }
+      p.onBungeeState = 'rising';
+      p.bungeeZombie = this;
+      this.stolenPlant = p;
+      this.board.game.audio.play('floop');
+    }
+    this.targetPlant = null;
   }
 
   // ---------------- 践踏 ----------------
@@ -2991,7 +3060,7 @@ class Zombie {
         DOLPHIN: 'zombie_dolphinrider_outerarm_hand',
         LADDER: 'zombie_ladder_outerarm_hand2',
       };
-      this.board.addLimbParticle('arm', px, py, ARM_IMG[this.type] || 'zombie_outerarm_hand');
+      this.board.addLimbParticle('arm', px, py, ARM_IMG[this.type] || 'zombie_outerarm_hand', this.row);
     }
   }
 
@@ -3025,7 +3094,7 @@ class Zombie {
           if (tp) [px, py] = tp;
         }
       }
-      this.board.addLimbParticle('head', px, py);
+      this.board.addLimbParticle('head', px, py, null, this.row);
     }
     this.board.game.audio.play('limbspop');
   }
@@ -3061,7 +3130,7 @@ class Zombie {
     this.helmType = null;
     this.helmHealth = 0;
     if (!(flags & DMG.DOESNT_LEAVE_BODY)) {
-      this.board.addLimbParticle(kind, px, py);
+      this.board.addLimbParticle(kind, px, py, null, this.row);
     }
     this.updateDamageStates(flags);
   }
@@ -3070,7 +3139,7 @@ class Zombie {
     if (!this.shieldType) return;
     if (this.shieldType === 'door') {
       this.showDoorArms(false);
-      if (!(flags & DMG.DOESNT_LEAVE_BODY)) this.board.addLimbParticle('door', this.x + 20, this.y + 40);
+      if (!(flags & DMG.DOESNT_LEAVE_BODY)) this.board.addLimbParticle('door', this.x + 20, this.y + 40, null, this.row);
     } else if (this.shieldType === 'newspaper') {
       this.reanimShowPrefix('Zombie_paper_paper', RG.HIDDEN);
       // 报纸僵尸暴怒
@@ -3078,7 +3147,7 @@ class Zombie {
         this.phase = PH.NEWSPAPER_MADDENING;
         this.playZombieReanim('anim_maddening', RE.PLAY_ONCE_HOLD, 0, 24);
       }
-      if (!(flags & DMG.DOESNT_LEAVE_BODY)) this.board.addLimbParticle('newspaper', this.x + 30, this.y + 50);
+      if (!(flags & DMG.DOESNT_LEAVE_BODY)) this.board.addLimbParticle('newspaper', this.x + 30, this.y + 50, null, this.row);
     } else if (this.shieldType === 'ladder') {
       this.detachShield();
     }
@@ -3815,30 +3884,61 @@ class Zombie {
     r.drawRenderGroup(ctx, before ? RG.SHIELD : RG.OVER_SHIELD);
   }
 
+  // 原版 Zombie::DrawBungeeCord (Zombie.cpp 5859): bungeecord.png 从身体轨道位置向上平铺到屏幕顶
+  drawBungeeCord(ctx) {
+    const img = Assets.image('bungeecord');
+    if (!img) return;
+    const celH = img.height * this.scaleZombie;
+    const celW = img.width * this.scaleZombie;
+    let by = 0;
+    try {
+      const tp = this.getTrackPosition('Zombie_bungi_body');
+      if (tp) by = tp[1] - this.y;
+    } catch (e) { }
+    const x = -22 + 61 - 4 / this.scaleZombie;   // 原版: theOffsetX(-22) + 61 - 4/scale
+    ctx.save();
+    for (let y = by - celH; this.y + y > -celH; y -= celH) {
+      ctx.drawImage(img, x, y, celW, celH);
+    }
+    ctx.restore();
+  }
+
+  // 原版 Zombie::DrawBungeeTarget (Zombie.cpp 5581): 目标十字标志随僵尸下落, 落在目标格
+  // (#修复: 预先标志缺失 — 旧实现完全没有绘制 bungeetarget)
+  drawBungeeTarget(ctx) {
+    if (!this.isOnBoard) return;
+    if (this.board.level && this.board.level.bossNight) return;   // 原版: 僵王关不画 (BossBungeeSpawn 手臂投掷自带指向)
+    if (this.phase === PH.BUNGEE_HIT_OUCHY || this.phase === PH.BUNGEE_RISING) return;
+    if (this.phase === PH.BUNGEE_CUTSCENE) return;
+    const img = Assets.image('bungeetarget');
+    if (!img) return;
+    // 原版: aTargetX = mX+10 (+30→0), aTargetY = mY+60+bodyY+imageOffsetY (+(-600)→0)
+    //   曲线随 altitude 3000→2600 线性归零 (标志从天而降落在目标格)
+    let ox = 10, oy = 60;
+    if (this.phase === PH.BUNGEE_DIVING || this.phase === PH.BUNGEE_DIVING_SCREAMING) {
+      const t = Math.max(0, Math.min(1, (BUNGEE_ZOMBIE_HEIGHT - this.altitude) / 400));
+      ox += 30 * (1 - t);
+      oy += -600 * (1 - t);
+    }
+    ctx.drawImage(img, this.x + ox, this.y + oy);
+  }
+
   drawBungeeReanim(ctx) {
     const r = this.bodyReanim;
     if (!r) return;
-    // 绳子 (相对坐标: ctx 已 translate(this.x, this.y))
-    if (this.phase !== PH.BUNGEE_CUTSCENE) {
-      ctx.save();
-      ctx.strokeStyle = '#8b7355';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      const ropeX = 60;
-      ctx.moveTo(ropeX, -60);
-      ctx.lineTo(ropeX, 30);
-      ctx.stroke();
-      ctx.restore();
-    }
+    // 绳索: 平铺贴图跟随身体高度 (#修复: 旧实现固定 90px 直线, 与身体脱节)
+    if (this.phase !== PH.BUNGEE_CUTSCENE) this.drawBungeeCord(ctx);
     r.drawRenderGroup(ctx, RG.NORMAL);
     // 抓住植物上提 (drawAt 内部自行处理绝对坐标 — 需先抵消外层平移)
     if (this.stolenPlant && !this.stolenPlant.dead) {
       ctx.save();
       ctx.translate(-this.x, -this.y);
       const p = this.stolenPlant;
-      p.drawAt(ctx, this.x, this.y + 20 - (3000 - this.altitude) * 0.02);
+      p.drawAt(ctx, this.x, this.y + 20 - (600 - this.altitude) * 0.02);
       ctx.restore();
     }
+    // 原版 DrawBungeeReanim 末尾: 抓取手臂层画在植物之上 (RENDER_GROUP_ARMS)
+    r.drawRenderGroup(ctx, RG.ARMS);
   }
 
   // ---------- 兼容层 (供其他模块调用) ----------

@@ -198,6 +198,12 @@ class Plant {
 
   update(dt, board) {
     if (this.dead) return;
+    // 压扁渐隐 (原版 mSquished + mDisappearCountdown=500 tick)
+    if (this.squished) {
+      this.squishT += dt;
+      if (this.squishT > 5) { this.die(); }
+      return;
+    }
     // 我不是僵尸: 待机动画定格 (构造时 animRate=0), 射手仍开火 (原版 UpdateShooter 无 IZ 守卫)
     const iz = board.mode === 'izombie';
     for (const L of this.anims) {
@@ -641,16 +647,25 @@ class Plant {
     this.timer -= dt;
     const mouthY = this.y + 30;
     const inRow = (row) => board.zombiesInRow(row, this.x + 20, 900).length > 0;  // 原版攻击矩形: mX+60 → 屏幕右缘
+    // #修复(僵王索敌) 原版 Plant::FindTargetZombie (Plant.cpp 682): BOSS 行差强制归零 —
+    //   任意行植物均可索敌僵王; 攻击矩形 (GetPlantAttackRect) 需触及僵王机体 (700-790):
+    //   普通射手全屏 / 小喷菇 230 / 大喷菇 340 / 忧郁菇 240 盒
+    const bossTargetable = (atkX, atkW) => {
+      const bz = board.bossZombie;
+      if (!bz || bz.isDeadOrDying) return false;
+      const l = this.x + atkX, r = l + atkW;
+      return l < 790 && r > 700;
+    };
 
     let hasTarget = false;
     switch (this.type) {
       case 'PEASHOOTER': case 'SNOWPEA': case 'REPEATER': case 'LEFTPEATER': case 'GATLINGPEA': case 'CACTUS':
         hasTarget = this.type === 'LEFTPEATER'
           ? board.zombiesInRow(this.row, -100, this.x + 20).length > 0     // 向左射手: 目标在左侧 (原版攻击矩形镜像)
-          : inRow(this.row);
+          : (inRow(this.row) || bossTargetable(60, 800));                 // 原版: BOSS 行差归零, 任意行可打僵王
         break;
       case 'PUFFSHROOM': case 'SCAREDYSHROOM': case 'SEASHROOM':
-        hasTarget = inRow(this.row) && !(this.type === 'SCAREDYSHROOM' && this.isScared(board));
+        hasTarget = (inRow(this.row) || bossTargetable(60, (d.range || 3) * 80)) && !(this.type === 'SCAREDYSHROOM' && this.isScared(board));
         if (this.type === 'SCAREDYSHROOM') {
           // 胆小: 僵尸太近缩头
           const near = board.zombiesInRow(this.row, this.x - 20, this.x + 130).length > 0;
@@ -662,24 +677,27 @@ class Plant {
         }
         break;
       case 'FUMESHROOM':
-        hasTarget = inRow(this.row);
+        hasTarget = inRow(this.row) || bossTargetable(60, 340);
         break;
       case 'SPLITPEA':
-        hasTarget = inRow(this.row) || board.zombiesInRow(this.row, this.x - 200, this.x + 20).length > 0;
+        hasTarget = inRow(this.row) || board.zombiesInRow(this.row, this.x - 200, this.x + 20).length > 0 || bossTargetable(60, 800);
         break;
       case 'THREEPEATER':
-        hasTarget = inRow(this.row) || inRow(this.row - 1) || inRow(this.row + 1);
+        hasTarget = inRow(this.row) || inRow(this.row - 1) || inRow(this.row + 1) || bossTargetable(60, 800);
         break;
       case 'STARFRUIT':
         hasTarget = board.zombies.some(z => !z.dead && z.hittable !== false && !z.boss && !z.mindControlled &&
-          Math.abs(z.hitX() - (this.x + 40)) < 400 && Math.abs(z.row - this.row) <= 2);
+          Math.abs(z.hitX() - (this.x + 40)) < 400 && Math.abs(z.row - this.row) <= 2)
+          || bossTargetable(60, 800);
         break;
       case 'GLOOMSHROOM':
         hasTarget = board.zombies.some(z => !z.dead && !z.boss && z.hittable !== false && !z.mindControlled &&
-          Math.hypot(z.hitX() - (this.x + 40), board.gridY(z.row) + 42 - (this.y + 40)) < 300);
+          Math.hypot(z.hitX() - (this.x + 40), board.gridY(z.row) + 42 - (this.y + 40)) < 300)
+          || bossTargetable(-80, 240);
         break;
       case 'CATTAIL':
-        hasTarget = board.zombies.some(z => !z.dead && !z.boss && z.hittable !== false && !z.mindControlled);
+        hasTarget = board.zombies.some(z => !z.dead && !z.boss && z.hittable !== false && !z.mindControlled)
+          || !!(board.bossZombie && !board.bossZombie.isDeadOrDying);
         break;
       case 'CABBAGEPULT': case 'KERNELPULT': case 'MELONPULT': case 'WINTERMELON':
         // 原版 FindTargetZombie: BOSS 行差强制归零 → 僵王关投手无僵尸时也会朝僵王开火
@@ -734,16 +752,35 @@ class Plant {
     const game = board.game;
     const mouthY = this.y + 30;
     const playShoot = (a, rate) => {
-      // 头层切换到射击动画; 身体层植物(投手/仙人掌/忧郁菇)同样播放 (原版 Plant::Fire:
-      // PlayBodyReanim("anim_shooting", PLAY_ONCE_AND_HOLD, 20, 35) — #3 投手投掷动画)
+      // 原版 Plant::Fire (Plant.cpp 751-787) else-if 链: 有独立头部层且头部有射击动画时
+      //   仅头部播放 (SetFramesForLayer), 身体层保持 idle; 身体层 anim_shooting 只属于
+      //   无头植物 (投手/忧郁菇/仙人掌等)。
+      // #修复(射手下半身消失): 旧实现让身体层也播 anim_shooting — 该区间是头部专属动画
+      //   (茎/叶轨道在 29-78 帧 f=-1 隐藏) → 射击瞬间茎叶整体消失。
+      // 头部层动画名按层推导: anim_head_idle(N) → anim_shooting(N) (三线射手),
+      //   anim_splitpea_idle → anim_splitpea_shooting (裂荚后头), 其余用传入名。
+      let headShot = false;
       for (const L of this.anims) {
-        if (L.head) {
-          const shootAnim = a || L.base.replace('idle', 'shooting');
-          if (L.r.animExists(shootAnim)) { L.r.play(shootAnim, RE.PLAY_ONCE_HOLD, rate || 24); L.shooting = true; }
-          else if (L.r.animExists(L.base)) L.r.play(L.base, RE.LOOP, 12);
-        } else if (a && !L.attached && L.r.animExists(a)) {
-          L.r.play(a, RE.PLAY_ONCE_HOLD, rate || 24);
-          L.shooting = true;
+        if (!L.head) continue;
+        let shootAnim = a;
+        const hm = /^anim_head_idle(\d*)$/.exec(L.base);
+        if (hm) shootAnim = 'anim_shooting' + hm[1];
+        else if (L.base === 'anim_splitpea_idle') shootAnim = 'anim_splitpea_shooting';
+        if (!shootAnim || !L.r.animExists(shootAnim)) {
+          if (L.r.animExists(L.base)) L.r.play(L.base, RE.LOOP, 12);
+          continue;
+        }
+        L.r.play(shootAnim, RE.PLAY_ONCE_HOLD, rate || 24);
+        L.shooting = true;
+        headShot = true;
+      }
+      if (!headShot) {
+        for (const L of this.anims) {
+          if (L.head || L.attached) continue;
+          if (a && L.r.animExists(a)) {
+            L.r.play(a, RE.PLAY_ONCE_HOLD, rate || 24);
+            L.shooting = true;
+          }
         }
       }
     };
@@ -787,8 +824,12 @@ class Plant {
         // 攻击矩形: Rect(mX+60, mY, 340, mHeight)
         board.addEffect('fumecloud', this.x + 85, this.y + 31, { dir: 1 });
         for (const z of board.zombies) {
-          if (z.dead || z.row !== this.row || z.hittable === false || z.boss) continue;
+          if (z.dead || z.hittable === false || z.mindControlled) continue;
+          // #修复(僵王索敌) 原版 DoRowAreaDamage (Plant.cpp 1413): BOSS 行差归零可被喷中
+          //   (矩形 x+60..x+400 需触及僵王 700-790)
+          if (z.row !== this.row && !z.boss) continue;
           const zx = z.hitX();
+          if (z.boss && !(this.x + 60 < 790 && this.x + 400 > 700)) continue;
           if (zx > this.x + 60 && zx < this.x + 60 + 340) z.takeDamage(20, board, { noFlash: true });
         }
         playShoot('anim_shooting');
@@ -802,12 +843,14 @@ class Plant {
           board.addEffect('fumecloud', this.x + 40 + Math.cos(ang) * 55, this.y + 40 + Math.sin(ang) * 40, { dir: 0, scale: 1.4 });
         }
         for (const z of board.zombies) {
-          if (z.dead || z.boss || z.hittable === false) continue;
-          if (Math.abs(z.row - this.row) > 1) continue;
+          if (z.dead || z.hittable === false || z.mindControlled) continue;
+          // #修复(僵王索敌) 原版 (Plant.cpp 1436): BOSS 行差归零可被环云喷中
+          if (Math.abs(z.row - this.row) > 1 && !z.boss) continue;
           const zx = z.hitX(), zy = board.gridY(z.row) + 42;
-          if (zx > this.x - 80 && zx < this.x + 160 && zy > this.y - 80 && zy < this.y + 160) {
-            z.takeDamage(20, board, { noFlash: true });
-          }
+          if (z.boss) {
+            if (!(this.x + 160 > 700 && this.x - 80 < 790)) continue;
+          } else if (!(zx > this.x - 80 && zx < this.x + 160 && zy > this.y - 80 && zy < this.y + 160)) continue;
+          z.takeDamage(20, board, { noFlash: true });
         }
         playShoot('anim_shooting');
         game.audio.play('fume');
@@ -841,7 +884,8 @@ class Plant {
         break;
       }
       case 'CATTAIL': {
-        const z = board.zombies.filter(z => !z.dead && z.hittable !== false && !z.boss && !z.mindControlled)
+        // 原版: 香蒲全屏索敌 (BOSS 行差归零); 最近者优先, 无普通僵尸时打僵王
+        const z = board.zombies.filter(zz => !zz.dead && zz.hittable !== false && !zz.mindControlled && (!zz.boss || zz === board.bossZombie))
           .sort((a, b) => Math.hypot(a.hitX() - this.x, a.row - this.row) - Math.hypot(b.hitX() - this.x, b.row - this.row))[0];
         if (z) {
           board.projectiles.push(new Projectile('cattail', this.x + 40, this.y + 20, this.row, this, { target: z }));
@@ -1013,10 +1057,27 @@ class Plant {
     } catch (e) { }
   }
   squish() {
-    // 被巨人/冰车/投石压扁
+    // 被巨人/僵王/冰车/投石压扁
+    // 原版 Plant::Squish (Plant.cpp 2320-2350):
+    //   1) 即时引爆类 (樱桃/辣椒/魔菇/寒冰菇/已武装土豆雷) 被压 → 直接 DoSpecial 引爆
+    //   2) 已就绪坚果美不被压 (#修复: 旧实现一律立即销毁, 无压扁渐隐画面)
+    //   3) 其余 → 压扁贴图 (scaleY 0.25) 停留 500 tick 后消失
+    if (['CHERRYBOMB', 'JALAPENO', 'DOOMSHROOM', 'ICESHROOM'].includes(this.type)) {
+      this.doSpecial();
+      return;
+    }
+    if (this.type === 'POTATOMINE' && this.state === 'armed') {
+      this.doSpecial();
+      return;
+    }
+    if (this.type === 'SQUASH' && this.squashTarget) return;   // 原版: 起跳中的坚果美不被压
+    if (this.squished) return;
+    this.squished = true;
+    this.squishT = 0;
     this.board.addEffect('squish', this.x + 40, this.y + 40);
     this.board.game.audio.play('squish');
-    this.die();
+    this._clearGrid();          // 立即不可交互 (原版: 不再被啃/不再触发)
+    for (const L of this.anims) { try { L.r.animRate = 0; } catch (e) { } }
   }
   doSpecial() {
     // 即时触发 (Blover/ICESHROOM被啃时)
@@ -1074,6 +1135,23 @@ class Plant {
     if (this.type !== 'LILYPAD' && !GROUNDCOVER.has(this.type)) {
       const sh = Assets.image('plantshadow');
       if (sh) { ctx.globalAlpha = 0.35; ctx.drawImage(sh, this.x + 40 - sh.width / 2, dy + 72 - sh.height / 2); ctx.globalAlpha = 1; }
+    }
+    // #修复(压扁画面) 原版 Plant::Draw (Plant.cpp 3949-3964): mSquished →
+    //   SetScale(1, 0.25) 纵向压扁绘制于格底 (60+offsetY), 停留 500 tick 后消失
+    if (this.squished) {
+      const fade = this.squishT > 4 ? Math.max(0, 1 - (this.squishT - 4)) : 1;
+      ctx.save();
+      ctx.globalAlpha = fade;
+      const scq = this.def.scale || 1;
+      for (const L of this.anims) {
+        if (L.attached) continue;
+        L.r.setPosition(this.x, dy + 55);
+        L.r.overrideScale(scq, scq * 0.25);
+        L.r.refreshAttachments();
+        L.r.draw(ctx);
+      }
+      ctx.restore();
+      return;
     }
     const sc = (this.def.scale || 1) * (this.buildT < 0.25 ? Math.min(1, 0.6 + this.buildT * 1.6) : 1);
     // 爆炸坚果: 红色色调 (原版 tint)

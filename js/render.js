@@ -158,6 +158,12 @@ const Renderer = {
     const list = [];
     for (const p of board.plants) {
       if (p.dead) continue;
+      if (p.onBungeeState === 'grabbed' || p.onBungeeState === 'rising') continue;   // 被蹦极抓走: 随蹦极绘制
+      if (p.squished) {
+        // 压扁植物: 墓碑层之上 (原版 Squish → RENDER_LAYER_GRAVE_STONE +8)
+        list.push({ o: p.row * 10000 + RENDER_LAYER.GRAVE + 8, d: () => p.draw(ctx, board) });
+        continue;
+      }
       if (board.gridPumpkin[p.row] && board.gridPumpkin[p.row][p.col] === p) {
         // 南瓜壳: 植物层之上 (原版 PLANT_LAYER_ON_TOP → +4)
         list.push({ o: p.row * 10000 + RENDER_LAYER.PLANT + 6, d: () => p.draw(ctx, board) });
@@ -187,6 +193,12 @@ const Renderer = {
     for (const z of board.zombies) {
       if (z.dead || z.row === -1) continue;
       list.push({ o: z.renderOrder || (z.row * 10000 + RENDER_LAYER.ZOMBIE), d: () => { z.drawShadow(ctx); z.draw(ctx); } });
+    }
+    // ---- 蹦极僵尸目标十字标志 (原版 Board.cpp 6138-6145: RENDER_ITEM_ZOMBIE_BUNGEE_TARGET,
+    //      层级 RENDER_LAYER_PROJECTILE row+1 — 画在植物之上) ----
+    for (const z of board.zombies) {
+      if (z.dead || z.row === -1 || z.type !== 'BUNGEE') continue;
+      list.push({ o: z.row * 10000 + RENDER_LAYER.PROJECTILE + 1, d: () => z.drawBungeeTarget(ctx) });
     }
     // 梯子道具 (僵尸层)
     for (const l of board.ladders) {
@@ -435,8 +447,23 @@ const Renderer = {
       if (animName) m.reanim.play(animName, RE.LOOP, 0);
       else { m.reanim.frameStart = 0; m.reanim.frameCount = def ? def.n : 1; m.reanim.loopType = RE.LOOP; m.reanim.animRate = 0; }
     }
-    const my = board.gridY(m.row) + (m.type === 'pool' ? 33 : 19);
-    m.reanim.setPosition(m.x + (m.type === 'pool' ? 25 : 12), my);
+    // ---- 原版 LawnMower::Draw 布局 (LawnMower.cpp 275-367) ----
+    //   画布平移 (mPosX+6, mPosY) + reanim overlay(0,18); mPosY = GetPosYBasedOnRow(mPosX+40, row)+23
+    //   → 割草机 y = gridY+41 (23+18); 泳池清洁车 y = gridY+34 (触发路径 23-7+18, 待机缓存帧同为+34)
+    //   屋顶清洁车: 待机 y-40 → gridY+2 (挂坡上); 触发 y-4 → gridY+37 (落下行驶)
+    // #修复(小推车显示不全): 原版 mPosX=-21 时整机内容左缘 (mPosX+4) 在屏幕外 —
+    //   此处右移使整机完整可见: 内容左缘 ≈ 2px (割草机内容 track x -2..68 / 清洁车 3.5..64)
+    const baseY = board.getPosYBasedOnRow(m.x + 40, m.row) + 23;
+    let ry;
+    if (m.type === 'pool') {
+      ry = baseY + 11;                       // 原版: gridY+34
+    } else if (m.type === 'roof') {
+      ry = baseY + (m.state === 'running' ? 14 : -21);   // 待机挂坡 +2 / 行驶 +37
+    } else {
+      ry = baseY + 18;                       // 原版: gridY+41
+    }
+    const rx = m.x + (m.type === 'pool' ? 18 : m.type === 'roof' ? 18 : 24);
+    m.reanim.setPosition(rx, ry);
     const sc = m.type === 'pool' ? 0.8 : 0.85;
     m.reanim.overrideScale(sc, sc);
     // 原版: 待机静止; 触发后 animRate=70 播放 (轮子与机身同步滚动)

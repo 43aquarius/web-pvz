@@ -515,9 +515,11 @@ class Board {
     this.reanims.push(r);
     return r;
   }
-  addLimbParticle(kind, x, y, imgName) {
+  addLimbParticle(kind, x, y, imgName, row) {
     // 掉落肢体: 原版 PARTICLE_ZOMBIE_HEAD/ARM 粒子 — 抛出+落地弹跳+静止后淡出
-    this.effects.push(new LimbParticle(kind, x, y, imgName, this));
+    // #修复(肢体落点): 传入僵尸所在行 — 头/手臂生成点在行上部(僵尸y-30), 旧实现按掉落
+    //   像素位置反查行会落到上一行地面, 肢体悬空弹跳
+    this.effects.push(new LimbParticle(kind, x, y, imgName, this, row));
   }
 
   // ---------- 波次计时 (已验证原版移植) ----------
@@ -1921,12 +1923,18 @@ class LimbParticle {
   // 抛物参数 (godot ZombieHeadDrop / ZombieArm1Drop):
   //   头: vx∈(-70,70) 双向随机上抛 vy∈(-200,-100), 转速 vx/50
   //   手臂/掉落物: vx∈(-15,15) 水平小抛 vy=0 (旧实现恒向左上大抛 — 手臂飞过远)
-  constructor(kind, x, y, imgName, board) {
+  constructor(kind, x, y, imgName, board, row) {
     this.kind = kind; this.x = x; this.y = y;
     this.imgName = imgName || null;
-    // 地面 = 掉落点所在行格子底部 (兜底 y+60)
-    const rIdx = board ? board.pixelToGridY(x, y) : 0;
-    this.ground = board ? board.gridY(rIdx) + 78 : y + 60;
+    // 地面 = 僵尸所在行格底 (#修复: 旧实现按掉落点像素反查行 — 头部生成于上一行区域,
+    //   导致头颅落到上一行地面悬空; 现按僵尸行计算, 与脚线 gridY+rowH-22 对齐)
+    const rowH = board && board.waterRows && board.waterRows.length ? 85 : 100;
+    if (row !== undefined && row !== null && row >= 0 && board) {
+      this.ground = board.gridY(row) + rowH - 22;
+    } else {
+      const rIdx = board ? board.pixelToGridY(x, y) : 0;
+      this.ground = board ? board.gridY(rIdx) + rowH - 22 : y + 60;
+    }
     if (kind === 'head') {
       this.vx = -70 + Math.random() * 140;
       this.vy = -(100 + Math.random() * 100);
