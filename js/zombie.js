@@ -3121,6 +3121,8 @@ class Zombie {
     if (!(flags & DMG.DOESNT_LEAVE_BODY)) {
       // 原版 Zombie::DropHead (Zombie.cpp:3537): GetTrackPosition("anim_head1") 头部轨道实际位置
       //   (旧实现用固定 (x+50,y) 偏移, 头掉落位置与头部脱节) (#4)
+      // #fix(掉头居中): 轨道坐标为头部贴图左上角, 掉落粒子以组合中心绘制 →
+      //   补半张头图偏移, 使掉落头颅与在体头部视觉对齐
       let px = this.x + 50, py = this.y;
       const r = this.bodyReanim;
       if (r) {
@@ -3128,7 +3130,11 @@ class Zombie {
           : r.trackExists('Zombie_head') ? 'Zombie_head' : null;
         if (track) {
           const tp = this.getTrackPosition(track);
-          if (tp) [px, py] = tp;
+          if (tp) {
+            const img = Assets.image('zombie_head');
+            px = tp[0] + (img ? img.width / 2 : 26);
+            py = tp[1] + (img ? img.height / 2 : 24);
+          }
         }
       }
       this.board.addLimbParticle('head', px, py, null, this.row);
@@ -3164,6 +3170,10 @@ class Zombie {
       this.reanimShowPrefix('anim_bucket', RG.HIDDEN);
       kind = 'bucket';
     }
+    // #fix(防具掉落居中): 轨道坐标为贴图左上角, 掉落粒子以中心绘制 → 补半图偏移
+    const HELM_IMG = { cone: 'zombie_cone1', bucket: 'zombie_bucket1', helm: 'zombie_football_helmet' };
+    const himg = Assets.image(HELM_IMG[kind]);
+    if (himg) { px += himg.width / 2; py += himg.height / 2; }
     this.helmType = null;
     this.helmHealth = 0;
     if (!(flags & DMG.DOESNT_LEAVE_BODY)) {
@@ -3628,6 +3638,42 @@ class Zombie {
 
   mowDown() {
     if (this.isDeadOrDying) return;
+    // 原版 Zombie::MowDown (Zombie.cpp 8558-8645):
+    //   特殊类型 (雪耜/弹弾器) → 爆炸死亡;
+    //   例外列表 (濒死/巨人/蹦极/矿工/小鬼/雪人/海豚/雪耜队/飞行/水币) →
+    //     Puff烟雾 + 掉头/掉臂/掉盔/掉盾 + 死亡;
+    //   常规 → 掉盾 + 掉盔 (路障/铁桶/头盔被撞飞) + anim_mowed 滚地
+    if (this.type === 'ZAMBONI' || this.type === 'CATAPULT') {
+      this.board.addEffect('boom', this.posX + 80, this.posY + 60, {});
+      this.board.game.audio.play('boom');
+      this.dieWithLoot();
+      return;
+    }
+    const exceptional = this.phase === PH.DYING || this.phase === PH.POLEVAULTER_IN_VAULT || this.phase === PH.RISING_FROM_GRAVE ||
+      this.phase === PH.DANCER_RISING || this.phase === PH.SNORKEL_INTO_POOL || this.phase === PH.BURNED ||
+      this.type === 'GARGANTUAR' || this.type === 'REDEYE' || this.type === 'BUNGEE' || this.type === 'DIGGER' ||
+      this.type === 'IMP' || this.type === 'YETI' || this.type === 'DOLPHIN' || this.isBobsledTeamWithSled ||
+      this.isFlying || this.inPool;
+    if (exceptional) {
+      // 原版: Puff 烟雾 (anim_puff @ 僵尸位置) + 四掉 + 死亡
+      try {
+        const puff = this.board.addReanimEffect('Puff', this.posX - 73, this.posY - 56, 0);
+        puff.play('anim_puff', RE.PLAY_ONCE, 0);   // PLAY_ONCE: 播完自动清理 (HOLD 会残留末帧)
+      } catch (e) { }
+      if (!this.board.isPoolRow(this.row)) {
+        this.dropHead(0);
+        this.dropArm(0);
+        this.dropHelm(0);
+        this.dropShield(0);
+      }
+      this.dieWithLoot();
+      return;
+    }
+    if (this.iceTrapCounter > 0) this.iceTrapCounter = 0;
+    if (this.butteredCounter > 0) this.butteredCounter = Math.min(this.butteredCounter, 0);
+    this.dropShield(0);          // 原版: 被撞时门/报纸飞离
+    this.dropHelm(0);            // 原版: 路障/铁桶/头盔被撞飞 (粒子)
+    if (this.type === 'NEWSPAPER' || this.type === 'BALLOON' || this.type === 'POGO') this.dropHead(0);
     this.playZombieReanim('anim_mowed', RE.PLAY_ONCE_HOLD, 0, 30);
     this.board.game.audio.play('mowed');
     this.zombieFade = 100;
@@ -3637,6 +3683,7 @@ class Zombie {
     this.bodyReanim.overlay[0] = 1;
     this.bodyReanim.overlay[3] = 0.5;
     this.altitude = 0;
+    this.dropLoot();
   }
 
   updateMowered() {
@@ -3800,7 +3847,7 @@ class Zombie {
   }
 
   drawShadow(ctx) {
-    if (this.dead || this.type === 'BUNGEE' || this.type === 'BALLOON') return;
+    if (this.dead || this.type === 'BUNGEE' || this.type === 'BALLOON' || this.type === 'BOSS') return;   // 原版 HasShadow: BOSS/ZAMBONI/CATAPULT 无阴影
     const dp = this.getDrawPos();
     const alpha = this.zombieFade >= 0 ? Math.min(1, this.zombieFade / 10) : 1;
     ctx.save();
@@ -3942,6 +3989,57 @@ class Zombie {
 
     if (clipSave) { /* clip 在外层 restore 中一并释放 */ }
     ctx.restore();   // BeginDraw/EndDraw
+  }
+
+  // 原版 Zombie::DrawBossPart (Zombie.cpp 10526-10540): 僵王按部位独立绘制
+  //   BACK_LEG → FRONT_LEG → MAIN(主体+驾驶员) → BACK_ARM(带目标偏移)
+  //   由 render.js 按 MakeRenderOrder(RENDER_LAYER_BOSS, row, offset) 分层插入渲染列表
+  //   (原版 Board::AddBossRenderItem — 后腿行1/前腿行3/主体行4/后臂行4, 踩踏中段动态换行)
+  drawBossPart(ctx, part) {
+    if (this.dead) return;
+    const r = this.bodyReanim;
+    if (!r) return;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    // ---- 颜色状态 (与 draw() 一致: 低血量灰白呼吸/冰蓝/受击闪白) ----
+    let colorOverride = [255, 255, 255, 255];
+    let extraAdditive = [0, 0, 0, 0];
+    let enableAdditive = false;
+    if (this.phase !== PH.DYING && this.bodyHealth < this.bodyMaxHealth / 10) {
+      const mc = (this.board.mainCounter != null ? this.board.mainCounter : Date.now() / 10) % 40;
+      const t = mc / 39;
+      const gray = Math.round(155 + 100 * (1 - Math.abs(2 * t - 1)));
+      if (this.chilledCounter > 0 || this.iceTrapCounter > 0) {
+        const cold = Math.round(65 + 10 * (1 - Math.abs(2 * t - 1)));
+        colorOverride = [cold, cold, gray, 255];
+      } else {
+        colorOverride = [gray, gray, gray, 255];
+      }
+    } else if (this.chilledCounter > 0 || this.iceTrapCounter > 0) {
+      colorOverride = [75, 75, 255, 255];
+      extraAdditive = [75, 75, 255, 64];
+      enableAdditive = true;
+    }
+    if (this.justGotShotCounter > 0) {
+      const grayness = this.justGotShotCounter * 10;
+      extraAdditive = [Math.min(255, grayness + extraAdditive[0]), Math.min(255, grayness + extraAdditive[1]), Math.min(255, grayness + extraAdditive[2]), 255];
+      enableAdditive = true;
+    }
+    r.colorOverride = colorOverride;
+    r.extraAdditiveColor = extraAdditive;
+    r.enableExtraAdditiveDraw = enableAdditive;
+    // ---- 按部位绘制 ----
+    if (part === 'backleg') {
+      r.drawRenderGroup(ctx, RG.BOSS_BACK_LEG);
+    } else if (part === 'frontleg') {
+      r.drawRenderGroup(ctx, RG.BOSS_FRONT_LEG);
+    } else if (part === 'main') {
+      // 主体 + 驾驶员 (驾驶员挂在 Boss_head2 轨道, NORMAL 组绘制时附带)
+      r.drawRenderGroup(ctx, RG.NORMAL);
+    } else if (part === 'backarm') {
+      this.drawBossBackArm(ctx);
+    }
+    ctx.restore();
   }
 
   // 原版 Zombie::DrawBossBackArm (Zombie.cpp 9729-9754): 内臂(丢RV/放蹦极的手)

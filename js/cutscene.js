@@ -217,9 +217,20 @@ const Cutscene = {
     else if (t <= bankOn + 250) this.seedBankY = calcPos(bankOn, bankOn + 250, -87, 0, t);
     else this.seedBankY = 0;
 
-    // ---- 割草机出现 (逐行) ----
+    // ---- 割草机出现 (原版 LawnMower.cpp: MOWER_ROLLING_IN — 从 x=-160 滚入至 -21,
+    //      100tick ease-in-out; 旧实现仅瞬间显示 → “凭空出现”) ----
     for (const m of board.mowers) {
-      if (m.hidden && t >= this.mowTime[m.row] * 1000) m.hidden = false;
+      if (m.hidden && t >= this.mowTime[m.row] * 1000) {
+        m.hidden = false;
+        m.x = -160;              // 原版 LawnMowerInitialize: mPosX = -160
+        m.rollingIn = 0;         // 滚入进度 (0..100 tick)
+      }
+      if (!m.hidden && m.rollingIn !== undefined && m.rollingIn < 100) {
+        m.rollingIn = Math.min(100, m.rollingIn + dt * 100);
+        // 原版 PvzpAnimateCurve(0,100,counter,-160,-21,CURVE_EASE_IN_OUT)
+        m.x = -160 + 140 * easeIO(m.rollingIn / 100);
+        if (m.rollingIn >= 100) m.x = -20;
+      }
     }
 
     // ---- 草皮卷 (原版 6000-8000, 滚筒 reanim + 泥土粒子 + digger音效) ----
@@ -365,7 +376,7 @@ const Cutscene = {
     let t = dialogs['CRAZY_DAVE_' + id] || '';
     // 占位符替换 (原版 {PLAYER_NAME}/{MONEY}/{UPGRADE_COST})
     const game = this.board.game;
-    t = t.replace('{PLAYER_NAME}', '邻居')
+    t = t.replace('{PLAYER_NAME}', playerDisplayName())
       .replace('{MONEY}', String(game.coins || 0))
       .replace('{UPGRADE_COST}', '$7500')
       .replace(/\{[A-Z_0-9]+\}/g, '');   // 剩余表情标记清除
@@ -487,12 +498,21 @@ const Cutscene = {
     } else if (this.davePhase === 'leave') {
       this.daveT += dt;
       if (this.daveAnim) this.daveAnim.update(dt);
-      // 被飞贼抓走: 戴夫快速上升消失 (原版 CutScene.cpp 1562-1572)
-      if (this.daveGrab && this.daveAnim) {
-        this.daveAnim.y -= dt * 220;
+      // #fix(5-10 蹦极时序): anim_grab 动画自带完整时序 — 帧154-164 蹦极僵尸从天而降,
+      //   164-191 落地回弹, 191-198 抓住戴夫整体猛拉上升, 199 全部隐藏 (f=-1)。
+      //   旧实现额外 daveAnim.y -= 220*dt 手动上升 → 僵尸尚在下落戴夫已升空 (视觉脱节)。
+      //   原版 (CutScene.cpp 1562-1572): 仅 PlayReanim(anim_grab, 18fps) + BUNGEE_SCREAM,
+      //   播完 (mLoopCount>0 → CrazyDaveDie) 后移除 — 无任何手动位移。
+      if (this.daveGrab && this.daveAnim && this.daveAnim.loopCount > 0) {
+        // 动画播完 (56帧@18fps ≈ 3.1s): 戴夫已被拉出屏外并隐藏 → 结束离场
+        this.davePhase = null;
+        this.daveAnim = null;
+        this.daveMode = false;
+        if (this.board.game && this.board.game.markDaveSeen) this.board.game.markDaveSeen(this.board.level.id);
+        return;
       }
-      if (this.daveT >= (this.daveGrab ? 1.2 : 0.62)) {
-        // 离场完成 → 恢复主时间轴 + 标记已看过
+      if (this.daveT >= (this.daveGrab ? 4.2 : 0.62)) {
+        // 兜底超时 (动画数据缺失时不卡死过场)
         this.davePhase = null;
         this.daveAnim = null;
         this.daveMode = false;
@@ -524,11 +544,12 @@ const Cutscene = {
       }
       if (this.daveLine >= lines.length) {
         // 无赠礼: 离场 (5-10 僵王关: 被飞贼抓走 — 原版 anim_grab + BUNGEE_SCREAM)
+        // #fix: 原版速率 18fps (56帧 ≈ 3.1s), 动画内含蹦极僵尸下落/抓取/拉上升空全时序
         if (this.daveDialog && this.daveDialog.boss && this.daveAnim && this.daveAnim.animExists && this.daveAnim.animExists('anim_grab')) {
-          this.daveAnim.play('anim_grab', RE.PLAY_ONCE_HOLD, 24);
+          this.daveAnim.play('anim_grab', RE.PLAY_ONCE_HOLD, 18);
           this.davePhase = 'leave';
           this.daveT = 0;
-          this.daveGrab = true;   // 抓走后快速上升消失
+          this.daveGrab = true;   // 播完后结束 (不再手动位移 — 见 updateDave)
           game.audio.play('bungee_scream');
           game.audio.play('dave_scream');
         } else {
@@ -667,6 +688,15 @@ const Cutscene = {
 let ZOMBIES_DEF = {};
 function setZombieDefs(z) { ZOMBIES_DEF = z; }
 function range(a, b) { const r = []; for (let i = a; i <= b; i++) r.push(i); return r; }
+
+// 玩家名 (原版 PlayerInfo::mName — 首次进主菜单时 NewUserDialog 输入, 存 localStorage)
+function playerDisplayName() {
+  try {
+    const n = localStorage.getItem('pvz_player_name');
+    if (n && n.trim()) return n.trim();
+  } catch (e) { }
+  return '邻居';
+}
 
 // ============================================================
 // 场内横幅系统 (一大波僵尸/最后一波 — 原版 FinalWave.reanim 动画 / APPROACHING 静图)

@@ -99,6 +99,8 @@ const Audio2 = (function () {
     hydraulic: 'sounds/hydraulic.ogg', hydraulic_short: 'sounds/hydraulic_short.ogg',
     bossboulder: 'sounds/bossboulderattack.ogg', RVthrow: 'sounds/RVthrow.ogg',
     bungee_scream: 'SFX/zombie/bungee_scream.ogg',
+    // #fix(断肢无声): 原版 FOLEY_LIMBS_POP (DropHead/DropArm) 键此前缺失 — 断肢一直无声
+    limbspop: 'sounds/limbs_pop.ogg',
     groan_spawn: 'SFX/zombie/groan/groan3.ogg',
     vase_breaking: 'sounds/vase_breaking.ogg',
     // 疯狂戴夫语音 (SFX/carzy/ 目录)

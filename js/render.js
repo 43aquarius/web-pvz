@@ -192,6 +192,29 @@ const Renderer = {
     }
     for (const z of board.zombies) {
       if (z.dead || z.row === -1) continue;
+      if (z.type === 'BOSS') {
+        // #fix(僵王图层): 原版 Board::AddBossRenderItem (Board.cpp 5936-5990) —
+        //   僵王 NOT 作为单一对象渲染, 而是拆 4 个部位按 RENDER_LAYER_BOSS(304000) + 行插入:
+        //     后腿 row1 / 前腿 row3 / 主体 row4 / 后臂 row4 (+3)
+        //   → 草坪僵尸按行自然穿插于僵王腿前后 (旧实现整只 400004 顶层 — 永远盖住全部僵尸)
+        //   踩踏中段 (animTime 0.25-0.75): 目标行1 → 后腿升行2; 目标行3 → 前腿降行4
+        //   濒死: 后臂行 4 → 1 (手臂垂落至机器人身后)
+        let backLegRow = 1, frontLegRow = 3, backArmRow = 4;
+        if (z.isDeadOrDying) {
+          backArmRow = 1;
+        } else if (z.phase === 77 /* PH.BOSS_STOMPING */) {
+          const at = z.bodyReanim ? z.bodyReanim.animTime : 0;
+          if (at > 0.25 && at < 0.75) {
+            if (z.bossTargetRow === 1) backLegRow = 2;
+            else if (z.bossTargetRow === 3) frontLegRow = 4;
+          }
+        }
+        list.push({ o: RENDER_LAYER.BOSS + backLegRow * 10000 + 2, d: () => z.drawBossPart(ctx, 'backleg') });
+        list.push({ o: RENDER_LAYER.BOSS + frontLegRow * 10000 + 2, d: () => z.drawBossPart(ctx, 'frontleg') });
+        list.push({ o: RENDER_LAYER.BOSS + 4 * 10000 + 2, d: () => z.drawBossPart(ctx, 'main') });
+        list.push({ o: RENDER_LAYER.BOSS + backArmRow * 10000 + 3, d: () => z.drawBossPart(ctx, 'backarm') });
+        continue;
+      }
       list.push({ o: z.renderOrder || (z.row * 10000 + RENDER_LAYER.ZOMBIE), d: () => { z.drawShadow(ctx); z.draw(ctx); } });
     }
     // ---- 蹦极僵尸目标十字标志 (原版 Board.cpp 6138-6145: RENDER_ITEM_ZOMBIE_BUNGEE_TARGET,
@@ -461,6 +484,23 @@ const Renderer = {
       ry = baseY + (m.state === 'running' ? 14 : -21);   // 待机挂坡 +2 / 行驶 +37
     } else {
       ry = baseY + 18;                       // 原版: gridY+41
+    }
+    // ---- 地面阴影 (原版 LawnMower::Draw 293-318: PLANTSHADOW 居中绘制于机身下方) ----
+    //   原版锚点 (mPosX-7, mPosY+47); 因整机右移 +24 使内容完整可见, 阴影同步跟随
+    //   机身中心 (相对 overlay: 割草机≈33.6 / 清洁车≈31.2); 夜间用 plantshadow2
+    const shadowImg = Assets.image(board.isNight ? 'plantshadow2' : 'plantshadow');
+    if (shadowImg && m.state !== 'gone') {
+      const rx0 = m.x + (m.type === 'pool' ? 18 : 24);
+      const sc0 = m.type === 'pool' ? 0.8 : 0.85;
+      const cCenter = (m.type === 'pool' ? 31.2 : 33.6) * sc0;
+      let sy = baseY + 47, sScX = 1, sScY = 1;
+      if (m.type === 'pool') sy = baseY + 39;
+      else if (m.type === 'roof') { sy = baseY + (m.state === 'running' ? 47 : 11); sScY = 1.2; }
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      ctx.drawImage(shadowImg, rx0 + cCenter - shadowImg.width * sScX / 2, sy - shadowImg.height * sScY / 2,
+        shadowImg.width * sScX, shadowImg.height * sScY);
+      ctx.restore();
     }
     const rx = m.x + (m.type === 'pool' ? 18 : m.type === 'roof' ? 18 : 24);
     m.reanim.setPosition(rx, ry);

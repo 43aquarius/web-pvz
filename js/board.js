@@ -1981,6 +1981,13 @@ class LimbParticle {
       this.vx = -70 + Math.random() * 140;
       this.vy = -(100 + Math.random() * 100);
       this.vr = this.vx / 50;
+    } else if (kind === 'cone' || kind === 'bucket' || kind === 'helm') {
+      // #fix(防具掉落): 原版防具被打掉时向上弹飞旋转后落地 (PARTICLE_ZOMBIE_TRAFFIC_CONE/
+      //   PAIL/HELMET 粒子); 旧实现 vy=0 直坠 — 防具像"滑落"而非"打飞", 生硬突兀。
+      //   参照头颅抛物参数加强: 上抛 vy -320..-240, 向左后飞 vx -80..-30, 转速与 vx 成比例
+      this.vx = -80 + Math.random() * 50;
+      this.vy = -(240 + Math.random() * 80);
+      this.vr = this.vx / 25;
     } else {
       this.vx = -15 + Math.random() * 30;
       this.vy = 0;
