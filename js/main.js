@@ -192,6 +192,10 @@ const Game = {
           if (this.board.mode === 'conveyor' && this.heldBelt) { this.returnBeltCard(); return; }
           if (this.menuDialog) this.closeMenuDialog();
           else this.openMenuDialog();
+        } else if (this.state === 'zengarden') {
+          // 禅境花园: ESC → ClearCursor 归还工具 (植物本来就留在原地)
+          const zg = Screens.zengarden;
+          if (zg && (zg.tool || zg.heldPlant)) { zg.cancelHold(); this.audio.play('tap'); }
         }
       }
       if (e.key === ' ' && this.state === 'playing' && this.board && !this.menuDialog) {
@@ -385,9 +389,39 @@ const Game = {
       }
     }
     // 金币 (原版: 点击 → 金币飞向左上角计数器 + "+N"浮字 #13)
+    //   礼物植物盒/巧克力: 点击 → 入禅境花园库存 (原版 COIN_PRESENT_PLANT/COIN_CHOCOLATE)
     for (const c of board.coins) {
       if (!c.collected && Math.abs(p.x - c.x) < 30 && Math.abs(p.y - c.y) < 30) {
         c.collected = true;
+        if (c.kind === 'present') {
+          // 原版 Coin.cpp: 按关卡场景出植物表 (199-293)
+          const LISTS = {
+            day: ['PEASHOOTER', 'SUNFLOWER', 'CHERRYBOMB', 'WALLNUT', 'REPEATER', 'POTATOMINE', 'SNOWPEA', 'CHOMPER'],
+            night: ['PUFFSHROOM', 'SUNSHROOM', 'FUMESHROOM', 'GRAVEBUSTER', 'HYPNOSHROOM', 'SCAREDYSHROOM', 'ICESHROOM', 'DOOMSHROOM'],
+            pool: ['LILYPAD', 'SQUASH', 'THREEPEATER', 'TANGLEKELP', 'JALAPENO', 'SPIKEWEED', 'TORCHWOOD', 'TALLNUT'],
+            fog: ['SEASHROOM', 'PLANTERN', 'CACTUS', 'BLOVER', 'SPLITPEA', 'STARFRUIT', 'PUMPKIN', 'MAGNETSHROOM'],
+            roof: ['CABBAGEPULT', 'KERNELPULT', 'COFFEEBEAN', 'GARLIC', 'UMBRELLALEAF', 'MELONPULT'],
+          };
+          const scene = board.scene || 'day';
+          const pool2 = (LISTS[scene] || LISTS.day).filter(s => PLANTS[s]);
+          const seed = pool2.length ? pool2[Math.floor(Math.random() * pool2.length)] : null;
+          const zeng = Screens.zengarden;
+          if (!zeng.data) zeng.load();
+          zeng.addPottedPlant(zeng.newPlant(seed));
+          zeng.save();
+          this.audio.play('zen_prize');
+          board.addEffect('text', c.x, c.y - 12, { hold: 1.5, txt: '礼物: ' + (seed && PLANTS[seed].cn || '植物') + '!', c: '#8ae87a', size: 17 });
+          return;
+        }
+        if (c.kind === 'chocolate') {
+          const zeng = Screens.zengarden;
+          if (!zeng.data) zeng.load();
+          zeng.data.chocolate = Math.min(10, (zeng.data.chocolate || 0) + 1);
+          zeng.save();
+          this.audio.play('zen_prize');
+          board.addEffect('text', c.x, c.y - 12, { hold: 1.5, txt: '+1 巧克力', c: '#e8b06a', size: 17 });
+          return;
+        }
         this.coins += c.value;
         this.coinsEarned = (this.coinsEarned || 0) + c.value;
         this.saveShop();
@@ -801,7 +835,23 @@ const Game = {
   },
   buyItem(key) {
     const it = SHOP_ITEMS.find(s => s.key === key);
-    if (!it || this.purchased[key]) return false;
+    if (!it) return false;
+    // 盆栽金盏花 (每日每槽限购 1 株 — 原版 GetCurrentDaysSince2000 日期限购)
+    if (key.startsWith('marigold')) {
+      const today = new Date().toDateString();
+      if (this.purchased[key + '_day'] === today) return false;
+      if (this.coins < it.cost) { this.audio.play('buzzer'); return false; }
+      this.coins -= it.cost;
+      this.purchased[key + '_day'] = today;
+      const zeng = require('./screens').Screens.zengarden;
+      if (!zeng.data) zeng.load();
+      zeng.addPottedPlant(zeng.newPlant('MARIGOLD', { isMarigold: true }));
+      zeng.save();
+      this.saveShop();
+      this.audio.play('points');
+      return true;
+    }
+    if (this.purchased[key]) return false;
     if (this.coins < it.cost) { this.audio.play('buzzer'); return false; }
     // 种子槽须按顺序购买
     if (key === 'slot9' && !this.purchased['slot8']) return false;

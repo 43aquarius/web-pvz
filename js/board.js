@@ -813,9 +813,23 @@ class Board {
     this.game.audio.play('points');
     try { const _U = (window.__mods && window.__mods['ui']) || require('./ui'); if (_U && _U.UI) _U.UI.sunPulse = 1; } catch (e) { }
   }
-  addCoin(x, y, value = 25) {
-    this.coins.push(new Coin(x, y, value));
+  addCoin(x, y, value = 25, type) {
+    this.coins.push(new Coin(x, y, value, type));
     this.game.audio.play('coin');
+  }
+  // 礼物植物盒 (原版 COIN_PRESENT_PLANT: 点击开盒 → 随机植物入禅境花园)
+  addPresent(x, y) {
+    const c = new Coin(x, y, 0, 'present');
+    c.kind = 'present'; c.life = 25;
+    this.coins.push(c);
+    this.game.audio.play('points');
+  }
+  // 巧克力 (原版 COIN_CHOCOLATE: 点击 → 巧克力库存+1, 上限10)
+  addChocolateDrop(x, y) {
+    const c = new Coin(x, y, 0, 'chocolate');
+    c.kind = 'chocolate'; c.life = 18;
+    this.coins.push(c);
+    this.game.audio.play('points');
   }
   // 我不是僵尸: 植物被吃时掉落的阳光 (原版 COIN_SUN + COIN_MOTION_FROM_PLANT 弹出)
   addIZombieSun(x, y) {
@@ -1814,12 +1828,13 @@ class Sun {
 }
 
 class Coin {
-  constructor(x, y, value) {
+  constructor(x, y, value, type) {
     this.x = x; this.y = y; this.value = value;
     this.vy = -120; this.vx = (Math.random() - 0.5) * 40;
     this.ground = y + 30;
     this.life = 12; this.dead = false; this.collected = false; this.flyT = 0;
-    this.type = Math.random() < 0.1 ? 'diamond' : 'gold';
+    this.kind = null;   // 'present' 礼物植物 / 'chocolate' 巧克力 (原版 CoinType)
+    this.type = type || (Math.random() < 0.1 ? 'diamond' : 'gold');
   }
   update(dt, board) {
     if (this.collected) {

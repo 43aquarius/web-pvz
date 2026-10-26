@@ -112,6 +112,9 @@ const SHOP_ITEMS = [
   { key: 'slot10',      label: '种子槽 ×10',   cost: 20000, minLevel: 13, desc: '卡槽扩充到 10 格', icon: 'store_packetupgrade' },
   // ---- 页3: 禅镜花园用品 (原版页2) ----
   { key: 'goldwatering', label: '金洒水壶',    cost: 1000,  minLevel: 45, desc: '一次浇灌 4 格植物', icon: 'wateringcangold' },
+  { key: 'marigold1',   label: '金盏花盆栽',  cost: 250,   minLevel: 45, desc: '随机颜色的金盏花芽 (每日限购)', icon: 'MARIGOLD' },
+  { key: 'marigold2',   label: '金盏花盆栽',  cost: 250,   minLevel: 45, desc: '随机颜色的金盏花芽 (每日限购)', icon: 'MARIGOLD' },
+  { key: 'marigold3',   label: '金盏花盆栽',  cost: 250,   minLevel: 45, desc: '随机颜色的金盏花芽 (每日限购)', icon: 'MARIGOLD' },
   { key: 'fertilizer',  label: '肥料',         cost: 75,    minLevel: 45, desc: '让植物成长更快', icon: 'fertilizer', consumable: 5 },
   { key: 'bugspray',    label: '杀虫剂',       cost: 100,   minLevel: 45, desc: '赶走植物上的虫子', icon: 'zengarden_bugspray_bottle', consumable: 5 },
   { key: 'phonograph',  label: '留声机',       cost: 1500,  minLevel: 45, desc: '播放音乐让植物开心', icon: 'phonograph' },

@@ -3378,18 +3378,16 @@ class Zombie {
   dropLoot() {
     if (this.droppedLoot) return;
     this.droppedLoot = true;
-    // 原版 Zombie::DieWithLoot → DropLoot → Board::DropLootPiece
+    // 原版 Zombie::DieWithLoot → DropLoot → Board::DropLootPiece (Board.cpp:9036-9152)
     if (this.fromWave !== -2 && this.board) {
+      // f = 僵尸价值 (普僵1 / 路障2 / 铁桶4); aDropHit = Rand(30000)
+      const WV = { NORMAL: 1, FLAG: 1, CONE: 2, BUCKET: 4 };
+      const f = WV[this.type] || 1;
+      const hit = Math.floor(Math.random() * 30000);
+      // ---- whack 分支: 阳光窗口 [2500×f, max×f] → 3 颗阳光 (Board.cpp:9064) ----
       if (this.board.mode === 'whack') {
-        // ---- 原版 DropLootPiece whack 分支 (Board.cpp:9064) ----
-        // aDropHit = Rand(30000); 命中 [2500×f, max×f] → 掉 3 颗阳光 (每颗25);
-        // max 随当前阳光拥有量递减 (>500→2800 / >350→3100 / >200→3700 / 否则5000);
-        // f = 僵尸价值 (普僵1 / 路障2 / 铁桶4)
-        const WV = { NORMAL: 1, FLAG: 1, CONE: 2, BUCKET: 4 };
-        const f = WV[this.type] || 1;
         const sun = this.board.sun;
         const aSunChanceMax = sun > 500 ? 2800 : sun > 350 ? 3100 : sun > 200 ? 3700 : 5000;
-        const hit = Math.floor(Math.random() * 30000);
         if (hit >= 2500 * f && hit <= aSunChanceMax * f) {
           const cx = this.posX + 40, cy = this.posY + 30;
           this.board.addWhackSun(cx - 20, cy);
@@ -3397,15 +3395,30 @@ class Zombie {
           this.board.addWhackSun(cx - 60, cy);
           return;
         }
-        // 其余落入金币表 (原版: 金 250×f / 银 2500×f / 30000)
-        if (hit < 250 * f) this.board.addCoin(this.posX + 30, this.posY + 30, 25);
-        else if (hit < 2500 * f) this.board.addCoin(this.posX + 30, this.posY + 30, 10);
-        return;
       }
-      // 常规关卡: 掉落表 (金币/银币/钻石 概率) — 简化: 18% 金币
-      const roll = Math.random();
-      if (roll < 0.14) this.board.addCoin(this.posX + 30, this.posY + 30, 25);
-      else if (roll < 0.18) this.board.addCoin(this.posX + 30, this.posY + 30, 10);
+      // ---- 完整掉落表 (Board.cpp:9078-9133) ----
+      // 礼物植物: 通关冒险 + 温室未满 → 12/30000×f (原版 CanDropPottedPlantLoot)
+      // 巧克力: 已购蜗牛 + 库存<10 → +36/30000×f (原版 CanDropChocolate)
+      // 钻石 +14 / 金币 +250 / 银币 +2500 (阈值含巧克力偏移, 均×f)
+      const game = this.board.game;
+      const px = this.posX + 30, py = this.posY + 30;
+      try {
+        const zeng = require('./screens').Screens.zengarden;
+        if (!zeng.data) zeng.load();
+        let pottedChance = 0;
+        if (game.finishedAdventure && !zeng.isFull()) pottedChance = 12;
+        let chocChance = pottedChance;
+        if (game.purchased.stinky && (zeng.data.chocolate || 0) < 10) chocChance = pottedChance + 36;
+        if (hit < pottedChance * f) { this.board.addPresent(px, py); return; }
+        if (hit < chocChance * f) { this.board.addChocolateDrop(px, py); return; }
+        if (hit < (chocChance + 14) * f) this.board.addCoin(px, py, 100, 'diamond');
+        else if (hit < (chocChance + 250) * f) this.board.addCoin(px, py, 25);
+        else if (hit < (chocChance + 2500) * f) this.board.addCoin(px, py, 10);
+      } catch (e) {
+        // 花园模块异常时退回基础金币表
+        if (hit < 250 * f) this.board.addCoin(px, py, 25);
+        else if (hit < 2500 * f) this.board.addCoin(px, py, 10);
+      }
     }
   }
 

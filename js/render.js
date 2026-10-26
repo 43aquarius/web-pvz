@@ -514,6 +514,24 @@ const Renderer = {
   },
 
   drawCoin(ctx, c) {
+    // 礼物植物盒 / 巧克力 (原版 COIN_PRESENT_PLANT / COIN_CHOCOLATE): 贴图 + 呼吸浮动
+    if (c.kind === 'present' || c.kind === 'chocolate') {
+      const im = Assets.image(c.kind === 'present' ? 'present.png' : 'chocolate.png');
+      ctx.save();
+      const t = (c.life > 0 ? (18 - Math.min(18, c.life)) : 0);
+      const bob = Math.sin(t * 3) * 3;
+      const sc = c.collected ? Math.max(0.3, 1 - c.flyT) : 1;
+      ctx.globalAlpha = (!c.collected && c.life < 3) ? (0.4 + 0.6 * Math.abs(Math.sin(c.life * 6))) : 1;
+      ctx.translate(c.x, c.y + bob);
+      ctx.scale(sc, sc);
+      if (im) ctx.drawImage(im, -im.width / 2, -im.height / 2);
+      else {
+        ctx.fillStyle = c.kind === 'present' ? '#c84a4a' : '#7a4a20';
+        ctx.fillRect(-16, -16, 32, 32);
+      }
+      ctx.restore();
+      return;
+    }
     if (!c.anim) {
       c.anim = Assets.reanim(c.type === 'diamond' ? 'Diamond' : 'Coin_gold');
       c.anim.play('anim_idle', 0, 10);
