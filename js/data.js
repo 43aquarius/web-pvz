@@ -124,6 +124,9 @@ const SHOP_ITEMS = [
   { key: 'aquarium',    label: '水族馆',       cost: 3000,  minLevel: 45, desc: '培植水生植物', icon: 'store_aquariumgardenicon' },
   { key: 'wheelbarrow', label: '手推车',       cost: 20,    minLevel: 45, desc: '在花园间搬运植物', icon: 'zen_wheelbarrow' },
   { key: 'stinky',      label: '臭臭蜗牛',     cost: 300,   minLevel: 45, desc: '自动收集金币', icon: 'stinky_shell' },
+  // 智慧树 + 树粮 (原版 StoreScreen.cpp:916-917: TREE_OF_WISDOM $1000 / TREE_FOOD $250 上限10袋)
+  { key: 'treeofwisdom', label: '智慧树',      cost: 1000,  minLevel: 45, desc: '通往禅境花园尽头的神奇之树, 喂树粮换取智慧', icon: 'store_treeofwisdomicon' },
+  { key: 'treefood',    label: '树粮',         cost: 250,   minLevel: 45, desc: '喂给智慧树, 每袋长高 1 英尺', icon: 'treefood', consumable: 1 },
 ];
 // 商店升级植物顺序 (availablePlants 追加顺序)
 const UPGRADE_ORDER = ['GATLINGPEA', 'TWINSUNFLOWER', 'GLOOMSHROOM', 'CATTAIL', 'WINTERMELON', 'GOLDMAGNET', 'SPIKEROCK', 'COBCANNON', 'IMITATER'];

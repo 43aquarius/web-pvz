@@ -145,17 +145,28 @@ const Renderer = {
           x, y - Math.min(celH, moundH + 14), celW, Math.min(celH, moundH + 14));
       }
     }
-    // ---- 花盆/睡莲 (底层) ----
+    // ---- 渲染顺序列表 (植物+僵尸统一排序) ----
+    // 原版 Plant::CalcRenderOrder (Plant.cpp:503-530):
+    //   偏移 = PLANT_ORDER×5 − mX + 800;  PLANT_ORDER: 花盆/睡莲=0, 普通=1, 南瓜=2, 咖啡豆(飞行)=3
+    //   → 同格南瓜恒在内部植物之上(+5); 左侧植物覆盖右侧(−mX); 花盆在植物之下(−5)
+    //   #fix(南瓜图层): 旧实现南瓜固定 +6、植物按列 +col — 第 7/8 列植物会盖住自己的南瓜壳,
+    //   邻列遮挡关系也不对; 现按原版公式以 X 坐标驱动, 花盆/睡莲同样并入列表 (order 0)
+    const plantOrder = (p) => {
+      let ord = 1;
+      if (p.type === 'PUMPKIN') ord = 2;
+      else if (p.type === 'FLOWERPOT' || p.type === 'LILYPAD') ord = 0;
+      else if (p.type === 'COFFEEBEAN') ord = 3;
+      return p.row * 10000 + RENDER_LAYER.PLANT + ord * 5 - p.x + 800;
+    };
+    const list = [];
     for (let r = 0; r < board.rows; r++) {
       for (let c = 0; c < 9; c++) {
         const lily = board.gridLily[r][c];
-        if (lily && !lily.dead) lily.draw(ctx, board);
+        if (lily && !lily.dead) list.push({ o: plantOrder(lily), d: () => lily.draw(ctx, board) });
         const pot = board.gridPot[r][c];
-        if (pot && !pot.dead) pot.draw(ctx, board);
+        if (pot && !pot.dead) list.push({ o: plantOrder(pot), d: () => pot.draw(ctx, board) });
       }
     }
-    // ---- 渲染顺序列表 (植物+僵尸统一排序) ----
-    const list = [];
     for (const p of board.plants) {
       if (p.dead) continue;
       if (p.onBungeeState === 'grabbed' || p.onBungeeState === 'rising') continue;   // 被蹦极抓走: 随蹦极绘制
@@ -164,12 +175,7 @@ const Renderer = {
         list.push({ o: p.row * 10000 + RENDER_LAYER.GRAVE + 8, d: () => p.draw(ctx, board) });
         continue;
       }
-      if (board.gridPumpkin[p.row] && board.gridPumpkin[p.row][p.col] === p) {
-        // 南瓜壳: 植物层之上 (原版 PLANT_LAYER_ON_TOP → +4)
-        list.push({ o: p.row * 10000 + RENDER_LAYER.PLANT + 6, d: () => p.draw(ctx, board) });
-      } else {
-        list.push({ o: p.row * 10000 + RENDER_LAYER.PLANT + (p.col || 0), d: () => p.draw(ctx, board) });
-      }
+      list.push({ o: plantOrder(p), d: () => p.draw(ctx, board) });
     }
     // 罐子解谜: 罐子进渲染列表 (原版 Challenge.cpp:3494 ScaryPotterPlacePot
     //   mRenderOrder = MakeRenderOrder(RENDER_LAYER_PLANT, row, 0) → 与植物同层行交错;
@@ -492,7 +498,29 @@ const Renderer = {
     // 原版: 待机静止; 触发后 animRate=70 播放 (轮子与机身同步滚动)
     m.reanim.animRate = m.state === 'running' ? 70 : 0;
     m.reanim.update(1 / 60);
-    m.reanim.draw(ctx);
+    // 智慧树作弊码 trickedout: 割草机变“疯狂机车” — 金属红染色 + 行驶尾气 (原版 TRICKED_OUT)
+    const chT = board.game && board.game.cheats && board.game.cheats.trickedout;
+    if (chT) {
+      ctx.save();
+      ctx.filter = 'saturate(1.9) hue-rotate(-16deg) brightness(1.08)';
+      m.reanim.draw(ctx);
+      ctx.restore();
+      if (m.state === 'running') {
+        const ph = Date.now() * 0.02;
+        ctx.save();
+        for (let k = 0; k < 3; k++) {
+          const gp = ((ph + k * 1.7) % 5) / 5;
+          ctx.globalAlpha = 0.34 * (1 - gp);
+          ctx.fillStyle = k === 2 ? '#ffb347' : '#9a9a92';
+          ctx.beginPath();
+          ctx.arc(rx - 22 - gp * 26, ry + 12 - gp * 8, 3.5 + gp * 5.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+    } else {
+      m.reanim.draw(ctx);
+    }
   },
 
   drawSun(ctx, s, board) {
@@ -854,6 +882,50 @@ const Renderer = {
             ctx.drawImage(img, e.x - 40, e.y - 30 - p * 20, 80, 50);
             ctx.restore();
           }
+          break;
+        }
+        case 'daisy': {
+          // 智慧树作弊码 daisies: 僵尸死处绽放小雔菊 (白瓣黄芯 + 绿茎, 微风摇曳)
+          const life = 3.5;
+          const aIn = Math.min(1, e.t / 0.25), aOut = Math.min(1, (life - e.t) / 0.6);
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, Math.min(aIn, aOut));
+          const sw = Math.sin(e.t * 2.2) * 2;
+          ctx.translate(e.x + sw, e.y);
+          // 绿茎
+          ctx.strokeStyle = '#3e8b2e'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(sw, -7, 0, -13); ctx.stroke();
+          // 花瓣 (8 瓣)
+          ctx.fillStyle = '#fdfdf6';
+          for (let i = 0; i < 8; i++) {
+            const pa = i / 8 * Math.PI * 2 + 0.3;
+            ctx.beginPath();
+            ctx.ellipse(Math.cos(pa) * 6, -13 + Math.sin(pa) * 6, 4.2, 2.6, pa, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          // 黄芯
+          ctx.fillStyle = '#ffd94d';
+          ctx.beginPath(); ctx.arc(0, -13, 3.4, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+          break;
+        }
+        case 'candy': {
+          // 智慧树作弊码 pinata: 僵尸死时吐出一地彩色糖果
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, Math.min(1, (1.3 - e.t) / 0.4));
+          for (const p of (e.parts || [])) {
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(p.rot);
+            ctx.fillStyle = p.c;
+            ctx.beginPath(); ctx.roundRect(-p.r, -p.r * 0.7, p.r * 2, p.r * 1.4, p.r * 0.6);
+            ctx.fill();
+            // 糖纸高光
+            ctx.fillStyle = 'rgba(255,255,255,0.55)';
+            ctx.fillRect(-p.r * 0.5, -p.r * 0.45, p.r * 0.5, p.r * 0.4);
+            ctx.restore();
+          }
+          ctx.restore();
           break;
         }
         case 'fire': {

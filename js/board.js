@@ -1984,6 +1984,21 @@ class Effect {
         if (this.t > 1.1) this.dead = true;
         break;
       }
+      case 'daisy': if (this.t > 3.5) this.dead = true; break;   // 智慧树 daisies: 僵尸死处留雔菊 (停留后淡出)
+      case 'candy': {
+        // 智慧树 pinata: 僵尸死吐糖果 — 10 颗彩糖抛物线弹飞 (重力 520)
+        if (!this.parts) {
+          this.parts = [];
+          const COLS = ['#ff5a6e', '#ffd34d', '#7fd4ff', '#9be564', '#d78dff', '#ffa85c'];
+          for (let i = 0; i < 10; i++) {
+            const a = -Math.PI / 2 + (i / 9 - 0.5) * Math.PI * 1.1;
+            this.parts.push({ vx: Math.cos(a) * (140 + Math.random() * 90), vy: Math.sin(a) * (190 + Math.random() * 130), rot: Math.random() * 6, vr: -6 + Math.random() * 12, c: COLS[i % COLS.length], r: 3 + Math.random() * 2.5 });
+          }
+        }
+        for (const p of this.parts) { p.vy += 520 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt; }
+        if (this.t > 1.3) this.dead = true;
+        break;
+      }
       default: if (this.t > 1) this.dead = true;
     }
     if (this.reanim) this.reanim.update(dt);

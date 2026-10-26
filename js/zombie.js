@@ -3694,6 +3694,12 @@ class Zombie {
   }
 
   dieNoLoot() {
+    // 智慧树作弊码死亡特效: daisies(死留雏菊) / pinata(死吐糖果) — 原版咒语效果
+    const ch = this.board && this.board.game && this.board.game.cheats;
+    if (ch && this.board) {
+      if (ch.pinata) this.board.addEffect('candy', this.posX + 30, this.posY + 25);
+      if (ch.daisies) this.board.addEffect('daisy', this.posX + 30, this.posY + 35);
+    }
     this.dead = true;
     if (this.board && this.board._noteKill) this.board._noteKill(this);
     if (this.bodyReanim) this.bodyReanim.reanimDie();
@@ -3926,6 +3932,11 @@ class Zombie {
     // 原版 GameObject::BeginDraw: g->Translate(mX, mY) — reanim overlay 为相对偏移
     ctx.save();
     ctx.translate(this.x, this.y);
+    // 智慧树作弊码 "dance": 僵尸左右摇摆 (原版 500 英尺咒语; 死亡/压扁/焦黑不摇)
+    if (this.board && this.board.game && this.board.game.cheats && this.board.game.cheats.dance &&
+        this.phase !== PH.DYING && this.phase !== PH.MOWERED && this.phase !== PH.BURNED) {
+      ctx.translate(Math.sin(Date.now() * 0.004 + this.posX * 0.045) * 6, 0);
+    }
 
     // 剪裁 (泳池/地道遮挡, 原版相对坐标)
     let clipSave = null;
@@ -4044,9 +4055,62 @@ class Zombie {
     if (this.butteredCounter > 0) {
       this.drawButter(ctx, dp);
     }
+    // 智慧树作弊码配饰: future=太阳镜 / mustache=胡子 (挂在 zombie_head 轨道中心)
+    this.drawCheatFace(ctx);
 
     if (clipSave) { /* clip 在外层 restore 中一并释放 */ }
     ctx.restore();   // BeginDraw/EndDraw
+  }
+
+  // 智慧树作弊码配饰 (原版 "future"=僵尸戴太阳镜 / "mustache"=僵尸长两撇胡子)
+  //   挂点: 头部轨道中心 (局部坐标 — draw() 已 translate(this.x,this.y));
+  //   头轨道名因僵尸而异: Zombie_head / anim_head1 / anim_head2 (dropHead 同款候选)
+  drawCheatFace(ctx) {
+    const ch = this.board && this.board.game && this.board.game.cheats;
+    if (!ch || (!ch.future && !ch.mustache)) return;
+    if (this.phase === PH.BURNED || this.phase === PH.DYING || !this.hasHead) return;
+    const r = this.bodyReanim;
+    if (!r) return;
+    const CAND = ['Zombie_head', 'anim_head1', 'anim_head2'];
+    let track = null;
+    for (const nm of CAND) { if (r.trackExists(nm)) { track = nm; break; } }
+    if (!track) return;
+    let t = null, tp = null;
+    try { t = r.curTransform(r.trackIndex(track)); tp = r.getTrackPosition(track); } catch (e) { return; }
+    if (!t || !tp || (t.a !== undefined && t.a <= 0.05)) return;
+    // 头部图像尺寸 (太阳镜/胡子按头宽等比)
+    let hw = 52, hh = 62;
+    for (const key of ['zombie_head', 'zombie_head1', 'anim_head1']) {
+      const im = Assets.image(key);
+      if (im) { hw = im.width; hh = im.height; break; }
+    }
+    const w = hw * (t.sx || 1), h = hh * (t.sy || 1);
+    const cx = tp[0] + w / 2, cy = tp[1] + h * 0.42;   // 眼部位置
+    const s = Math.max(0.55, Math.min(1.6, (Math.abs(t.sx || 1) + Math.abs(t.sy || 1)) / 2));
+    if (ch.future) {
+      // 太阳镜: 双镜片 + 鼻梁 + 反光
+      ctx.save();
+      ctx.fillStyle = '#1a1a22';
+      ctx.strokeStyle = '#3c3c4a'; ctx.lineWidth = 1;
+      const lw = 15 * s, lh = 10 * s, gap = 5 * s;
+      ctx.beginPath(); ctx.roundRect(cx - lw - gap / 2, cy - lh / 2, lw, lh, 3 * s); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.roundRect(cx + gap / 2, cy - lh / 2, lw, lh, 3 * s); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#1a1a22'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(cx - gap / 2, cy); ctx.lineTo(cx + gap / 2, cy); ctx.stroke();
+      ctx.fillStyle = 'rgba(180,220,255,0.5)';
+      ctx.fillRect(cx - lw - gap / 2 + 2 * s, cy - lh / 2 + 2 * s, 4 * s, 2.5 * s);
+      ctx.fillRect(cx + gap / 2 + 2 * s, cy - lh / 2 + 2 * s, 4 * s, 2.5 * s);
+      ctx.restore();
+    }
+    if (ch.mustache) {
+      // 八字胡: 鼻下两撇 (加粗 — 小图上需清晰可辨)
+      ctx.save();
+      ctx.strokeStyle = '#1d1208'; ctx.lineWidth = 3.4 * s; ctx.lineCap = 'round';
+      const my = cy + h * 0.2;
+      ctx.beginPath(); ctx.moveTo(cx - 2, my); ctx.quadraticCurveTo(cx - 11 * s, my + 2.5 * s, cx - 18 * s, my - 4 * s); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx + 2, my); ctx.quadraticCurveTo(cx + 11 * s, my + 2.5 * s, cx + 18 * s, my - 4 * s); ctx.stroke();
+      ctx.restore();
+    }
   }
 
   // 原版 Zombie::DrawBossBackArm (Zombie.cpp 9729-9754): 内臂(丢RV/放蹦极的手)

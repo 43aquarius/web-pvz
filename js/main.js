@@ -33,11 +33,40 @@ const Game = {
   selectedZombieCard: -1,   // 我不是僵尸: 选中的僵尸卡
   littleTrouble: false,     // 小僵尸关 (原版 IsLittleTroubleLevel: 冒险3-5 + 小游戏"小僵尸大麻烦")
   menuDialog: null,         // 游戏内菜单对话框 (#14: 菜单按钮 → 菜单页而非直接回主菜单)
-  // 金币 (戴夫商店货币, 原版 $) — 调试模式 (解锁全部内容) 下无限: 恒 99999
+  // 金币 (戴夫商店货币, 原版 $ — PlayerInfo.cpp:304 clamp(0, 99999)) — 调试模式 (解锁全部内容) 下无限: 恒 99999
   //   真实值存 _coins; 解锁前快照存 _dbgSnap, 重锁时还原 (见 screens.js 选项屏)
   get coins() { return this.debugUnlocked ? 99999 : (this._coins || 0); },
-  set coins(v) { this._coins = this.debugUnlocked ? 99999 : Math.max(0, v); },
+  set coins(v) { this._coins = this.debugUnlocked ? 99999 : Math.max(0, Math.min(99999, Math.round(v))); },
   _coins: 0,
+  // 智慧树作弊码 (原版: 游戏中直接键入; daisies/dance/pinata 需树高 100/500/1000 英尺)
+  cheats: { future: false, mustache: false, trickedout: false, daisies: false, dance: false, pinata: false },
+  _cheatBuf: '',
+  treeHeight() {
+    try {
+      const zeng = require('./screens').Screens.zengarden;
+      if (!zeng.data) zeng.load();
+      return zeng.data.treeHeight || 0;
+    } catch (e) { return 0; }
+  },
+  tryCheat() {
+    const CODES = ['future', 'mustache', 'trickedout', 'daisies', 'dance', 'pinata'];
+    const NAMES = { future: '未来僵尸', mustache: '胡子僵尸', trickedout: '疯狂割草机', daisies: '僵尸雏菊', dance: '僵尸跳舞', pinata: '糖果派对' };
+    const GATES = { daisies: 100, dance: 500, pinata: 1000 };   // 原版: 树高不足时提示 "Your Tree of Wisdom isn't tall enough"
+    for (const c of CODES) {
+      if (this._cheatBuf.endsWith(c)) {
+        this._cheatBuf = '';
+        if (GATES[c] && this.treeHeight() < GATES[c]) {
+          this.audio.play('buzzer');
+          if (this.board) this.board.addEffect('text', 400, 110, { hold: 2, txt: '你的智慧树还不够高！', c: '#ff9a7a', size: 22 });
+          return;
+        }
+        this.cheats[c] = !this.cheats[c];
+        this.audio.play('bleep');
+        if (this.board) this.board.addEffect('text', 400, 110, { hold: 1.6, txt: (this.cheats[c] ? '开启：' : '关闭：') + NAMES[c], c: '#8fe0ff', size: 22 });
+        return;
+      }
+    }
+  },
   purchased: {},            // 商店已购物 { key: true }
   shopTab: 'items',         // 商店页签
   playerName: null,         // #2 玩家姓名 (原版 mPlayerInfo->mName; NewUserDialog 创建)
@@ -117,6 +146,28 @@ const Game = {
       if (save.coins) this.coins = save.coins;
       if (save.purchased) this.purchased = save.purchased;
       if (save.dbgSnap) this._dbgSnap = save.dbgSnap;   // 调试解锁前的金币/已购快照
+      // #fix(旧调试存档自愈): v9.11 之前点过"解锁全部内容"的存档没有禅园工具/智慧树赠送 — 幂等补授
+      //   (旧版解锁只写 {unlocked, debugUnlocked}, purchased 为空 → 工具栏只剩水壶)
+      if (this.debugUnlocked) {
+        const GRANTS = ['goldwatering', 'phonograph', 'glove', 'mushroomgarden', 'aquarium', 'wheelbarrow', 'stinky', 'fertilizer', 'bugspray', 'treeofwisdom'];
+        let changed = false;
+        for (const k of GRANTS) if (!this.purchased[k]) { this.purchased[k] = true; changed = true; }
+        if (changed) {
+          this.purchasedSet = new Set(Object.keys(this.purchased));
+          this.saveShop();
+        }
+        try {
+          const zeng = require('./screens').Screens.zengarden;
+          if (!zeng.data) zeng.load();
+          let dirty = false;
+          if ((zeng.data.fertilizer || 0) < 10) { zeng.data.fertilizer = 10; dirty = true; }
+          if ((zeng.data.bugspray || 0) < 10) { zeng.data.bugspray = 10; dirty = true; }
+          if ((zeng.data.chocolate || 0) < 5) { zeng.data.chocolate = 5; dirty = true; }
+          if ((zeng.data.treeFood || 0) < 10) { zeng.data.treeFood = 10; dirty = true; }
+          if (!(zeng.data.treeHeight > 0)) { zeng.data.treeHeight = 1; dirty = true; }
+          if (dirty) zeng.save();
+        } catch (e) { }
+      }
       this.daveSeen = JSON.parse(localStorage.getItem('webpvz_dave') || '{}');
     } catch (e) { }
     // #2 玩家姓名 (原版 Profile: 主菜单首次进入弹 NewUserDialog 创建; localStorage 持久化)
@@ -190,7 +241,7 @@ const Game = {
     });
     document.addEventListener('gesturestart', e => e.preventDefault());
     window.addEventListener('keydown', e => {
-      if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
+      if (e.key === 'Escape') {
         if (this.state === 'playing' && this.board) {
           // 传送带持卡: 原版 ESC → RefreshSeedPacketFromCursor 回带 (Board.cpp:7654-7659),
           //   优先于暂停菜单
@@ -201,7 +252,26 @@ const Game = {
           // 禅境花园: ESC → ClearCursor 归还工具 (植物本来就留在原地)
           const zg = Screens.zengarden;
           if (zg && (zg.tool || zg.heldPlant)) { zg.cancelHold(); this.audio.play('tap'); }
+        } else if (this.state === 'treeofwisdom') {
+          const tw = Screens.treeofwisdom;
+          if (tw && tw.tool) { tw.tool = null; this.audio.play('tap'); }
         }
+      } else if ((e.key === 'p' || e.key === 'P') && this.state === 'playing' && this.board) {
+        // 'p' 可能是作弊码 "pinata" 的开头 — 450ms 内无后续字母才暂停
+        clearTimeout(this._pTimer);
+        this._pTimer = setTimeout(() => {
+          if (this.state === 'playing' && this.board) {
+            if (this.menuDialog) this.closeMenuDialog();
+            else this.openMenuDialog();
+          }
+        }, 450);
+      }
+      // 智慧树作弊码 (原版: 游戏中直接键盘输入 future/mustache/trickedout/daisies/dance/pinata)
+      if (/^[a-zA-Z]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey &&
+          this.state === 'playing' && this.board && !this.menuDialog) {
+        clearTimeout(this._pTimer);   // 正在打作弊码 → 取消暂停
+        this._cheatBuf = (this._cheatBuf + e.key.toLowerCase()).slice(-12);
+        this.tryCheat();
       }
       if (e.key === ' ' && this.state === 'playing' && this.board && !this.menuDialog) {
         this.board.speed = this.board.speed === 1 ? 2 : this.board.speed === 2 ? 4 : 1;
@@ -222,6 +292,7 @@ const Game = {
       case 'modeselect': Screens.modeSelect.click(p, this); break;
       case 'shop': Screens.shop.click(p, this); break;
       case 'zengarden': Screens.zengarden.click(p, this); break;
+      case 'treeofwisdom': Screens.treeofwisdom.click(p, this); break;
       case 'modewin': Screens.modeWin.click(p, this); break;
       case 'playing': this.gameClick(p); break;
       case 'almanac': this.almanacClick(p); break;
@@ -839,16 +910,37 @@ const Game = {
     }
     return true;
   },
+  // 商店拒绝原因 (null = 可购买) — 商店界面灰价牌与点击反馈共用;
+  //   #fix(卡槽买不了): 旧版点 slot10 无 slot9 时静默失败只有蜂鸣, 玩家误以为"金币不够"
+  shopDenyReason(key) {
+    const it = SHOP_ITEMS.find(s => s.key === key);
+    if (!it) return '这个……我好像没进过这个货？';
+    if (key.startsWith('marigold')) {
+      if (this.purchased[key + '_day'] === new Date().toDateString()) return '今天的金盏花都卖完啦，明天再来！';
+      if (this.coins < it.cost) return '金币不够呀！多打点僵尸攒钱吧！';
+      return null;
+    }
+    if (key === 'slot9' && !this.purchased['slot8']) return '得先买「种子槽 ×8」才能买这一格！';
+    if (key === 'slot10' && !this.purchased['slot9']) return '得先买「种子槽 ×9」才能买这一格！';
+    if (key === 'treefood') {
+      const zg = require('./screens').Screens.zengarden;
+      if (!zg.data) zg.load();
+      if ((zg.data.treeFood || 0) >= 10) return '树粮最多只能带 10 袋，先去喂喂你的智慧树吧！';
+    }
+    if (!it.consumable && this.purchased[key]) return '这个已经卖给你啦！';
+    if (this.coins < it.cost) return '金币不够呀！多打点僵尸攒钱吧！';
+    return null;
+  },
   buyItem(key) {
     const it = SHOP_ITEMS.find(s => s.key === key);
     if (!it) return false;
+    const deny = this.shopDenyReason(key);
+    if (deny) { this.audio.play('buzzer'); this._lastDeny = deny; return false; }
+    this._lastDeny = null;
     // 盆栽金盏花 (每日每槽限购 1 株 — 原版 GetCurrentDaysSince2000 日期限购)
     if (key.startsWith('marigold')) {
-      const today = new Date().toDateString();
-      if (this.purchased[key + '_day'] === today) return false;
-      if (this.coins < it.cost) { this.audio.play('buzzer'); return false; }
       this.coins -= it.cost;
-      this.purchased[key + '_day'] = today;
+      this.purchased[key + '_day'] = new Date().toDateString();
       const zeng = require('./screens').Screens.zengarden;
       if (!zeng.data) zeng.load();
       zeng.addPottedPlant(zeng.newPlant('MARIGOLD', { isMarigold: true }));
@@ -857,16 +949,24 @@ const Game = {
       this.audio.play('points');
       return true;
     }
-    // 消耗品 (肥料/杀虫剂) 不占"已购"位 — 可反复购买补库存
-    //   (教程赠礼/调试赠送只标记 purchased[key] 使工具栏常驻, 不得阻断补货 — 原版 purchases 表同语义)
-    if (!it.consumable && this.purchased[key]) return false;
-    if (this.coins < it.cost) { this.audio.play('buzzer'); return false; }
-    // 种子槽须按顺序购买
-    if (key === 'slot9' && !this.purchased['slot8']) return false;
-    if (key === 'slot10' && !this.purchased['slot9']) return false;
     this.coins -= it.cost;
-    // 消耗品 (肥料/杀虫剂): 加库存可重复购买
-    if (it.consumable) {
+    if (key === 'treeofwisdom') {
+      // 原版 PurchaseItem (StoreScreen.cpp:1012-1037): purchases=1 + 树高=1 + VISIT_TREE 询问
+      this.purchased[key] = true;
+      this.purchasedSet = new Set(Object.keys(this.purchased));
+      const zeng = require('./screens').Screens.zengarden;
+      if (!zeng.data) zeng.load();
+      zeng.data.treeHeight = Math.max(zeng.data.treeHeight || 0, 1);
+      zeng.save();
+      this._treeJustBought = true;
+    } else if (key === 'treefood') {
+      // 原版: 每次购买 +1 袋 (上限 10 由 shopDenyReason 把关)
+      const zeng = require('./screens').Screens.zengarden;
+      if (!zeng.data) zeng.load();
+      zeng.data.treeFood = (zeng.data.treeFood || 0) + 1;
+      zeng.save();
+    } else if (it.consumable) {
+      // 消耗品 (肥料/杀虫剂): 加库存可重复购买
       const zeng = require('./screens').Screens.zengarden;
       if (!zeng.data) zeng.load();
       zeng.data[key === 'fertilizer' ? 'fertilizer' : 'bugspray'] =
@@ -999,6 +1099,9 @@ const Game = {
     if (this.state === 'zengarden') {
       Screens.zengarden.update(dt);
     }
+    if (this.state === 'treeofwisdom') {
+      Screens.treeofwisdom.update(dt);
+    }
     if (this.state === 'playing' && this.board) {
       if (!this.board.paused) {
         const sdt = dt * this.board.speed;
@@ -1038,6 +1141,7 @@ const Game = {
       case 'modeselect': Screens.modeSelect.draw(ctx); break;
       case 'shop': Screens.shop.draw(ctx); break;
       case 'zengarden': Screens.zengarden.draw(ctx); break;
+      case 'treeofwisdom': Screens.treeofwisdom.draw(ctx); break;
       case 'modewin': Screens.modeWin.draw(ctx, this); break;
       case 'playing': {
         // 异步关卡加载期间 board 可能为空 (startLevel 先 await 分包) — 渲染守卫

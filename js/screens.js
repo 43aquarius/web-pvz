@@ -954,16 +954,18 @@ Screens.options = {
         game.debugUnlocked = true;
         game.coins = 99999;
         // 花园工具/场景/蜗牛一次性赠送 (肥料/杀虫剂仅标记槽位常驻 — 商店可继续补货)
-        const GARDEN_GRANTS = ['goldwatering', 'phonograph', 'glove', 'mushroomgarden', 'aquarium', 'wheelbarrow', 'stinky', 'fertilizer', 'bugspray'];
+        const GARDEN_GRANTS = ['goldwatering', 'phonograph', 'glove', 'mushroomgarden', 'aquarium', 'wheelbarrow', 'stinky', 'fertilizer', 'bugspray', 'treeofwisdom'];
         for (const k of GARDEN_GRANTS) game.purchased[k] = true;
         game.purchasedSet = new Set(Object.keys(game.purchased));
-        // 消耗品库存兜底 (巧克力无商店来源 — 原版仅僵尸掉落)
+        // 消耗品库存兜底 (巧克力无商店来源 — 原版仅僵尸掉落; 智慧树附赠 10 袋树粮 + 树高 1)
         const zeng = Screens.zengarden;
         try {
           if (!zeng.data) zeng.load();
           zeng.data.fertilizer = Math.max(zeng.data.fertilizer || 0, 10);
           zeng.data.bugspray = Math.max(zeng.data.bugspray || 0, 10);
           zeng.data.chocolate = Math.max(zeng.data.chocolate || 0, 5);
+          zeng.data.treeFood = Math.max(zeng.data.treeFood || 0, 10);
+          zeng.data.treeHeight = Math.max(zeng.data.treeHeight || 0, 1);
           zeng.save();
         } catch (e) { }
         game.saveShop();
@@ -1030,7 +1032,7 @@ Screens.help = {
           ['  击杀僵尸掉金币, 商店共4页:', '#6a4a20'],
           ['  页1: 耙子/种子槽/清洁车/升级植物', '#6a4a20'],
           ['  页2: 地刺王/吸金磁/冰西瓜/加农炮等', '#6a4a20'],
-          ['  页3: 花园用品(金水壶/肥料/杀虫剂…)', '#6a4a20'],
+          ['· 商店页3-4: 花园用品 + 智慧树(送10袋树粮, 喂树解锁作弊码)', '#6a4a20'],
           ['  页4: 蘑菇园/水族馆/手推车/臭臭蜗牛', '#6a4a20'],
           ['', ''],
           ['【禅镜花园】通关5-4后从主菜单进入', '#4a2f10'],
@@ -1593,7 +1595,8 @@ Screens.shop = {
       all.filter(i => ['SPIKEROCK', 'GOLDMAGNET', 'WINTERMELON', 'COBCANNON', 'IMITATER', 'slot9', 'slot10'].includes(i.key)),
       // 原版页3 (STORE_PAGE_ZEN1): 金盏花×3 + 金壶 + 肥料 + 杀虫剂 + 唱片 + 手套 = 8 格
       all.filter(i => ['marigold1', 'marigold2', 'marigold3', 'goldwatering', 'fertilizer', 'bugspray', 'phonograph', 'glove'].includes(i.key)),
-      all.filter(i => ['mushroomgarden', 'aquarium', 'wheelbarrow', 'stinky'].includes(i.key)),
+      // 原版页4 (STORE_PAGE_ZEN2): 蘑菇园/水族馆/推车/蜗牛 + 智慧树 + 树粮 = 6 格
+      all.filter(i => ['mushroomgarden', 'aquarium', 'wheelbarrow', 'stinky', 'treeofwisdom', 'treefood'].includes(i.key)),
     ];
   },
   // 原版 GetStorePosition: 前4格上排 (422+74i, 206), 后4格下排 (372+74(i-4), 310)
@@ -1663,7 +1666,9 @@ Screens.shop = {
       // 消耗品 (肥料/杀虫剂) 永可复购补货 — 不因工具栏常驻标记而"已售出"
       const bought = marigoldSold || (game && game.purchased[it.key] && !it.consumable);
       const hov = this.hoverItem === i && !bought;
-      const can = game && game.coins >= it.cost;
+      // #fix(卡槽灰价): 可购判定统一走 shopDenyReason (含 slot 顺序/树粮上限/金币) —
+      //   旧版只看金币, slot10 未买前9格时价牌仍绿色, 点击却只响蜂鸣 → 玩家误以为"金币不够"
+      const can = game && !bought && game.shopDenyReason(it.key) === null;
       const pop = bought ? 0 : (hov ? Math.sin(t * 6) * 2 : 0);
       this._cells.push({ x: pos.x, y: pos.y, w: 50, h: 87, item: it, i, bought });
       ctx.save();
@@ -1789,6 +1794,27 @@ Screens.shop = {
       ctx.fillStyle = '#8a7a3a';
       ctx.fillText(this.bubble.line < this.bubble.lines.length - 1 ? '点击继续 ▸' : '点击关闭 ✕', bx + bw - 90, by + bh - 14);
       ctx.restore();
+      // VISIT_TREE 询问: 是/否 石钮 (原版 DIALOG_BUTTON_YES/NO)
+      this._visitBtns = null;
+      if (this.bubble.visitTree && this.bubble.line >= this.bubble.lines.length - 1) {
+        const UI = __getUI();
+        const yes = { x: bx + 36, y: by + bh - 58, w: 86, h: 38 };
+        const no = { x: bx + bw - 122, y: by + bh - 58, w: 86, h: 38 };
+        this._visitBtns = { yes, no };
+        ctx.save();
+        if (UI && UI.drawStoneButton) {
+          UI.drawStoneButton(ctx, yes.x, yes.y, yes.w, yes.h, '是', 18);
+          UI.drawStoneButton(ctx, no.x, no.y, no.w, no.h, '否', 18);
+        } else {
+          ctx.fillStyle = '#a8834a'; ctx.strokeStyle = '#5c4020'; ctx.lineWidth = 2;
+          for (const b of [yes, no]) { ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 8); ctx.fill(); ctx.stroke(); }
+          ctx.fillStyle = '#f4e6b0'; ctx.font = 'bold 18px "Noto Sans SC", sans-serif'; ctx.textAlign = 'center';
+          ctx.fillText('是', yes.x + 43, yes.y + 26); ctx.fillText('否', no.x + 43, no.y + 26);
+        }
+        ctx.restore();
+      }
+    } else {
+      this._visitBtns = null;
     }
   },
   _wrapText(ctx, text, x, y, maxW, lineH) {
@@ -1801,20 +1827,39 @@ Screens.shop = {
     if (line) ctx.fillText(line, x, yy);
   },
   click(p, game) {
-    // 气泡优先 (点击推进/关闭)
+    // 气泡优先 (点击推进/关闭; VISIT_TREE 询问 → 是/否石钮)
     if (this.bubble) {
+      if (this.bubble.visitTree && this._visitBtns) {
+        if (inRect(p, this._visitBtns.yes.x, this._visitBtns.yes.y, this._visitBtns.yes.w, this._visitBtns.yes.h)) {
+          game.audio.play('gravebutton');
+          this.bubble = null; this._visitBtns = null;
+          this.returnState = null;
+          game.state = 'treeofwisdom';
+          Screens.treeofwisdom.enter();
+          return;
+        }
+        if (inRect(p, this._visitBtns.no.x, this._visitBtns.no.y, this._visitBtns.no.w, this._visitBtns.no.h)) {
+          game.audio.play('tap');
+          this.bubble = null; this._visitBtns = null;
+          return;
+        }
+      }
       this.bubble.line++;
       if (this.bubble.line >= this.bubble.lines.length) this.bubble = null;
       game.audio.play('tap');
       return;
     }
-    // 主菜单 (或返回禅境花园 — 原版 OpenStore 后回花园)
+    // 主菜单 (或返回禅境花园/智慧树 — 原版 OpenStore 后回场景)
     if (this._mainmenu && inRect(p, this._mainmenu.x, this._mainmenu.y, this._mainmenu.w, this._mainmenu.h)) {
       game.audio.play('gravebutton');
       if (this.returnState === 'zengarden') {
         this.returnState = null;
         game.state = 'zengarden';
         Screens.zengarden.enter();
+      } else if (this.returnState === 'treeofwisdom') {
+        this.returnState = null;
+        game.state = 'treeofwisdom';
+        Screens.treeofwisdom.enter();
       } else {
         game.state = 'menu';
       }
@@ -1831,15 +1876,20 @@ Screens.shop = {
     for (const c of (this._cells || [])) {
       if (inRect(p, c.x, c.y, c.w, c.h)) {
         const it = c.item;
-        const marigoldSold = it.key.startsWith('marigold') && game.purchased[it.key + '_day'] === new Date().toDateString();
-        if (game.purchased[it.key] || marigoldSold) { game.audio.play('buzzer'); return; }
-        if (it.key === 'slot9' && !game.purchased['slot8']) { game.audio.play('buzzer'); return; }
-        if (it.key === 'slot10' && !game.purchased['slot9']) { game.audio.play('buzzer'); return; }
-        if (game.coins < it.cost) { game.audio.play('buzzer'); return; }
         if (game.buyItem(it.key)) {
           // 戴夫购买台词气泡
-          this.bubble = { lines: [`谢谢惠临! ${it.label}是你的了!`], line: 0, clickToContinue: true };
+          if (game._treeJustBought) {
+            // 原版 PurchaseItem → VISIT_TREE 询问框: "要现在就去看看智慧树吗?"
+            game._treeJustBought = false;
+            this.bubble = { lines: ['智慧树是你的了！', '要现在就去看看它吗？'], line: 0, visitTree: true };
+          } else {
+            this.bubble = { lines: [`谢谢惠临! ${it.label}是你的了!`], line: 0, clickToContinue: true };
+          }
           game.audio.play('points');
+        } else {
+          // 拒绝原因 → 戴夫气泡解释 (原版 NOT_ENOUGH_MONEY 对话框的 web 化;
+          //   #fix: slot10 未买前9格/树粮满10袋 等不再静默蜂鸣)
+          this.bubble = { lines: [game._lastDeny || '现在还不能买这个！'], line: 0, clickToContinue: true };
         }
         return;
       }
@@ -1994,7 +2044,7 @@ Screens.zengarden = {
       [113, 185], [306, 120], [356, 270], [622, 120], [669, 270], [122, 355], [365, 458], [504, 417],
     ],
   },
-  GARDEN_LABEL: { greenhouse: '禅境花园', mushroomgarden: '蘑菇园', aquarium: '水族馆' },
+  GARDEN_LABEL: { greenhouse: '禅境花园', mushroomgarden: '蘑菇园', aquarium: '水族馆', treeofwisdom: '智慧树' },
   BG: { greenhouse: 'background_greenhouse.jpg', mushroomgarden: 'background_mushroomgarden.jpg', aquarium: 'aquarium1.jpg' },
   COIN_VAL: { silver: 10, gold: 25, diamond: 100 },
   // 原版 PlantPottedDrawHeightOffset (ZenGarden.cpp:1190-1267): [高度偏移, 缩放修正]
@@ -2056,6 +2106,7 @@ Screens.zengarden = {
     const g = ['greenhouse'];
     if (game.purchased.mushroomgarden) g.push('mushroomgarden');
     if (game.purchased.aquarium) g.push('aquarium');
+    if (game.purchased.treeofwisdom) g.push('treeofwisdom');   // 原版 ZenGarden.cpp:1846-1884: 水族馆之后 → 智慧树
     return g;
   },
 
@@ -2105,7 +2156,12 @@ Screens.zengarden = {
   load() {
     let d = null;
     try { d = JSON.parse(localStorage.getItem('webpvz_garden') || 'null'); } catch (e) { }
-    if (d && d.v === 3 && Array.isArray(d.plants)) { this.data = d; return; }
+    if (d && d.v === 3 && Array.isArray(d.plants)) {
+      // #fix(智慧树): 旧 v3 存档补树高/树粮字段 (0 = 未长/无库存)
+      d.treeHeight = d.treeHeight || 0;
+      d.treeFood = d.treeFood || 0;
+      this.data = d; return;
+    }
     // v2 → v3 迁移: 补巧克力/蜗牛位置/金盏花变种/教程步进
     if (d && d.v === 2 && Array.isArray(d.plants)) {
       d.v = 3;
@@ -2134,11 +2190,11 @@ Screens.zengarden = {
         plants[plants.length - 1].garden = 'greenhouse';
         plants[plants.length - 1].x = i; plants[plants.length - 1].y = r;
       }));
-      this.data = { v: 3, plants, fertilizer: oldFert, bugspray: oldSpray, chocolate: 0, garden: d.garden === 'mushroomgarden' || d.garden === 'aquarium' ? d.garden : 'greenhouse', stinkyWake: 0, stinkyChoc: 0, stinkyPos: null, tutStep: null };
+      this.data = { v: 3, plants, fertilizer: oldFert, bugspray: oldSpray, chocolate: 0, garden: d.garden === 'mushroomgarden' || d.garden === 'aquarium' ? d.garden : 'greenhouse', stinkyWake: 0, stinkyChoc: 0, stinkyPos: null, tutStep: null, treeHeight: 0, treeFood: 0 };
       this.save(); return;
     }
     // 初始: 空花园 (原版首次进入由戴夫 2102 对话赠送 2 株金盏花芽)
-    this.data = { v: 3, plants: [], fertilizer: 0, bugspray: 0, chocolate: 0, garden: 'greenhouse', stinkyWake: 0, stinkyChoc: 0, stinkyPos: null, tutStep: null };
+    this.data = { v: 3, plants: [], fertilizer: 0, bugspray: 0, chocolate: 0, garden: 'greenhouse', stinkyWake: 0, stinkyChoc: 0, stinkyPos: null, tutStep: null, treeHeight: 0, treeFood: 0 };
     this.save();
   },
   // 原版 PottedPlant::InitializePottedPlant: facing 随机 / feedingsPerGrow 3-5 / 变种随机
@@ -3549,12 +3605,22 @@ Screens.zengarden = {
       Screens.menu.enter();   // 与其他屏返回一致: 重放菜单滑入动画
       return;
     }
-    // 切换花园 (原版 GotoNextGarden 先 LeaveGarden: 结算进行中工具 + 收币)
+    // 切换花园 (原版 GotoNextGarden 先 LeaveGarden: 结算进行中工具 + 收币;
+    //   水族馆之后 → 智慧树 PreNewGame(TREE_OF_WISDOM) — ZenGarden.cpp:1846-1884)
     if (this._nextGarden && inRect(p, this._nextGarden.x, this._nextGarden.y, this._nextGarden.w, this._nextGarden.h)) {
       this.settleAndLeave(game);
       const gardens = this.ownedGardens(game);
       const gi = gardens.indexOf(this.data.garden);
-      this.data.garden = gardens[(gi + 1) % gardens.length];
+      const next = gardens[(gi + 1) % gardens.length];
+      if (next === 'treeofwisdom') {
+        this.data.garden = 'greenhouse';   // 存档保持有效花园键 (智慧树是独立场景)
+        this.save();
+        game.state = 'treeofwisdom';
+        Screens.treeofwisdom.enter();
+        game.audio.play('gravebutton');
+        return;
+      }
+      this.data.garden = next;
       this.save();
       this.enter();
       game.audio.play('gravebutton');
@@ -3802,6 +3868,508 @@ Screens.zengarden = {
 
   // 兼容旧调用 (main.js 进花园时调用) — 需求已由实时时钟计算
   refreshNeeds() { },
+};
+
+// ================================================================
+// 智慧树 (逐行对照 PvZ-Portable Challenge.cpp 4923-5337 TreeOfWisdom* 系列)
+//   · 场景: treeofWisdom reanim (bg/trunk/grass/overlay 四渲染组) + 6 朵漂云
+//   · 成长: 每袋树粮 +1 英尺 (anim_grow1..51); ≥50 英尺顶部显示高度
+//   · 说话: WAITING(7-15s)→BABBLE(4s) / 喂食→JUST_GREW(1.2s)→GIVE_WISDOM(10s)
+//     索引: 智慧1-49(=树高-1) / 闲聊101-110,201-204,301-304,401-404 / 500 重复引子
+//     里程碑 800@100尺 900@500尺 1000@1000尺 1100@>1000尺
+//   · 工具栏: 树粮槽(xN/空灰化/喂养中灰化) + 下一花园 + 商店 + 主菜单
+//   · 商店: 智慧树 $1000 / 树粮 $250 上限10袋 (StoreScreen.cpp:916-917)
+// ================================================================
+Screens.treeofwisdom = {
+  // [TREE_OF_WISDOM_1..49]: 成长智慧 (喂食后按 树高-1 给出; 官方文本中文化)
+  WISDOM: [
+    '谢谢你给我施肥！继续施肥，我将给你有价值的信息！',
+    '大嘴花和坚果墙能一起发挥最大的效用——这并不奇怪，因为他们上大学时是舍友。',
+    '如果你真的在听我说话，那就竖起耳朵听：种两排向日葵吧——我可是非常、非常认真的！',
+    '潜水僵尸？真是讨厌！怎么处置他们？我的建议是：在睡莲上种坚果墙，就是这样。',
+    '嗯……试试在游戏时输入 "future"，以期会晤来自"未来"的僵尸！',
+    '究竟需要多少颗樱桃炸弹才能解决掉巨人僵尸？提示：多于一个，少于三个。进一步提示：两个。',
+    '如果想为你的禅境花园添加一些蘑菇，那最好在晚上的关卡里碰碰运气。',
+    '我可不担心毁灭蘑菇会对草坪造成永久破坏——大地会随着时间治愈自己。',
+    '有没有试过点击主菜单上的花朵呢？试试看！我在这儿等着。',
+    '传说被冰冻的僵尸会吃得比较慢，我认为传说有它的道理。',
+    '听说过神出鬼没的雪人僵尸吗？有人说他喜欢躲在最黑暗的地方。',
+    '有什么东西比免费还便宜吗？没有！这就是为什么小喷菇在晚上如此受欢迎。',
+    '想为禅境花园增添一株水生植物？以我的树皮打赌，在泳池关卡里就能找到它们。',
+    '有没有注意到巨人僵尸有时候会抓起其他僵尸来砸你的植物？到底是怎么回事呢……',
+    '臭臭蜗牛显然很喜欢巧克力——也许喜欢得有点过头了。享用过巧克力后，它一小时都安静不下来。',
+    '如果你以为"无尽"生存模式只会掉落水生植物，那再想想吧！那里可是什么植物都会出现的哦！',
+    '人们常常问：哪里能找到巧克力？也许更好的问题是：哪里找不到巧克力？每种游戏模式里都有它的身影！',
+    '墓碑吞噬者，呃？只在草坪右侧能看到墓碑时才带上它吧——这正是我的选择。',
+    '我听说铁桶僵尸能承受的伤害是普通僵尸的五倍！',
+    '听说在游戏时输入 "mustache"，会给那些僵尸带来可怕的变形！',
+    '我做了个梦。梦里，香蒲的尖刺扎爆了气球，把僵尸摔到地上。我不知道这意味着什么。',
+    '想知道一关有多长？数一数关卡进度条上的旗帜，就能心中有数。',
+    '那些可恶的僵尸植物！它们以为自己在干什么，竟然朝你的植物开火？还好坚果墙能把它们挡得死死的。',
+    '屋顶清洁车，经典道具，我怎么推荐都不为过。它最大的好处？能帮你打赢蹦极狂欢夜。',
+    '买了模仿者之后，试试点击图鉴左上角的小图画，就能看到它的图鉴条目。',
+    '每天都有新的挑战和机遇。哦对了，戴夫商店里每天还会进新的金盏花。',
+    '如果你在无尽生存模式里依赖升级植物，要留心：种得越多，它们就越贵。',
+    '就在你以为火爆辣椒已经够有用的时候，智慧树告诉你：它还能烧掉冰车僵尸的冰道！砰！',
+    '你以为火炬树桩会烤化寒冰射手的冰弹？你想得对——因为你是聪明人，冰弹并不会被烤化。',
+    '累了？郁闷了？坚果墙上的梯子让你头疼？一株吸金磁就能把烦恼统统吸走！',
+    '我还是颗橡果的时候，爷爷告诉我："孩子，砸罐子谜题先砸右边的罐子会容易得多。"',
+    '蘑菇园！哼！它有什么用？完全没用！呃……除了种蘑菇以外。',
+    '没有水族馆，想在禅境花园养水生植物基本上是不可能的。随口说说。',
+    '要是把魅惑菇喂给舞王僵尸，他会不会为你召唤伴舞？把全部家当押"会"吧。',
+    '火炬树桩的火焰比愤怒更炽热，但冰车僵尸、铁门僵尸、梯子僵尸和投石车僵尸不怕火。',
+    '高坚果的"高"名不虚传——对付海豚骑士和跳跳僵尸特别有效。',
+    '你知道僵尸会从墓碑里爬出来吧？那还有什么好犹豫的，在夜晚生存里用墓碑吞噬者除掉它们吧！',
+    '矿工僵尸用挖地道破坏自然秩序，那用吸金磁偷走他们的镐子也算公平。',
+    '"蹦极狂欢夜"和"雪橇小队"这两个小游戏真的、真的、真的很难。想少一个"真的"？用窝瓜吧。',
+    '樱桃炸弹或火爆辣椒的爆炸力，足以把梯子从坚果墙上震下来。',
+    '我是僵尸模式里的小鬼看似弱小，但他们速度快，收集最后一颗脑子很在行。',
+    '一排多个寒冰射手叠加减速？很遗憾，答案是"不"。',
+    '玩坚果保龄球时，弹跳次数越多，拿到的金币也越多。',
+    '蹦极僵尸来抓植物时，伞叶可是绝佳的保险。',
+    '听说原始的僵尸呻吟声背后还有一段不为人知的故事……嗯，其实我也不知道。',
+    '投石车僵尸最讨厌高坚果——高坚果能挡住他们的篮球。',
+    '每株植物都有自己的脾气，就像每棵树都有自己的年轮。',
+    '如果你输入 "trickedout"，看到割草机变得怪怪的，可别惊讶！',
+    '谢谢你给我施肥！我的智慧暂时告一段落，但把我养得更高，也许还有更多！',
+  ],
+  // 闲聊/里程碑文本 (Babble/GiveWisdom 索引表)
+  TALK: {
+    101: '历史总会重演，只是细节总出错。', 102: '我感受时间的速度比你慢得多！',
+    103: '听说了这个叫"冬天"的玩意儿，我可不太期待。', 104: '勇气很便宜；坚持才值钱。',
+    105: '我的木质部在发麻！我感觉一股冲动正在涌上来！', 106: '那朵云我好像见过。它看起来就像一大团水滴的集合。',
+    107: '呼——抱歉，我刚排放了一点氧气。别介意，我就长在这儿。', 108: '嗯……阳光，真美味！',
+    109: '你见过我的表兄世界树吗？在瑞典可有名了，粉丝无数。', 110: '经过仔细观察，我推断是地球绕着太阳转，而不是相反。',
+    201: '在现阶段，我还缺乏世事的知识！', 202: '只要站着不动，也能增长不少智慧。',
+    203: '天哪，我居然长出叶子了！我的代谢快得吓人！', 204: '我觉得自己是多年生植物！',
+    301: '你花在肥料上的这些钱，我真的很感激！', 302: '我在网上大学修社会学，很有帮助。',
+    303: '我永远搞不懂你们动物为什么整天跑来跑去。', 304: '当你像我一样活得够久，睡得就少，幻觉就多。',
+    401: '如果你把森林和树木搞混了，记住：森林是许多棵树的集合，反之不然。', 402: '嗯……我真想来点美味的肥料！',
+    403: '从这么高的地方看出去，风景真好。', 404: '哦哦，小心——别敲水族馆的玻璃！会震聋你的水生朋友。',
+    500: '这里有一些值得再听一遍的智慧……',
+    600: '请给我来点树粮吧！',
+    800: '嘿！我已经 100 英尺高了！输入 "daisies" 一起庆祝吧——僵尸死时会留下小雏菊！',
+    900: '哇！我已经 500 英尺高了！这可得跳个舞！输入 "dance"，让僵尸们摇摆起来！',
+    1000: '哇！！我已经 1000 英尺高了！输入 "pinata" 庆祝吧——僵尸被消灭时会吐出一地糖果！',
+    1100: '谢谢你给我施肥！我的智慧已经全部传授给你了，但你还可以让我长得更高！',
+  },
+  SLOT_W: 70, SLOT_H: 72,
+
+  // ---------- 数据 ----------
+  height() { const z = Screens.zengarden; return (z.data && z.data.treeHeight) || 0; },
+  food() { const z = Screens.zengarden; return (z.data && z.data.treeFood) || 0; },
+  saveTree() { Screens.zengarden.save(); },
+
+  // ---------- 生命周期 ----------
+  enter() {
+    const game = Screens.game;
+    const zeng = Screens.zengarden;
+    if (!zeng.data) zeng.load();
+    this.tool = null;             // 'treefood' 持有中
+    this.foodAnim = null;         // TreeFood 喂食动画 (播完 → Grow)
+    this.state = 'waiting';       // waiting | babbling | give_wisdom | just_grew | feeding
+    this.counter = 7 + Math.random() * 8;         // 原版 700-1500 ticks
+    this.talkIdx = 0;
+    this.trayIdle = 0; this.trayFade = 0;
+    this.advice = null;
+    this._ready = false; this._readyT = 0;
+    this._built = false;           // reanim 构建标记 (分包就绪后懒建 — 首次进入时 def 可能未加载)
+    this.r = null;
+    this.clouds = [];
+    Promise.resolve(Assets.ensureGarden ? Assets.ensureGarden() : null)
+      .catch(() => { })
+      .then(() => { this._ready = true; });
+    setTimeout(() => { this._ready = true; }, 20000);
+    if (game) game.audio.playBGM('garden');   // 原版 Music.cpp:595: TREE_OF_WISDOM 同 ZEN_GARDEN 曲
+    if (this._ready) this._buildTree();       // 资产已缓存 (重进场景) → 直接建
+  },
+  // 树 + 云 reanim 构建 (原版 TreeOfWisdomInit; 分包懒加载后由 update 触发)
+  _buildTree() {
+    if (this._built) return;
+    this._built = true;
+    try {
+      if (RE.hasDef('treeofWisdom')) {
+        const r = Assets.reanim('treeofWisdom');
+        r.setPosition(0.5, 0.5);
+        const h = this.height();
+        r.play('anim_grow' + Math.max(1, Math.min(50, h)), RE.PLAY_ONCE_HOLD, 18);
+        if (h >= 1) r.animTime = 0.99;         // 原版: mAnimTime = 0.99 直接定格末帧
+        // 渲染分组 (原版 AssignRenderGroupToPrefix): bg=1 / tree=2 / grass=3 / overlay+leaf+bunch=4
+        for (let ti = 0; ti < r.tracks.length; ti++) {
+          const nm = (r.def.tracks[ti].name || '').toLowerCase();
+          const g = nm === 'bg' ? 1
+            : (nm.startsWith('tree') || nm.startsWith('anim_grow')) ? 2
+              : nm === 'grass' ? 3
+                : (nm.startsWith('overlay') || nm.startsWith('leaf') || nm.startsWith('bunch')) ? 4 : 0;
+          r.tracks[ti].renderGroup = g;
+        }
+        this.r = r;
+      }
+    } catch (e) { this.r = null; }
+    // ---- 云 (原版 TreeOfWisdomClouds Cloud1-6 慢速漂移; web 版无子区间 → 各实例只显示自己的云轨道 + 随机相位) ----
+    try {
+      if (RE.hasDef('TreeOfWisdomClouds')) {
+        for (let i = 1; i <= 6; i++) {
+          const c = Assets.reanim('TreeOfWisdomClouds');
+          c.setPosition(0, 0);
+          c.loopType = RE.LOOP;
+          c.animRate = 7 + Math.random() * 3;   // 慢速漂移 (视觉近似)
+          c.animTime = Math.random();
+          for (let ti = 0; ti < c.tracks.length; ti++) {
+            c.tracks[ti].renderGroup = (c.def.tracks[ti].name || '').toLowerCase() === ('cloud' + i) ? 0 : RE.RENDER_GROUP_HIDDEN;
+          }
+          this.clouds.push(c);
+        }
+      }
+    } catch (e) { this.clouds = []; }
+  },
+  setAdvice(txt) { this.advice = { txt, t: 0, life: 4 }; },
+
+  // ---------- 状态机 (原版 TreeOfWisdomUpdate 5197-5253; 100Hz tick → 秒) ----------
+  babble() {
+    // 原版 TreeOfWisdomBabble 5111-5134
+    this.state = 'babbling';
+    this.counter = 4;                          // 400 ticks
+    const h = this.height();
+    const hit = Math.floor(Math.random() * 3);
+    if (h <= 1) this.talkIdx = 600;
+    else if (hit === 0 && h >= 5) this.talkIdx = 500;
+    else if (hit === 1) this.talkIdx = 101 + Math.floor(Math.random() * 10);
+    else this.talkIdx = (h < 12 ? 201 : h < 50 ? 301 : 401) + Math.floor(Math.random() * 4);
+  },
+  giveWisdom() {
+    // 原版 TreeOfWisdomGiveWisdom 5136-5162
+    this.state = 'give_wisdom';
+    this.counter = 10;                         // 1000 ticks
+    const h = this.height();
+    if (h === 100) this.talkIdx = 800;
+    else if (h === 500) this.talkIdx = 900;
+    else if (h === 1000) this.talkIdx = 1000;
+    else if (h > 1000) this.talkIdx = 1100;
+    else this.talkIdx = Math.max(1, Math.min(49, h - 1));
+  },
+  sayRepeat() {
+    // 原版 TreeOfWisdomSayRepeat 5164-5185: 随机复述一条已解锁智慧
+    const h = this.height();
+    if (h >= 100 && Math.random() < 1 / 47) this.talkIdx = 800;
+    else if (h >= 500 && Math.random() < 1 / 47) this.talkIdx = 900;
+    else if (h >= 1000 && Math.random() < 1 / 47) this.talkIdx = 1000;
+    else {
+      const lo = 2, hi = Math.max(3, Math.min(49, h));
+      this.talkIdx = lo + Math.floor(Math.random() * (hi - lo + 1));
+    }
+    this.counter = 6;                          // 600 ticks
+  },
+  talkText() {
+    if (this.talkIdx >= 1 && this.talkIdx <= 49) return this.WISDOM[this.talkIdx - 1];
+    return this.TALK[this.talkIdx] || this.WISDOM[0];
+  },
+  update(dt) {
+    if (this._ready && !this._built) this._buildTree();   // 分包就绪 → 懒建树/云
+    // 喂食动画 → 播完长高 (原版 TreeOfWisdomToolUpdate: mLoopCount>0 → Grow)
+    if (this.foodAnim) {
+      this.foodAnim.update(dt);
+      if (this.foodAnim.loopCount > 0 || this.foodAnim.dead) {
+        this.foodAnim = null;
+        this.grow();
+      }
+    } else if (this.counter > 0) {
+      this.counter -= dt;
+      if (this.counter <= 0) {
+        if (this.state === 'just_grew') this.giveWisdom();
+        else if (this.state === 'waiting') this.babble();
+        else if (this.state === 'babbling' || this.state === 'give_wisdom') {
+          if (this.talkIdx === 500) this.sayRepeat();
+          else { this.state = 'waiting'; this.counter = 7 + Math.random() * 5; }   // 700-1000 ticks
+        }
+      }
+    }
+    if (this.r) this.r.update(dt);
+    for (const c of this.clouds) c.update(dt);
+    // 工具栏闲置上滑 (同禅园 ZEN_FADING)
+    this.trayIdle += dt;
+    if (this.trayIdle > 30) this.trayFade = Math.min(1, this.trayFade + dt / 0.8);
+    else this.trayFade = Math.max(0, this.trayFade - dt / 0.8);
+    if (this.advice && (this.advice.t += dt) > this.advice.life) this.advice = null;
+  },
+  // 原版 TreeOfWisdomCanFeed: 非刚长高 且 无进行中的喂食
+  canFeed() { return this.state !== 'just_grew' && !this.foodAnim; },
+  // 原版 TreeOfWisdomFertilize 5091-5109: 树粮动画 @(340,300) 播完 Grow; 扣库存; ClearCursor
+  feed() {
+    const game = Screens.game;
+    const zeng = Screens.zengarden;
+    zeng.data.treeFood = Math.max(0, (zeng.data.treeFood || 0) - 1);
+    zeng.save();
+    try {
+      if (RE.hasDef('TreeFood')) {
+        const r = Assets.reanim('TreeFood');
+        r.setPosition(340, 300);
+        r.loopType = RE.PLAY_ONCE_HOLD;
+        r.animRate = r.def.fps || 20;
+        this.foodAnim = r;
+      }
+    } catch (e) { this.foodAnim = null; }
+    if (game) game.audio.play('zen_fertilizer');
+    this.state = 'feeding';
+    this.tool = null;
+    if (!this.foodAnim) this.grow();   // reanim 缺失兜底: 直接长高
+  },
+  // 原版 TreeOfWisdomGrow 5070-5089: 高度+1 + anim_grow{clamp(h,1,51)} rate8 + FOLEY_PLANTGROW
+  grow() {
+    const game = Screens.game;
+    const zeng = Screens.zengarden;
+    zeng.data.treeHeight = (zeng.data.treeHeight || 0) + 1;
+    zeng.save();
+    const h = zeng.data.treeHeight;
+    if (this.r) {
+      try { this.r.play('anim_grow' + Math.max(1, Math.min(51, h)), RE.PLAY_ONCE_HOLD, 8); } catch (e) { }
+    }
+    if (game) game.audio.play('plantgrow');
+    if (h > 1) { this.state = 'just_grew'; this.counter = 1.2; }   // 原版 JUST_GREW 120 ticks
+    else { this.state = 'waiting'; this.counter = 7 + Math.random() * 8; }
+    if (h === 100) this.setAdvice('成就达成：高耸的智慧！ (100 英尺)');   // 原版 ToweringWisdom
+  },
+  // 原版 TreeOfWisdomLeave 5256-5268: 离开时未完成的喂食立即长高
+  leaveTree() {
+    if (this.foodAnim) { this.foodAnim = null; this.grow(); }
+  },
+  // 原版 TreeOfWisdomHitTest 5297-5318: 按树高分级命中区
+  treeHit(x, y) {
+    const h = this.height();
+    const rect = h <= 1 ? [310, 275, 175, 175] : h < 7 ? [290, 255, 205, 195] : h < 12 ? [290, 215, 205, 225] : [280, 155, 225, 305];
+    return x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3];
+  },
+
+  // ---------- 绘制 ----------
+  drawBubbleText(ctx, txt, x, y, w, lineH) {
+    // 居中换行 (原版 PvzpDrawStringWrapped DS_ALIGN_CENTER_VERTICAL_MIDDLE)
+    let line = '', lines = [];
+    for (const ch of txt) {
+      if (ctx.measureText(line + ch).width > w) { lines.push(line); line = ch; }
+      else line += ch;
+    }
+    if (line) lines.push(line);
+    ctx.textAlign = 'center';
+    const y0 = y + Math.max(0, (144 - lines.length * lineH) / 2);
+    lines.forEach((l, i) => ctx.fillText(l, x + w / 2, y0 + lineH * (i + 0.75)));
+  },
+  draw(ctx) {
+    const game = Screens.game;
+    const t = Screens.t;
+    const mouse = Screens.mouse || { x: -1, y: -1 };
+    if (!this._ready) {
+      this._readyT += 1 / 60;
+      ctx.fillStyle = '#1c2410'; ctx.fillRect(0, 0, 800, 600);
+      const barW = 360, bx = (800 - barW) / 2, by = 320;
+      ctx.fillStyle = '#3a4a20'; ctx.fillRect(bx - 4, by - 4, barW + 8, 28);
+      ctx.fillStyle = '#222'; ctx.fillRect(bx, by, barW, 20);
+      const k = (Math.sin(this._readyT * 2.4) + 1) / 2;
+      ctx.fillStyle = '#8fc42a'; ctx.fillRect(bx + 4, by + 4, (barW - 8) * k, 12);
+      ctx.font = 'bold 22px "Noto Sans SC", sans-serif'; ctx.textAlign = 'center';
+      ctx.fillStyle = '#e8f4c8'; ctx.fillText('正在走向智慧树…', 400, 290);
+      return;
+    }
+    const h = this.height();
+    // ---- 背景 (reanim bg 组 = tree_bg.jpg 800x600; def 未就绪直接画底图) ----
+    if (this.r) this.r.drawRenderGroup(ctx, 1);
+    else { const bg = img('tree_bg.jpg'); if (bg) ctx.drawImage(bg, 0, 0, 800, 600); else { ctx.fillStyle = '#7ab6e8'; ctx.fillRect(0, 0, 800, 600); } }
+    // ---- 云 (bg 与 trunk 之间, 原版 DrawRenderGroup 顺序) ----
+    for (const c of this.clouds) c.draw(ctx);
+    // ---- 树干 / 草地 / 枝叶 (group 2/3/4; 持树粮悬停树身 → 白色叠加高亮) ----
+    const hoverTree = this.tool === 'treefood' && this.treeHit(mouse.x, mouse.y);
+    const drawAdditive = (g, alpha) => {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = alpha;
+      ctx.filter = 'brightness(2.6) saturate(0.25)';
+      this.r.drawRenderGroup(ctx, g);
+      ctx.restore();
+    };
+    if (this.r) {
+      this.r.drawRenderGroup(ctx, 2);   // trunk (原版悬停 alpha: h<18 ? 128:48 /255)
+      if (hoverTree) drawAdditive(2, h < 18 ? 0.5 : 0.19);
+      this.r.drawRenderGroup(ctx, 3);   // grass
+      this.r.drawRenderGroup(ctx, 4);   // overlay/leaf/bunch (原版悬停 alpha 32/255)
+      if (hoverTree) drawAdditive(4, 0.125);
+    }
+    // ---- 喂食动画 ----
+    if (this.foodAnim) { ctx.save(); this.foodAnim.draw(ctx); ctx.restore(); }
+    // ---- 说话气泡 (原版 STORE_SPEECHBUBBLE2: h<7@(400,152) / h<12@(395,60) / 其余@(390,52)) ----
+    if (this.state === 'give_wisdom' || this.state === 'babbling') {
+      const bx = h < 7 ? 400 : h < 12 ? 395 : 390;
+      const by = h < 7 ? 152 : h < 12 ? 60 : 52;
+      const bub = img('store_speechbubble2.png');
+      const bw = bub ? bub.width : 280, bh = bub ? bub.height : 183;
+      if (bub) ctx.drawImage(bub, bx, by);
+      else {
+        ctx.fillStyle = '#f8f4e0'; ctx.strokeStyle = '#8a8a7a'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.fill(); ctx.stroke();
+      }
+      ctx.save();
+      ctx.fillStyle = '#3a3222';
+      ctx.font = '16px "Noto Sans SC", sans-serif';
+      this.drawBubbleText(ctx, this.talkText(), bx + 25, by + 6, 233, 22);
+      ctx.restore();
+    }
+    // ---- 高度标签 (原版 ≥50 英尺: "{H} feet" HOUSEOFTERROR16 白字 @ (400,20) + JUST_GREW 弹跳) ----
+    if (h >= 50) {
+      let sc = 1;
+      if (this.state === 'just_grew') {
+        const k = Math.max(0, Math.min(1, (1.2 - this.counter) / 0.45));
+        sc = 1 + 0.2 * Math.sin(k * Math.PI);
+      }
+      ctx.save();
+      ctx.translate(400, 20);
+      ctx.scale(sc, sc);
+      ctx.font = 'bold 20px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineJoin = 'round';
+      ctx.strokeText(h + ' 英尺', 0, 0);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(h + ' 英尺', 0, 0);
+      ctx.textBaseline = 'alphabetic';
+      ctx.restore();
+    }
+    // ---- 工具栏 (树粮槽 + 下一花园 + 商店 + 主菜单) ----
+    const UI = __getUI();
+    const ease = this.trayFade * this.trayFade * (3 - 2 * this.trayFade);
+    const offY = -72 * ease;
+    // 树粮槽 (原版 DrawZenButtons TREE_FOOD: IMAGE_TREEFOOD + xN 白字; 空/喂养中灰化)
+    const x = 30, y = 0;
+    this._foodSlot = { x, y, w: this.SLOT_W, h: this.SLOT_H };
+    const bank = img('shovelbank.png');
+    ctx.save();
+    if (bank) ctx.drawImage(bank, x, y + offY);
+    else {
+      ctx.fillStyle = 'rgba(70,52,26,0.85)'; ctx.strokeStyle = '#3a2a12'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(x, y + offY, this.SLOT_W, this.SLOT_H, 6); ctx.fill(); ctx.stroke();
+    }
+    const foodN = this.food();
+    const foodOk = foodN > 0 && this.canFeed();
+    const fi = img('treefood.png');
+    if (fi) {
+      ctx.save();
+      if (!foodOk) ctx.filter = 'grayscale(1) brightness(0.55)';
+      ctx.drawImage(fi, x - 4, y + offY - 5, 78, 78);
+      ctx.restore();
+    }
+    if (foodN > 0) {
+      ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'right'; ctx.fillStyle = '#fff';
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = 3;
+      ctx.strokeText('x' + foodN, x + 64, y + offY + 65);
+      ctx.fillText('x' + foodN, x + 64, y + offY + 65);
+    }
+    ctx.restore();
+    // 悬停提示 (槽下居中)
+    if (mouse.x >= x && mouse.x < x + this.SLOT_W && mouse.y < this.SLOT_H && this.trayFade < 0.5) {
+      ctx.save();
+      ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = 3;
+      const tip = '树粮 - 喂给智慧树让它长高';
+      ctx.strokeText(tip, x + 35, this.SLOT_H + 14); ctx.fillText(tip, x + 35, this.SLOT_H + 14);
+      ctx.restore();
+    }
+    // 下一花园 (原版 TreeOfWisdomNextGarden → 回禅境花园)
+    this._nextGarden = { x: 564, y: 0, w: 70, h: 72 };
+    const ng = img('zen_nextgarden.png');
+    if (ng) ctx.drawImage(ng, 566, Math.round(offY), 60, 60);
+    else {
+      ctx.save();
+      ctx.fillStyle = '#8a6a2a'; ctx.strokeStyle = '#4a3410'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(566, Math.round(offY), 60, 60, 10); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffe9a8'; ctx.font = 'bold 26px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('←', 596, Math.round(offY) + 38);
+      ctx.restore();
+    }
+    // 商店 (原版 TreeOfWisdomOpenStore → STORE_PAGE_ZEN2)
+    this._store = null;
+    const sImg = img('zenshopbutton.png');
+    if (sImg) { ctx.drawImage(sImg, 678, 33); this._store = { x: 678, y: 33, w: sImg.width, h: sImg.height }; }
+    else if (UI && UI.drawStoneButton) { UI.drawStoneButton(ctx, 678, 36, 104, 40, '商 店', 17); this._store = { x: 678, y: 36, w: 104, h: 40 }; }
+    // 主菜单 (石质 @ (628,-10,163,46))
+    this._menu = null;
+    const mbY = -10 - 40 * ease;
+    if (UI && UI.drawStoneButton) UI.drawStoneButton(ctx, 628, mbY, 163, 46, '主菜单', 19);
+    else { ctx.fillStyle = '#a8834a'; ctx.strokeStyle = '#5c4020'; ctx.lineWidth = 2; ctx.fillRect(628, mbY, 163, 46); }
+    const visTop = Math.max(0, mbY);
+    if (mbY + 46 > 0) this._menu = { x: 628, y: visTop, w: 163, h: mbY + 46 - visTop };
+    // ---- 持有树粮光标 ----
+    if (this.tool === 'treefood') {
+      const fi2 = img('treefood.png');
+      if (fi2) ctx.drawImage(fi2, mouse.x - 24, mouse.y - 30, 60, 60);
+      else {
+        ctx.fillStyle = '#b8905a'; ctx.strokeStyle = '#6a4a20'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.roundRect(mouse.x - 14, mouse.y - 16, 28, 32, 5); ctx.fill(); ctx.stroke();
+      }
+    }
+    // ---- 建议条 ----
+    if (this.advice) {
+      const a = this.advice.t > this.advice.life - 0.8 ? Math.max(0, (this.advice.life - this.advice.t) / 0.8) : 1;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(0, 514, 800, 55);
+      ctx.font = 'bold 21px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineJoin = 'round';
+      ctx.strokeText(this.advice.txt, 400, 542);
+      ctx.fillStyle = '#fdf5ad';
+      ctx.fillText(this.advice.txt, 400, 542);
+      ctx.textBaseline = 'alphabetic';
+      ctx.restore();
+    }
+  },
+
+  // ---------- 交互 ----------
+  click(p, game) {
+    this.trayIdle = 0;
+    // 主菜单
+    if (this._menu && inRect(p, this._menu.x, this._menu.y, this._menu.w, this._menu.h)) {
+      game.audio.play('gravebutton');
+      this.leaveTree();
+      game.state = 'menu';
+      Screens.menu.enter();
+      return;
+    }
+    // 下一花园 → 回禅境花园 (原版 TreeOfWisdomNextGarden)
+    if (this._nextGarden && inRect(p, this._nextGarden.x, this._nextGarden.y, this._nextGarden.w, this._nextGarden.h)) {
+      game.audio.play('gravebutton');
+      this.leaveTree();
+      game.state = 'zengarden';
+      Screens.zengarden.enter();
+      return;
+    }
+    // 商店 (原版 TreeOfWisdomOpenStore: STORE_PAGE_ZEN2)
+    if (this._store && inRect(p, this._store.x, this._store.y, this._store.w, this._store.h)) {
+      game.audio.play('buttonclick');
+      this.leaveTree();
+      const shop = Screens.shop;
+      shop.returnState = 'treeofwisdom';
+      game.state = 'shop';
+      shop.enter();
+      shop.page = 3;   // 原版 STORE_PAGE_ZEN2 (树粮所在页)
+      return;
+    }
+    // 树粮槽
+    if (this._foodSlot && inRect(p, this._foodSlot.x, this._foodSlot.y, this._foodSlot.w, this._foodSlot.h)) {
+      if (this.tool === 'treefood') { this.tool = null; game.audio.play('tap'); return; }
+      if (this.food() <= 0) { game.audio.play('buzzer'); this.setAdvice('树粮用完了 — 去戴夫的商店买些吧！'); return; }
+      if (!this.canFeed()) { game.audio.play('buzzer'); return; }   // 喂食中/刚长高
+      this.tool = 'treefood';
+      game.audio.play('seedlift');
+      return;
+    }
+    // 点树 → 喂食 (原版 TreeOfWisdomTool: 命中树 + TREE_FOOD 光标 → Fertilize)
+    if (this.tool === 'treefood') {
+      if (this.treeHit(p.x, p.y)) { this.feed(); return; }
+      this.tool = null;             // 原版 ClearCursor
+      game.audio.play('throw');
+      return;
+    }
+    // 空白轻点: 无操作
+  },
 };
 
 if (typeof module !== 'undefined') module.exports = { Screens, pvzText, inRect };
