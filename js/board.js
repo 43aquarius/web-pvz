@@ -67,7 +67,9 @@ class Board {
     this.shakeX = 0; this.shakeY = 0;
     this.plantsEaten = 0;
     this.time = 0;
-    this.speed = 1;
+    // 原版 GAMEMODE_CHALLENGE_SPEED (Zombie Nimble): Challenge::Update 额外调一次
+    //   UpdateGame → 整局 2x (植物/僵尸/子弹/天阳全部加速, 非仅僵尸提速)
+    this.speed = level.speedMul || 1;
 
     // 波次
     this.waves = this.buildWaves(level);
@@ -253,6 +255,8 @@ class Board {
   canSpawnType(ty) {
     const d = ZOMBIES[ty];
     if (!d || d.weight <= 0 || d.boss) return false;
+    // 小游戏显式僵尸名单 (level.zombieTypes) 即权威 — 原版 InitZombieWaves 直接置 mZombieAllowed
+    if (this.level.zombieTypes) return this.level.zombieTypes.includes(ty) || ty === 'FLAG';
     // 原版 CanZombieSpawnOnLevel: 雪人需 CanSpawnYetis (通关至少一次后才出现)
     if (ty === 'YETI' && !(this.game && this.game.finishedAdventure)) return false;
     // 5-5 蹦极闪电战 (原版: NORMAL/CONE/BUCKET/LADDER)
@@ -289,6 +293,8 @@ class Board {
       const isFinal = !level.endless && w === numWaves - 1;
       const types = [];
       let points = level.endless ? Math.min(26, Math.floor(w / 2.2) + 1) : Math.floor(w / 3) + 1;
+      // 最后防线: 原版 points = (stage*10+wave+10)*2/5+1 (Board.cpp 634-637)
+      if (level.lastStand) points = Math.floor(((this.lsStage || 0) * 10 + w + 10) * 2 / 5) + 1;
       // 小僵尸关: 僵尸点数×4 (原版 Board.cpp:672 IsLittleTroubleLevel/WallnutBowling ×4)
       if (this.game && this.game.littleTrouble) points *= 4;
       if (level.fixed === 'boss' && isFinal) {
@@ -296,9 +302,9 @@ class Board {
         continue;
       }
       if (isFlag) {
-        // 原版 PickZombieWaves 617-629: 蹦极突袭 (5-5) 旗帜波先放 5 只蹦极;
+        // 原版 PickZombieWaves 617-629: 蹦极突袭 (5-5 / 蹦极闪电战小游戏) 旗帜波先放 5 只蹦极;
         //   非末波 → 该波仅有蹦极 (continue); 末波 → 蹦极 + 常规大波内容
-        if (!level.mode && lv === 45) {
+        if ((!level.mode && lv === 45) || level.conveyorPool === 'bungee_blitz') {
           types.push(['BUNGEE', 5]);
           if (!isFinal) {
             out.push({ flag: true, final: false, count: 5, types });
@@ -307,30 +313,48 @@ class Board {
         }
         const plain = Math.min(points, 8);
         points = Math.round(points * 2.5);
-        types.push(['NORMAL', plain]);
-        types.push(['FLAG', 1]);
+        // 原版 PickZombieWaves 656: 豌豆大战 1/2 旗帜波不加普僵与旗帜僵尸 (植物僵尸军团本身即阵容)
+        if (level.flagPlain !== false) {
+          types.push(['NORMAL', plain]);
+          types.push(['FLAG', 1]);
+        }
       }
       if (intro && !isFlag) {
         if (w === Math.floor(numWaves / 2) || isFinal) types.push([intro, 1]);
       }
       if (isFinal) {
-        for (const ty of Object.keys(ZOMBIES)) {
-          if (ty === 'FLAG' || ty === 'BOSS') continue;
-          if (this.level.zombieTypes && !this.level.zombieTypes.includes(ty)) continue;
-          if (this.canSpawnType(ty) && !types.some(([t]) => t === ty)) types.push([ty, 1]);
+        // 原版 PutInMissingZombies 仅冒险模式末波补全兵种 (Board.cpp:723 IsAdventureMode)
+        if (!level.mode) {
+          for (const ty of Object.keys(ZOMBIES)) {
+            if (ty === 'FLAG' || ty === 'BOSS') continue;
+            if (this.level.zombieTypes && !this.level.zombieTypes.includes(ty)) continue;
+            if (this.canSpawnType(ty) && !types.some(([t]) => t === ty)) types.push([ty, 1]);
+          }
         }
       }
-      if (!level.endless && level.id === 50 && isFinal && !types.some(([t]) => t === 'GARGANTUAR')) types.push(['GARGANTUAR', 1]);   // 仅冒险 5-10 (额外模式 id≠50)
+      // 原版 Board.cpp 667-686 关卡僵尸点数倍率:
+      //   列队僵尸 ×6 / 小僵尸·保龄球 ×4 / 铲子·蹦极·传送门·隐形 ×2
+      if (level.columnFill) points *= 6;
+      else if ((this.game && this.game.littleTrouble) || level.fixed === 'bowling' || level.fixed === 'bowling2') points *= 4;
+      else if (level.conveyorPool === 'bungee_blitz' || level.portals || level.invisibleZ) points *= 2;
+      // 原版 Board.cpp 727-743 列队僵尸特殊波: wave%10==5 → 梯子僵尸×10; wave%10==8 → 小丑×10
+      if (level.columnFill) {
+        if (w % 10 === 5) { for (let i = 0; i < 10; i++) types.push(['LADDER', 1]); }
+        if (w % 10 === 8) { for (let i = 0; i < 10; i++) types.push(['JACK', 1]); }
+      }
       const pool = Object.keys(ZOMBIES).filter(ty => {
         const d = ZOMBIES[ty];
         if (d.weight <= 0 || d.boss) return false;
-        // 小游戏限定僵尸池 (雪橇大丰收/跳跳派对等)
-        if (level.zombieTypes && !level.zombieTypes.includes(ty)) return false;
-        // 小僵尸关限定池 (原版 Challenge.cpp:2345 NORMAL/CONE/FOOTBALL/SNORKEL)
-        if (this.game && this.game.littleTrouble && !['NORMAL', 'CONE', 'FOOTBALL', 'SNORKEL'].includes(ty)) return false;
-        // 困难生存: 全兵种僵尸池 (按 unlock 门槛, 门槛内全部可用)
-        if (level.hard) { if ((d.unlock || 99) > 48) return false; }
-        else if (!zombieAllowedOnLevel(ty, lv)) return false;
+        // 小游戏显式僵尸名单即权威 (原版 InitZombieWaves: 挑战模式直接置 mZombieAllowed)
+        if (level.zombieTypes) {
+          if (!level.zombieTypes.includes(ty)) return false;
+        } else if (this.game && this.game.littleTrouble) {
+          // 小僵尸关限定池 (原版 Challenge.cpp:2345 NORMAL/CONE/FOOTBALL/SNORKEL)
+          if (!['NORMAL', 'CONE', 'FOOTBALL', 'SNORKEL'].includes(ty)) return false;
+        } else if (level.hard) {
+          // 困难生存: 全兵种僵尸池 (按 unlock 门槛, 门槛内全部可用)
+          if ((d.unlock || 99) > 48) return false;
+        } else if (!zombieAllowedOnLevel(ty, lv)) return false;
         if ((d.firstWave || 1) > w + 1) return false;
         return true;
       });
@@ -474,6 +498,11 @@ class Board {
       if (g.rise !== undefined && g.rise < 1) g.rise = Math.min(1, g.rise + dt * 1.6);
     }
     this.updateMode(dt);
+    // 传送门战斗 (100Hz tick 语义)
+    if (this.portals && this.state === 'playing') {
+      const ptk = Math.max(1, Math.round(dt * 100));
+      this.updatePortals(ptk);
+    }
     this.updateVisuals(dt);
     // 清理
     this.plants = this.plants.filter(p => !p.dead);
@@ -549,7 +578,11 @@ class Board {
     // 我不是僵尸/罐子解谜/打僵尸 由 updateMode 全权管理出怪
     if (this.mode === 'izombie' || this.mode === 'vasebreaker' || this.mode === 'whack') return;
     if (this.wave >= this.totalWaves) {
-      if (this.zombies.filter(z => z.fromWave !== -2 && !z.dead).length === 0) this.triggerWin();
+      if (this.zombies.filter(z => z.fromWave !== -2 && !z.dead).length === 0) {
+        // 最后防线: 阶段完成 → 下一建造期 (原版 LastStandCompletedStage 4879-4900)
+        if (this.level.lastStand) { this.lastStandStageComplete(); return; }
+        this.triggerWin();
+      }
       return;
     }
     this.waveTimer -= dt;
@@ -581,8 +614,14 @@ class Board {
 
   beginWaves() {
     if (this.wavesStarted) return;
+    // 最后防线: 建造期不出怪 (原版 STATECHALLENGE_LAST_STAND_ONSLAUGHT 才开波)
+    if (this.level.lastStand && this.lsPhase !== 'onslaught') return;
     this.wavesStarted = true;
-    this.waveTimer = WAVE.FIRST_WAVE_DELAY; this._waveTimerStart = this.waveTimer;
+    // 原版 Challenge::StartLevel 起手倒计时: 通用 200tick(2s);
+    //   雪橇大丰收 4500tick / 跳跳派对 5500tick / 列队僵尸 2400tick
+    this.waveTimer = this.level.startDelay || WAVE.FIRST_WAVE_DELAY; this._waveTimerStart = this.waveTimer;
+    // 原版列队僵尸: StartLevel 置 mCurrentWave=9 → 首个出怪波 = 第10波(旗波)
+    if (this.level.startWave) this.wave = this.level.startWave;
     this.hugeWaveWarned = false;
   }
 
@@ -608,7 +647,15 @@ class Board {
       const zd = ZOMBIES[type];
       hp += zd.body + (zd.helm || 0) + (zd.shield || 0);
       let row;
-      if (zd.water) row = this.waterRows[Math.floor(Math.random() * this.waterRows.length)];
+      // 传送门战斗: 行权重 (原版 PortalCombatRowSpawnWeight: 近割草机0.01/有门行1.0/其他0.2)
+      if (this.level.portals && this.portals) {
+        const rows = zd.water ? this.waterRows : this.grassRows.filter(r => !this.waterRows.includes(r));
+        const entries = rows.map(r => [r, this.portalRowWeight(r)]);
+        const tot = entries.reduce((s, [, wt]) => s + wt, 0);
+        let rr = Math.random() * tot;
+        row = rows[0];
+        for (const [r0, wt] of entries) { rr -= wt; if (rr <= 0) { row = r0; break; } }
+      } else if (zd.water) row = this.waterRows[Math.floor(Math.random() * this.waterRows.length)];
       else {
         const landRows = this.grassRows.filter(r => !this.waterRows.includes(r));
         row = landRows[Math.floor(Math.random() * landRows.length)];
@@ -1050,6 +1097,19 @@ class Board {
     const f = this.level.fixed;
     this.mode = null;
     this.modeData = {};
+    // 最后防线 (原版 LAST_STAND): 建造期→进攻循环, 共 5 面旗 (LAST_STAND_FLAGS)
+    if (this.level.lastStand) {
+      this.lsStage = 0;
+      this.lsPhase = 'build';
+    }
+    // 雪橇大丰收 (原版 StartLevel: 非水池行冰道 mIceMinX=400 + 永冻 mIceTimer=INT_MAX)
+    if (this.level.iceZone) {
+      for (let r = 0; r < this.rows; r++) {
+        if (this.waterRows.includes(r)) continue;
+        this.iceMinXs[r] = this.level.iceZone;
+        this.iceTimers[r] = 1e9;
+      }
+    }
     if (f === 'bowling' || f === 'bowling2' || f === 'conveyor' || f === 'boss') {
       // 传送带种子银行 (原版 HasConveyorBeltSeedBank: 无阳光经济, 卡从右侧滚动而来)
       this.mode = 'conveyor';
@@ -1085,6 +1145,17 @@ class Board {
       }
       this.sun = 0;
       this.seedCards = [];
+      // ---- 传送门战斗 (原版 PortalStart Challenge.cpp 2870-2906):
+      //      SQUARE(2,0)↔SQUARE(9,1) / CIRCLE(9,3)↔CIRCLE(2,4); 搬家计时 9000tick ----
+      if (this.level.portals) {
+        this.portals = [
+          { kind: 'square', col: 2, row: 0, anim: null, closing: false },
+          { kind: 'square', col: 9, row: 1, anim: null, closing: false },
+          { kind: 'circle', col: 9, row: 3, anim: null, closing: false },
+          { kind: 'circle', col: 2, row: 4, anim: null, closing: false },
+        ];
+        this.portalCounter = 9000;
+      }
     } else if (f === 'whack') {
       // 打僵尸 (原版 2-5 / 小游戏): 锤子光标 + 墓碑刷怪 + 击杀掉阳光购买植物
       this.mode = 'whack';
@@ -1136,6 +1207,48 @@ class Board {
       this.brainsEaten = 0;
       // 预置植物防线 (原版 IZombiePlacePlantInSquare 固定布局, 左4列)
       this.izSetup();
+    } else if (f === 'slotmachine') {
+      // 老虎机 (原版 Slot Machine): 3 转轮即种子银行; 拉杆 25 阳光; 2000 分胜利
+      this.mode = 'slotmachine';
+      this.sun = this.level.startSun || 50;
+      // 原版符号池 (PickNextSlotMachineSeed): 向日葵/豌豆/雪花豌豆/坚果/阳光/钻石
+      this.slotReels = [
+        { type: 'PEASHOOTER', next: null, pos: 0, cd: 0 },
+        { type: 'SUNFLOWER', next: null, pos: 0, cd: 0 },
+        { type: 'WALLNUT', next: null, pos: 0, cd: 0 },
+      ];
+      this.slotRolls = 0;        // 原版 mSlotMachineRollCount (<3 时拉杆闪烁提示)
+      this.slotPayouts = [];     // 赔付掉落物: {kind, plant?, x, y, vy, vx, ground, life, taken}
+      this.slotSpinning = false; // 原版 STATECHALLENGE_SLOT_MACHINE_ROLLING
+      // 种子银行视图: 3 转轮即 3 卡 (点击选卡 → 种植消耗阳光)
+      this.seedCards = this.slotReels.map(r => ({ type: r.type, cd: 0 }));
+    } else if (f === 'beghouled') {
+      // 消消乐 / 消消乐·转 (原版 Beghouled): 8×5 植物棋盘 + 三连消除 + 僵尸啃食
+      this.mode = 'beghouled';
+      this.begTwist = !!this.level.beghouledTwist;
+      this.begScore = 0;             // 原版 mChallengeScore (75 胜)
+      this.begState = 'idle';        // idle | flashing | falling | moving
+      this.begStateT = 0;            // 100Hz 计时 (1500 → 提示/洗牌)
+      this.begDrag = null;           // {col,row,startX,startY}
+      this.begTwistSel = null;       // 旋转选中格 (2×2 左上)
+      this.begEated = Array.from({ length: 9 }, () => new Array(5).fill(false));   // 弹坑 (僵尸吃掉)
+      this.begUpgrades = { REPEATER: false, FUMESHROOM: false, TALLNUT: false };
+      this.begMatchesThisMove = 0;
+      this.sun = 0;
+      this.seedCards = [];           // 首次消除后解锁 4-5 张功能卡
+      this.beghouledMakeStartBoard();
+    } else if (f === 'zombiquarium') {
+      // 僵尸水族馆 (原版 Zombiquarium): 自由游动的潜水僵尸 + 喂脑子产阳光 + 1000 分买奖杯
+      this.mode = 'zombiquarium';
+      this.sun = this.level.startSun || 50;
+      this.brains = [];              // {x,y,t}
+      // 原版种子银行 2 格: 潜水僵尸 $100 / 奖杯 $1000
+      this.seedCards = [
+        { type: 'ZQ_SNORKLE', cd: 0 },
+        { type: 'ZQ_TROPHY', cd: 0 },
+      ];
+      this.aqSpawnSnorkle();
+      this.aqSpawnSnorkle();         // 原版 StartLevel: 开局 2 只
     } else if (this.level.rainingSeeds) {
       // 雨天种子: 种子包从天而降 (原版 It's Raining Seeds)
       this.mode = 'raining';
@@ -1328,6 +1441,928 @@ class Board {
       return true;
     }
     return true;
+  }
+
+  // ============================================================
+  // 看星星 (原版 Seeing Stars: gArtChallengeStarFruit 星形阵)
+  // ============================================================
+  starPatternCells() {
+    // 原版 Challenge.h:505 gArtChallengeStarFruit (5行×9列, 14 格)
+    return [[3,0],[3,1],[4,1],[1,2],[2,2],[3,2],[4,2],[5,2],[6,2],[3,3],[4,3],[5,3],[3,4],[6,4]];
+  }
+  checkStarPattern(game) {
+    // 原版 CheckForCompleteArtChallenge: 全部阵点格顶植物为杨桃 → SpawnLevelAward (奖杯)
+    if (!this.level.starPattern || this.state !== 'playing') return;
+    const done = this.starPatternCells().every(([c, r]) => {
+      const p = this.grid[r] && this.grid[r][c];
+      return p && !p.dead && p.type === 'STARFRUIT';
+    });
+    if (done) {
+      game.audio.play('points');
+      this.addEffect('present_pickup', 360, 240);
+      this.triggerWin();
+    }
+  }
+
+  // ============================================================
+  // 老虎机 (原版 Slot Machine — SeedPacket.cpp 57-107 + Challenge.cpp 1052-1071/1762-1852)
+  // ============================================================
+  pickSlotSeed(reelIdx) {
+    // 原版 SLOT_SEED_TYPES 权重: 基砑100; 豌豆 200→100 (场上0→5棵线性);
+    //   钻石 30; 第3轮与前两轮 next 同符号 +50% (控连胜率)
+    const peas = this.plants.filter(p => !p.dead && p.type === 'PEASHOOTER').length;
+    const SYMS = ['SUNFLOWER', 'PEASHOOTER', 'SNOWPEA', 'WALLNUT', 'SLOT_SUN', 'SLOT_DIAMOND'];
+    const entries = SYMS.map(s => {
+      let w = 100;
+      if (s === 'PEASHOOTER') w = 200 - 100 * Math.min(5, peas) / 5;
+      else if (s === 'SLOT_DIAMOND') w = 30;
+      if (reelIdx === 2 && s !== 'SLOT_DIAMOND') {
+        if (this.slotReels[0].next === s || this.slotReels[1].next === s) w += w / 2;
+      }
+      return [s, w];
+    });
+    let total = entries.reduce((t, [, w]) => t + w, 0);
+    let r = Math.random() * total;
+    for (const [s, w] of entries) { r -= w; if (r <= 0) return s; }
+    return 'SUNFLOWER';
+  }
+  slotPull(game) {
+    if (this.slotSpinning) return true;                    // 转动中拉杆无效
+    if (this.sun < 25) {
+      this.addEffect('text', 400, 320, { hold: 1.6, txt: '阳光不够拉动拉杆! (需要 25)', c: '#ffd76a', size: 16 });
+      game.audio.play('buzzer');
+      return true;
+    }
+    this.sun -= 25;                                      // 原版 TakeSunMoney(25)
+    for (let i = 0; i < 3; i++) {
+      const reel = this.slotReels[i];
+      reel.cd = 300;                                      // 原版 SlotMachineStart: 300tick
+      reel.pos = 0;
+      reel.next = this.pickSlotSeed(i);
+    }
+    this.slotSpinning = true;
+    this.slotRolls++;
+    if (this._slotHandle && this._slotHandle.animExists('anim_pull')) {
+      this._slotHandle.play('anim_pull', RE.PLAY_ONCE_HOLD, 0, 36);
+    }
+    game.audio.play('slotmachine');
+    return true;
+  }
+  slotSettle(game) {
+    // 原版 UpdateSlotMachine 1794-1850: 停轮后匹配结算
+    const [a, b, c] = this.slotReels.map(r => r.type);
+    const drop = (kind, plant, n) => {
+      for (let i = 0; i < n; i++) {
+        this.slotPayouts.push({
+          kind, plant,
+          x: 320 + (kind === 'seed' ? i * 20 : i * 12),
+          y: 85, vy: -60 - Math.random() * 40, vx: (Math.random() - 0.5) * 60,
+          ground: 200 + Math.random() * 220,
+          life: 15, taken: false,
+        });
+      }
+    };
+    if (a === b && b === c) {
+      // 三个相同
+      if (a === 'SLOT_DIAMOND') drop('diamond', null, 5);
+      else if (a === 'SLOT_SUN') drop('sun', null, 20);
+      else drop('seed', a, 3);
+      this.addEffect('text', 400, 160, { hold: 1.8, txt: a === 'SLOT_DIAMOND' ? '钻石大奖!!' : a === 'SLOT_SUN' ? '阳光大奖!!' : '三连!!', c: '#ffe86a', size: 20 });
+    } else if (a === b || b === c || a === c) {
+      // 两个相同
+      const s = (a === b || a === c) ? a : b;
+      if (s === 'SLOT_DIAMOND') drop('diamond', null, 1);
+      else if (s === 'SLOT_SUN') drop('sun', null, 4);
+      else drop('seed', s, 1);
+    }
+    // 同步种子银行视图 (停轮后转轮可用)
+    for (let i = 0; i < 3; i++) this.seedCards[i].type = this.slotReels[i].type;
+    if (this.sun >= this.level.slotWinScore) { this.triggerWin(); return; }
+  }
+
+  // ============================================================
+  // 消消乐 (原版 Beghouled — Challenge.cpp 107-879/1296-1376)
+  //   棋盘 8列×全行; 六种棋子: 小喷菇/杨桃/磁力菇/雪花豌豆/坚果/豌豆
+  //   交换(拖/点)/旋转 成三连 → 消除计分 + 掉阳光; 75 次消除获胜
+  // ============================================================
+  BEG_BASE() { return ['PUFFSHROOM', 'STARFRUIT', 'MAGNETSHROOM', 'SNOWPEA', 'WALLNUT', 'PEASHOOTER']; }
+  BEG_COSTS() { return { BEG_REPEATER: 1000, BEG_FUMESHROOM: 500, BEG_TALLNUT: 250, BEG_SHUFFLE: 100, BEG_CRATER: 200 }; }
+  begPlantAt(c, r) { return (this.grid[r] && this.grid[r][c] && !this.grid[r][c].dead) ? this.grid[r][c] : null; }
+  beghouledLoadState() {
+    // 原版 LoadBeghouledBoardState: 棋盘快照 [col][row] → 种子类型
+    const st = Array.from({ length: 8 }, () => new Array(this.rows).fill(null));
+    for (const p of this.plants) {
+      if (p.dead || p._begRemoved || p.col >= 8) continue;
+      st[p.col][p.row] = p.type;
+    }
+    return st;
+  }
+  beghouledMatchLen(c, r, st, horiz) {
+    // 原版 BeghouledHorizontal/VerticalMatchLength: 起点前一位同型 → 0 (非段首)
+    const t = st[c] && st[c][r];
+    if (!t) return 0;
+    if (horiz) {
+      if (c > 0 && st[c - 1][r] === t) return 0;
+      let len = 1;
+      while (c + len < 8 && st[c + len][r] === t) len++;
+      return len;
+    }
+    if (r > 0 && st[c][r - 1] === t) return 0;
+    let len = 1;
+    while (r + len < this.rows && st[c][r + len] === t) len++;
+    return len;
+  }
+  beghouledHasMatch(st) {
+    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
+      if (this.beghouledMatchLen(c, r, st, true) >= 3 || this.beghouledMatchLen(c, r, st, false) >= 3) return true;
+    }
+    return false;
+  }
+  beghouledPickSeed(c, r, st, allowMatches) {
+    // 原版 BeghouledPickSeed: 6 选 1, 已购升级替换后不得成三连 (allowMatches 例外)
+    const picks = [];
+    for (let t of this.BEG_BASE()) {
+      if (t === 'PEASHOOTER' && this.begUpgrades.REPEATER) t = 'REPEATER';
+      else if (t === 'PUFFSHROOM' && this.begUpgrades.FUMESHROOM) t = 'FUMESHROOM';
+      else if (t === 'WALLNUT' && this.begUpgrades.TALLNUT) t = 'TALLNUT';
+      st[c][r] = t;
+      if (allowMatches || !this.beghouledHasMatch(st)) picks.push(t);
+    }
+    st[c][r] = null;
+    return picks.length ? picks[Math.floor(Math.random() * picks.length)] : 'PEASHOOTER';
+  }
+  beghouledMakeStartBoard() {
+    // 原版 BeghouledMakeStartBoard: 填满无三连初始盘
+    const Plant = this._plantClass();
+    const st = Array.from({ length: 8 }, () => new Array(this.rows).fill(null));
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+      if (this.begEated[c][r]) continue;
+      st[c][r] = this.beghouledPickSeed(c, r, st, false);
+    }
+    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
+      if (this.begEated[c][r] || !st[c][r] || this.begPlantAt(c, r)) continue;
+      const p = new Plant(st[c][r], r, c, this);
+      this.plants.push(p);
+      this.grid[r][c] = p;
+    }
+  }
+  beghouledScore(c, r, n, horiz) {
+    // 原版 BeghouledScore 606-673: 计分 + 阳光弹出 + 功能卡解锁 + 75 胜
+    this.begScore++;
+    let suns = n - 2 + this.begMatchesThisMove;
+    if (n >= 5) suns += 2;
+    suns = Math.max(1, Math.min(5, suns));
+    const off = n === 3 ? 80 : n === 4 ? 120 : 160;
+    const px = this.gridX(c) + (horiz ? off : 40);
+    const py = this.cellY(r, c) + (horiz ? 40 : off);
+    for (let i = 0; i < suns; i++) this.addSun(px + 20 * i - 10, py, Math.min(540, py + 36), 'coin');
+    try { this.game.audio.play('points'); } catch (e) { }
+    if (!this.seedCards.length) {
+      // 原版: 首次消除 → 解锁 4 张功能卡 (双发/大喷/高坚果/洗牌)
+      this.seedCards = [
+        { type: 'BEG_REPEATER', cd: 0 }, { type: 'BEG_FUMESHROOM', cd: 0 },
+        { type: 'BEG_TALLNUT', cd: 0 }, { type: 'BEG_SHUFFLE', cd: 0 },
+      ];
+      this.addEffect('text', 400, 300, { hold: 3, txt: '存阳光升级植物! 消除 75 次获胜', c: '#8ae87a', size: 16 });
+    }
+    if (this.begScore >= 75) {
+      this.begScore = 75;
+      this.triggerWin();
+    } else if (this.begScore >= 70) {
+      this.addEffect('text', 400, 200, { hold: 1.5, txt: '就差一点点!', c: '#ffe86a', size: 15 });
+    }
+    this.begMatchesThisMove++;
+  }
+  beghouledRemoveMatches() {
+    // 原版 BeghouledRemoveMatches 675-696: 横向先行 (在快照上连续标记), 纵向基于横清后的盘
+    const st = this.beghouledLoadState();
+    const marked = new Set();
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+      const hl = this.beghouledMatchLen(c, r, st, true);
+      if (hl >= 3) {
+        for (let i = 0; i < hl; i++) st[c + i][r] = null;
+        this.beghouledScore(c, r, hl, true);
+        for (let i = 0; i < hl; i++) marked.add((c + i) + ',' + r);
+      }
+    }
+    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
+      const vl = this.beghouledMatchLen(c, r, st, false);
+      if (vl >= 3) {
+        for (let i = 0; i < vl; i++) st[c][r + i] = null;
+        this.beghouledScore(c, r, vl, false);
+        for (let i = 0; i < vl; i++) marked.add(c + ',' + (r + i));
+      }
+    }
+    for (const key of marked) {
+      const [c, r] = key.split(',').map(Number);
+      const p = this.begPlantAt(c, r);
+      if (p) { p._begRemoved = true; p.dead = true; this.grid[r][c] = null; }
+    }
+    return marked.size;
+  }
+  beghouledMakeFall() {
+    // 原版 BeghouledMakePlantsFall 560-572: 空格上方最近植物下落 (弹坑格不下落不供给)
+    let moved = false;
+    for (let r = this.rows - 1; r >= 0; r--) {
+      for (let c = 0; c < 8; c++) {
+        if (this.begPlantAt(c, r)) continue;
+        for (let rr = r - 1; rr >= 0; rr--) {
+          if (this.begEated[c][rr]) break;   // 弹坑截断供给
+          const p = this.begPlantAt(c, rr);
+          if (p) {
+            this.grid[rr][c] = null;
+            p.row = r;
+            this.grid[r][c] = p;
+            moved = true;
+            break;
+          }
+        }
+      }
+    }
+    return moved;
+  }
+  beghouledPopulate() {
+    // 原版 BeghouledPopulateBoard 831-847: 补满空格 (已有三连时允许 — 级联)
+    const Plant = this._plantClass();
+    const st = this.beghouledLoadState();
+    const allow = this.beghouledHasMatch(st);
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+      if (st[c][r] || this.begEated[c][r]) continue;
+      st[c][r] = this.beghouledPickSeed(c, r, st, allow);
+    }
+    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
+      if (this.begEated[c][r] || this.begPlantAt(c, r) || !st[c][r]) continue;
+      const p = new Plant(st[c][r], r, c, this);
+      p.y = this.cellY(r, c) - 90;    // 从上方掉入
+      this.plants.push(p);
+      this.grid[r][c] = p;
+    }
+  }
+  beghouledShuffle() {
+    // 原版 BeghouledShuffle 3277-3289: 全部移除重摆 (弹坑保留)
+    for (const p of this.plants) {
+      if (!p.dead && !p._begRemoved && p.col < 8) { p._begRemoved = true; p.dead = true; }
+    }
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+      if (!this.begEated[c][r]) this.grid[r][c] = null;
+    }
+    this.beghouledMakeStartBoard();
+    this.addEffect('screen_flash', 0, 0, { hold: 0.4 });
+    try { this.game.audio.play('floop'); } catch (e) { }
+  }
+  begHasAnyMove() {
+    // 原版 BeghouledCheckForPossibleMoves 849-879: 交换/旋转任一可成三连
+    if (this.begTwist) {
+      for (let r = 0; r < this.rows - 1; r++) for (let c = 0; c < 7; c++) {
+        if (!this.begTwistValid(c, r)) continue;
+        this.begTwistRotate(c, r);
+        const ok = this.beghouledHasMatch(this.beghouledLoadState());
+        this.begTwistRotate(c, r); this.begTwistRotate(c, r); this.begTwistRotate(c, r);
+        if (ok) return true;
+      }
+      return false;
+    }
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+      if (this.begIsValidMove(c, r, c + 1, r) || this.begIsValidMove(c, r, c, r + 1)) return true;
+    }
+    return false;
+  }
+  begIsValidMove(c1, r1, c2, r2) {
+    // 原版 BeghouledIsValidMove 419-441: 交换后成三连才有效
+    if (c2 >= 8 || r2 >= this.rows) return false;
+    if (this.begEated[c1][r1] || this.begEated[c2][r2]) return false;
+    const p1 = this.begPlantAt(c1, r1), p2 = this.begPlantAt(c2, r2);
+    if (!p1 || !p2) return false;
+    const st = this.beghouledLoadState();
+    const t = st[c1][r1]; st[c1][r1] = st[c2][r2]; st[c2][r2] = t;
+    const ok = this.beghouledHasMatch(st);
+    return ok;
+  }
+  begTrySwap(c1, r1, c2, r2) {
+    if (this.begState !== 'idle' || !this.begIsValidMove(c1, r1, c2, r2)) {
+      try { this.game.audio.play('floop'); } catch (e) { }
+      return;
+    }
+    const p1 = this.begPlantAt(c1, r1), p2 = this.begPlantAt(c2, r2);
+    this.grid[r1][c1] = p2; this.grid[r2][c2] = p1;
+    if (p2) { p2.col = c1; p2.row = r1; }
+    if (p1) { p1.col = c2; p1.row = r2; }
+    this.begState = 'flash'; this.begStateT = 25;
+    try { this.game.audio.play('seedlift'); } catch (e) { }
+  }
+  begTwistValid(c, r) {
+    return c >= 0 && c <= 6 && r >= 0 && r <= this.rows - 2 &&
+      !this.begEated[c][r] && !this.begEated[c + 1][r] && !this.begEated[c][r + 1] && !this.begEated[c + 1][r + 1] &&
+      this.begPlantAt(c, r) && this.begPlantAt(c + 1, r) && this.begPlantAt(c, r + 1) && this.begPlantAt(c + 1, r + 1);
+  }
+  begTwistRotate(c, r) {
+    // 原版 BeghouledTwistMouseDown 346-349: 顺时针 a1→右 a2→右下 a4→左下(上) a3→左
+    const a1 = this.grid[r][c], a2 = this.grid[r][c + 1], a3 = this.grid[r + 1][c], a4 = this.grid[r + 1][c + 1];
+    this.grid[r][c] = a3; this.grid[r][c + 1] = a1; this.grid[r + 1][c] = a4; this.grid[r + 1][c + 1] = a2;
+    if (a3) { a3.row = r; a3.col = c; }
+    if (a1) { a1.row = r; a1.col = c + 1; }
+    if (a4) { a4.row = r + 1; a4.col = c; }
+    if (a2) { a2.row = r + 1; a2.col = c + 1; }
+  }
+  begTryTwist(c, r) {
+    if (this.begState !== 'idle' || !this.begTwistValid(c, r)) {
+      try { this.game.audio.play('floop'); } catch (e) { }
+      return;
+    }
+    this.begTwistRotate(c, r);
+    if (!this.beghouledHasMatch(this.beghouledLoadState())) {
+      this.begTwistRotate(c, r); this.begTwistRotate(c, r); this.begTwistRotate(c, r);   // 转回
+      try { this.game.audio.play('floop'); } catch (e) { }
+      return;
+    }
+    this.begState = 'flash'; this.begStateT = 25;
+    try { this.game.audio.play('seedlift'); } catch (e) { }
+  }
+  begCardClick(i, game) {
+    // 原版 BeghouledPacketClicked 3235-3275: 升级一次性购买 / 洗牌 / 清坑
+    const card = this.seedCards[i];
+    if (!card) return;
+    const cost = this.BEG_COSTS()[card.type];
+    if (this.sun < cost) { game.audio.play('buzzer'); return; }
+    const Plant = this._plantClass();
+    const swapAll = (from, to) => {
+      for (const p of this.plants) {
+        if (p.dead || p.type !== from || p.col >= 8) continue;
+        const np = new Plant(to, p.row, p.col, this);
+        p._begRemoved = true; p.dead = true;
+        this.plants.push(np);
+        this.grid[p.row][p.col] = np;
+      }
+    };
+    if (card.type === 'BEG_REPEATER') {
+      if (this.begUpgrades.REPEATER) return;
+      this.begUpgrades.REPEATER = true;
+      swapAll('PEASHOOTER', 'REPEATER');
+      card.used = true;
+    } else if (card.type === 'BEG_FUMESHROOM') {
+      if (this.begUpgrades.FUMESHROOM) return;
+      this.begUpgrades.FUMESHROOM = true;
+      swapAll('PUFFSHROOM', 'FUMESHROOM');
+      card.used = true;
+    } else if (card.type === 'BEG_TALLNUT') {
+      if (this.begUpgrades.TALLNUT) return;
+      this.begUpgrades.TALLNUT = true;
+      swapAll('WALLNUT', 'TALLNUT');
+      card.used = true;
+    } else if (card.type === 'BEG_SHUFFLE') {
+      this.beghouledShuffle();
+      this.begState = 'flash'; this.begStateT = 25;
+    } else if (card.type === 'BEG_CRATER') {
+      // 原版 BeghouledClearCrater: 从左上扫清 1 坑 + 补格
+      let cleared = false;
+      for (let cc = 0; cc < 8 && !cleared; cc++) for (let rr = 0; rr < this.rows && !cleared; rr++) {
+        if (this.begEated[cc][rr]) { this.begEated[cc][rr] = false; cleared = true; }
+      }
+      if (cleared) this.beghouledPopulate();
+    }
+    this.sun -= cost;
+    game.audio.play('points');
+  }
+  begUpdate(dt) {
+    // 原版 UpdateBeghouled 1296-1376: flash→fall→populate 级联 + 无操作提示/卡死洗牌
+    const tk = Math.max(1, Math.round(dt * 100));
+    this.begStateT -= tk;
+    if (this.begState === 'flash' && this.begStateT <= 0) {
+      this.beghouledRemoveMatches();
+      const moved = this.beghouledMakeFall();
+      this.begState = 'fall'; this.begStateT = 28;
+      void moved;
+    } else if (this.begState === 'fall' && this.begStateT <= 0) {
+      this.begState = 'populate'; this.begStateT = 12;
+    } else if (this.begState === 'populate' && this.begStateT <= 0) {
+      this.beghouledPopulate();
+      if (this.beghouledHasMatch(this.beghouledLoadState())) {
+        this.begState = 'flash'; this.begStateT = 25;   // 级联
+      } else {
+        this.begMatchesThisMove = 0;
+        this.begState = 'idle'; this.begStateT = 1500;
+        this._begHinted = false;
+        if (!this.begHasAnyMove()) { this.beghouledShuffle(); this.begState = 'flash'; this.begStateT = 25; }
+      }
+    } else if (this.begState === 'idle' && this.begStateT <= 0) {
+      // 原版: 1500tick 无操作 → 闪可行步; 再 1500 → 洗牌
+      if (this._begHinted) {
+        this.beghouledShuffle();
+        this.begState = 'flash'; this.begStateT = 25;
+        this._begHinted = false;
+      } else {
+        this._begHinted = true;
+        this.begStateT = 1500;
+      }
+    }
+    // 僵尸哦死植物 → 弹坑 (原版 ZombieAtePlant 1869-1886; 解锁清坑卡)
+    for (const p of this.plants) {
+      if (!p.dead || p._begRemoved || p._begEatenMarked || p.col >= 8) continue;
+      p._begEatenMarked = true;
+      this.begEated[p.col][p.row] = true;
+      if (this.seedCards.length === 4) {
+        this.seedCards.push({ type: 'BEG_CRATER', cd: 0 });
+        this.addEffect('text', 400, 300, { hold: 2.5, txt: '僵尸吃出了弹坑! 花 200 阳光清理', c: '#8ad8ff', size: 15 });
+      }
+    }
+  }
+
+  // ============================================================
+  // 僵尸水族馆 (原版 Zombiquarium — Challenge.cpp 3307-3443 + Zombie.cpp 3079-3260)
+  // ============================================================
+  aqSpawnSnorkle() {
+    // 原版 ZombiquariumSpawnSnorkle: 随机位置 (50-650, 100-400)
+    const z = this.addZombie('SNORKEL', 0);
+    if (!z) return null;
+    z.posX = 50 + Math.random() * 600;
+    z.posY = 100 + Math.random() * 300;
+    z.x = Math.floor(z.posX); z.y = Math.floor(z.posY);
+    return z;
+  }
+
+  modeClickBeghouled(game, p) {
+    // 功能卡银行 (y<87)
+    if (p.y < 87) {
+      for (let i = 0; i < this.seedCards.length; i++) {
+        const x = game.packetX(i, this.seedCards.length);
+        if (p.x > x && p.x < x + 50 && p.y > 7) {
+          this.begCardClick(i, game);
+          return true;
+        }
+      }
+      return false;   // 阳光收集交给通用逻辑
+    }
+    const cell = game.pixelToCell(p.x, p.y);
+    if (!cell) return false;
+    const [c, r] = cell;
+    if (c >= 8) return false;
+    if (this.begTwist) {
+      this.begTryTwist(Math.min(c, 6), Math.min(r, this.rows - 2));
+      return true;
+    }
+    // 交换: 点击选中 + 点击相邻目标 (web 近似原版拖拽)
+    if (this.begSel) {
+      const [c0, r0] = this.begSel;
+      this.begSel = null;
+      if (Math.abs(c - c0) + Math.abs(r - r0) === 1) this.begTrySwap(c0, r0, c, r);
+      else if (!this.begEated[c][r] && this.begPlantAt(c, r)) this.begSel = [c, r];
+    } else {
+      if (!this.begEated[c][r] && this.begPlantAt(c, r)) this.begSel = [c, r];
+    }
+    return true;
+  }
+  modeClickZombiquarium(game, p) {
+    // 2 卡银行: 潜水僵尸 $100 / 奖杯 $1000 (原版 GetCost)
+    if (p.y < 87) {
+      for (let i = 0; i < 2; i++) {
+        const x = game.packetX(i, 2);
+        if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
+          const cost = i === 0 ? 100 : 1000;
+          if (this.sun < cost) { game.audio.play('buzzer'); return true; }
+          if (i === 0) {
+            if (this.zombies.filter(z => !z.dead).length > 20) return true;
+            this.sun -= cost;
+            this.aqSpawnSnorkle();
+            try { game.audio.play('zombiesplash'); } catch (e) { }
+            this.addEffect('dust', p.x, 200);
+          } else {
+            this.sun -= cost;
+            this.addEffect('text', 400, 280, { hold: 2.5, txt: '恭喜获得奖杯!', c: '#ffe86a', size: 24 });
+            this.triggerWin();
+          }
+          return true;
+        }
+      }
+      return false;
+    }
+    // 喂脑子 (原版 ZombiquariumMouseDown 3360-3379: 水域 80-720/90-430, 脑<3, 5 阳光)
+    if (p.x >= 80 && p.x <= 720 && p.y >= 90 && p.y <= 430) {
+      const nBrains = this.brains.filter(br => !br.taken).length;
+      if (nBrains < 3 && this.sun >= 5) {
+        this.sun -= 5;
+        this.brains.push({ x: p.x - 15, y: p.y - 15, t: 0, taken: false });
+        try { game.audio.play('seedlift'); } catch (e) { }
+      } else if (this.sun < 5) {
+        this.addEffect('text', p.x, p.y - 10, { hold: 1.2, txt: '需要 5 阳光!', c: '#ffd76a', size: 14 });
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // ============================================================
+  // 消消乐 (原版 Beghouled — Challenge.cpp 107-879/1296-1376)
+  //   棋盘 8列×全行; 六种棋子: 小喷菇/杨桃/磁力菇/雪花豌豆/坚果/豌豆
+  //   交换(点选两格)/旋转 成三连 → 消除计分 + 掉阳光; 75 次消除获胜
+  // ============================================================
+  BEG_BASE() { return ['PUFFSHROOM', 'STARFRUIT', 'MAGNETSHROOM', 'SNOWPEA', 'WALLNUT', 'PEASHOOTER']; }
+  BEG_COSTS() { return { BEG_REPEATER: 1000, BEG_FUMESHROOM: 500, BEG_TALLNUT: 250, BEG_SHUFFLE: 100, BEG_CRATER: 200 }; }
+  begPlantAt(c, r) { return (this.grid[r] && this.grid[r][c] && !this.grid[r][c].dead) ? this.grid[r][c] : null; }
+  beghouledLoadState() {
+    // 原版 LoadBeghouledBoardState: 棋盘快照 [col][row] → 种子类型
+    const st = Array.from({ length: 8 }, () => new Array(this.rows).fill(null));
+    for (const p of this.plants) {
+      if (p.dead || p._begRemoved || p.col >= 8) continue;
+      st[p.col][p.row] = p.type;
+    }
+    return st;
+  }
+  beghouledMatchLen(c, r, st, horiz) {
+    // 原版 BeghouledHorizontal/VerticalMatchLength: 段首前一位同型 → 0
+    const t = st[c] && st[c][r];
+    if (!t) return 0;
+    if (horiz) {
+      if (c > 0 && st[c - 1][r] === t) return 0;
+      let len = 1;
+      while (c + len < 8 && st[c + len][r] === t) len++;
+      return len;
+    }
+    if (r > 0 && st[c][r - 1] === t) return 0;
+    let len = 1;
+    while (r + len < this.rows && st[c][r + len] === t) len++;
+    return len;
+  }
+  beghouledHasMatch(st) {
+    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
+      if (this.beghouledMatchLen(c, r, st, true) >= 3 || this.beghouledMatchLen(c, r, st, false) >= 3) return true;
+    }
+    return false;
+  }
+  beghouledPickSeed(c, r, st, allowMatches) {
+    // 原版 BeghouledPickSeed: 6 选 1, 已购升级替换, 默认不成三连
+    const picks = [];
+    for (let t of this.BEG_BASE()) {
+      if (t === 'PEASHOOTER' && this.begUpgrades.REPEATER) t = 'REPEATER';
+      else if (t === 'PUFFSHROOM' && this.begUpgrades.FUMESHROOM) t = 'FUMESHROOM';
+      else if (t === 'WALLNUT' && this.begUpgrades.TALLNUT) t = 'TALLNUT';
+      st[c][r] = t;
+      if (allowMatches || !this.beghouledHasMatch(st)) picks.push(t);
+    }
+    st[c][r] = null;
+    return picks.length ? picks[Math.floor(Math.random() * picks.length)] : 'PEASHOOTER';
+  }
+  beghouledMakeStartBoard() {
+    // 原版 BeghouledMakeStartBoard: 填满无三连初始盘 (弹坑格保留)
+    const Plant = this._plantClass();
+    const st = Array.from({ length: 8 }, () => new Array(this.rows).fill(null));
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+      if (this.begEated[c][r]) continue;
+      st[c][r] = this.beghouledPickSeed(c, r, st, false);
+    }
+    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
+      if (this.begEated[c][r] || !st[c][r] || this.begPlantAt(c, r)) continue;
+      const p = new Plant(st[c][r], r, c, this);
+      this.plants.push(p);
+      this.grid[r][c] = p;
+    }
+  }
+  beghouledScore(c, r, n, horiz) {
+    // 原版 BeghouledScore 606-673: 计分 + 阳光弹出 + 功能卡解锁 + 75 胜
+    this.begScore++;
+    let suns = n - 2 + this.begMatchesThisMove;
+    if (n >= 5) suns += 2;
+    suns = Math.max(1, Math.min(5, suns));
+    const off = n === 3 ? 80 : n === 4 ? 120 : 160;
+    const px = this.gridX(c) + (horiz ? off : 40);
+    const py = this.cellY(r, c) + (horiz ? 40 : off);
+    for (let i = 0; i < suns; i++) this.addSun(px + 20 * i - 10, py, Math.min(540, py + 36), 'coin');
+    try { this.game.audio.play('points'); } catch (e) { }
+    if (!this.seedCards.length) {
+      // 原版: 首次消除 → 解锁 4 张功能卡 (双发1000/大喷500/高坚果250/洗牌100)
+      this.seedCards = [
+        { type: 'BEG_REPEATER', cd: 0 }, { type: 'BEG_FUMESHROOM', cd: 0 },
+        { type: 'BEG_TALLNUT', cd: 0 }, { type: 'BEG_SHUFFLE', cd: 0 },
+      ];
+      this.addEffect('text', 400, 300, { hold: 3, txt: '存阳光升级植物! 消除 75 次获胜', c: '#8ae87a', size: 16 });
+    }
+    if (this.begScore >= 75) {
+      this.begScore = 75;
+      this.triggerWin();
+    } else if (this.begScore >= 70) {
+      this.addEffect('text', 400, 200, { hold: 1.5, txt: '就差一点点!', c: '#ffe86a', size: 15 });
+    }
+    this.begMatchesThisMove++;
+  }
+  beghouledRemoveMatches() {
+    // 原版 BeghouledRemoveMatches 675-696: 横向先行 (快照连续标记), 纵向基于横清后盘面
+    const st = this.beghouledLoadState();
+    const marked = new Set();
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+      const hl = this.beghouledMatchLen(c, r, st, true);
+      if (hl >= 3) {
+        for (let i = 0; i < hl; i++) st[c + i][r] = null;
+        this.beghouledScore(c, r, hl, true);
+        for (let i = 0; i < hl; i++) marked.add((c + i) + ',' + r);
+      }
+    }
+    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
+      const vl = this.beghouledMatchLen(c, r, st, false);
+      if (vl >= 3) {
+        for (let i = 0; i < vl; i++) st[c][r + i] = null;
+        this.beghouledScore(c, r, vl, false);
+        for (let i = 0; i < vl; i++) marked.add(c + ',' + (r + i));
+      }
+    }
+    for (const key of marked) {
+      const [c, r] = key.split(',').map(Number);
+      const p = this.begPlantAt(c, r);
+      if (p) { p._begRemoved = true; p.dead = true; this.grid[r][c] = null; }
+    }
+    return marked.size;
+  }
+  beghouledMakeFall() {
+    // 原版 BeghouledMakePlantsFall 560-572: 空格上方最近植物下落 (弹坑截断供给)
+    let moved = false;
+    for (let r = this.rows - 1; r >= 0; r--) {
+      for (let c = 0; c < 8; c++) {
+        if (this.begPlantAt(c, r)) continue;
+        for (let rr = r - 1; rr >= 0; rr--) {
+          if (this.begEated[c][rr]) break;
+          const p = this.begPlantAt(c, rr);
+          if (p) {
+            this.grid[rr][c] = null;
+            p.row = r;
+            this.grid[r][c] = p;
+            moved = true;
+            break;
+          }
+        }
+      }
+    }
+    return moved;
+  }
+  beghouledPopulate() {
+    // 原版 BeghouledPopulateBoard 831-847: 补满空格 (盘面已有三连时允许 — 级联)
+    const Plant = this._plantClass();
+    const st = this.beghouledLoadState();
+    const allow = this.beghouledHasMatch(st);
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+      if (st[c][r] || this.begEated[c][r]) continue;
+      st[c][r] = this.beghouledPickSeed(c, r, st, allow);
+    }
+    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
+      if (this.begEated[c][r] || this.begPlantAt(c, r) || !st[c][r]) continue;
+      const p = new Plant(st[c][r], r, c, this);
+      p.y = this.cellY(r, c) - 90;    // 从上方掉入
+      this.plants.push(p);
+      this.grid[r][c] = p;
+    }
+  }
+  beghouledShuffle() {
+    // 原版 BeghouledShuffle 3277-3289: 全部移除重摆 (弹坑保留)
+    for (const p of this.plants) {
+      if (!p.dead && !p._begRemoved && p.col < 8) { p._begRemoved = true; p.dead = true; }
+    }
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+      if (!this.begEated[c][r]) this.grid[r][c] = null;
+    }
+    this.beghouledMakeStartBoard();
+    this.addEffect('screen_flash', 0, 0, { hold: 0.4 });
+    try { this.game.audio.play('floop'); } catch (e) { }
+  }
+  begHasAnyMove() {
+    // 原版 BeghouledCheckForPossibleMoves 849-879
+    if (this.begTwist) {
+      for (let r = 0; r < this.rows - 1; r++) for (let c = 0; c < 7; c++) {
+        if (!this.begTwistValid(c, r)) continue;
+        this.begTwistRotate(c, r);
+        const ok = this.beghouledHasMatch(this.beghouledLoadState());
+        this.begTwistRotate(c, r); this.begTwistRotate(c, r); this.begTwistRotate(c, r);
+        if (ok) return true;
+      }
+      return false;
+    }
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+      if (this.begIsValidMove(c, r, c + 1, r) || this.begIsValidMove(c, r, c, r + 1)) return true;
+    }
+    return false;
+  }
+  begIsValidMove(c1, r1, c2, r2) {
+    // 原版 BeghouledIsValidMove 419-441: 交换后成三连才有效
+    if (c2 >= 8 || r2 >= this.rows) return false;
+    if (this.begEated[c1][r1] || this.begEated[c2][r2]) return false;
+    const p1 = this.begPlantAt(c1, r1), p2 = this.begPlantAt(c2, r2);
+    if (!p1 || !p2) return false;
+    const st = this.beghouledLoadState();
+    const t = st[c1][r1]; st[c1][r1] = st[c2][r2]; st[c2][r2] = t;
+    return this.beghouledHasMatch(st);
+  }
+  begTrySwap(c1, r1, c2, r2) {
+    if (this.begState !== 'idle' || !this.begIsValidMove(c1, r1, c2, r2)) {
+      try { this.game.audio.play('floop'); } catch (e) { }
+      return;
+    }
+    const p1 = this.begPlantAt(c1, r1), p2 = this.begPlantAt(c2, r2);
+    this.grid[r1][c1] = p2; this.grid[r2][c2] = p1;
+    if (p2) { p2.col = c1; p2.row = r1; }
+    if (p1) { p1.col = c2; p1.row = r2; }
+    this.begState = 'flash'; this.begStateT = 25;
+    try { this.game.audio.play('seedlift'); } catch (e) { }
+  }
+  begTwistValid(c, r) {
+    return c >= 0 && c <= 6 && r >= 0 && r <= this.rows - 2 &&
+      !this.begEated[c][r] && !this.begEated[c + 1][r] && !this.begEated[c][r + 1] && !this.begEated[c + 1][r + 1] &&
+      this.begPlantAt(c, r) && this.begPlantAt(c + 1, r) && this.begPlantAt(c, r + 1) && this.begPlantAt(c + 1, r + 1);
+  }
+  begTwistRotate(c, r) {
+    // 原版 BeghouledTwistMouseDown 346-349: 顺时针 左上→右上→右下→左下
+    const a1 = this.grid[r][c], a2 = this.grid[r][c + 1], a3 = this.grid[r + 1][c], a4 = this.grid[r + 1][c + 1];
+    this.grid[r][c] = a3; this.grid[r][c + 1] = a1; this.grid[r + 1][c] = a4; this.grid[r + 1][c + 1] = a2;
+    if (a3) { a3.row = r; a3.col = c; }
+    if (a1) { a1.row = r; a1.col = c + 1; }
+    if (a4) { a4.row = r + 1; a4.col = c; }
+    if (a2) { a2.row = r + 1; a2.col = c + 1; }
+  }
+  begTryTwist(c, r) {
+    if (this.begState !== 'idle' || !this.begTwistValid(c, r)) {
+      try { this.game.audio.play('floop'); } catch (e) { }
+      return;
+    }
+    this.begTwistRotate(c, r);
+    if (!this.beghouledHasMatch(this.beghouledLoadState())) {
+      this.begTwistRotate(c, r); this.begTwistRotate(c, r); this.begTwistRotate(c, r);   // 转回
+      try { this.game.audio.play('floop'); } catch (e) { }
+      return;
+    }
+    this.begState = 'flash'; this.begStateT = 25;
+    try { this.game.audio.play('seedlift'); } catch (e) { }
+  }
+  begCardClick(i, game) {
+    // 原版 BeghouledPacketClicked 3235-3275: 升级一次性购买 / 洗牌 / 清坑
+    const card = this.seedCards[i];
+    if (!card) return;
+    const cost = this.BEG_COSTS()[card.type];
+    if (this.sun < cost) { game.audio.play('buzzer'); return; }
+    const Plant = this._plantClass();
+    const swapAll = (from, to) => {
+      for (const p of this.plants) {
+        if (p.dead || p.type !== from || p.col >= 8) continue;
+        const np = new Plant(to, p.row, p.col, this);
+        p._begRemoved = true; p.dead = true;
+        this.plants.push(np);
+        this.grid[p.row][p.col] = np;
+      }
+    };
+    if (card.type === 'BEG_REPEATER') {
+      if (this.begUpgrades.REPEATER) return;
+      this.begUpgrades.REPEATER = true;
+      swapAll('PEASHOOTER', 'REPEATER');
+      card.used = true;
+    } else if (card.type === 'BEG_FUMESHROOM') {
+      if (this.begUpgrades.FUMESHROOM) return;
+      this.begUpgrades.FUMESHROOM = true;
+      swapAll('PUFFSHROOM', 'FUMESHROOM');
+      card.used = true;
+    } else if (card.type === 'BEG_TALLNUT') {
+      if (this.begUpgrades.TALLNUT) return;
+      this.begUpgrades.TALLNUT = true;
+      swapAll('WALLNUT', 'TALLNUT');
+      card.used = true;
+    } else if (card.type === 'BEG_SHUFFLE') {
+      this.beghouledShuffle();
+      this.begState = 'flash'; this.begStateT = 25;
+    } else if (card.type === 'BEG_CRATER') {
+      // 原版 BeghouledClearCrater 584-604: 从左上扫清 1 坑 + 补格
+      let cleared = false;
+      for (let cc = 0; cc < 8 && !cleared; cc++) for (let rr = 0; rr < this.rows && !cleared; rr++) {
+        if (this.begEated[cc][rr]) { this.begEated[cc][rr] = false; cleared = true; }
+      }
+      if (cleared) this.beghouledPopulate();
+    }
+    this.sun -= cost;
+    game.audio.play('points');
+  }
+  begUpdate(dt) {
+    // 原版 UpdateBeghouled 1296-1376: flash→fall→populate 级联 + 无操作提示/卡死洗牌
+    const tk = Math.max(1, Math.round(dt * 100));
+    this.begStateT -= tk;
+    if (this.begState === 'flash' && this.begStateT <= 0) {
+      this.beghouledRemoveMatches();
+      this.beghouledMakeFall();
+      this.begState = 'fall'; this.begStateT = 28;
+    } else if (this.begState === 'fall' && this.begStateT <= 0) {
+      this.begState = 'populate'; this.begStateT = 12;
+    } else if (this.begState === 'populate' && this.begStateT <= 0) {
+      this.beghouledPopulate();
+      if (this.beghouledHasMatch(this.beghouledLoadState())) {
+        this.begState = 'flash'; this.begStateT = 25;   // 级联
+      } else {
+        this.begMatchesThisMove = 0;
+        this.begState = 'idle'; this.begStateT = 1500;
+        this._begHinted = false;
+        if (!this.begHasAnyMove()) { this.beghouledShuffle(); this.begState = 'flash'; this.begStateT = 25; }
+      }
+    } else if (this.begState === 'idle' && this.begStateT <= 0) {
+      // 原版: 1500tick 无操作 → 闪可行步; 再 1500 → 洗牌
+      if (this._begHinted) {
+        this.beghouledShuffle();
+        this.begState = 'flash'; this.begStateT = 25;
+        this._begHinted = false;
+      } else {
+        this._begHinted = true;
+        this.begStateT = 1500;
+      }
+    }
+    // 僵尸啃死植物 → 弹坑 (原版 ZombieAtePlant 1869-1886; 同时解锁清坑卡)
+    for (const p of this.plants) {
+      if (!p.dead || p._begRemoved || p._begEatenMarked || p.col >= 8) continue;
+      p._begEatenMarked = true;
+      this.begEated[p.col][p.row] = true;
+      if (this.seedCards.length === 4) {
+        this.seedCards.push({ type: 'BEG_CRATER', cd: 0 });
+        this.addEffect('text', 400, 300, { hold: 2.5, txt: '僵尸吃出了弹坑! 花 200 阳光清理', c: '#8ad8ff', size: 15 });
+      }
+    }
+    // 掉落视觉: 新植物/下落植物向目标 y 渐进
+    for (const p of this.plants) {
+      if (p.dead) continue;
+      const ty = this.cellY(p.row, p.col);
+      if (Math.abs(p.y - ty) > 2) p.y += (ty - p.y) * Math.min(1, dt * 10);
+      else p.y = ty;
+    }
+  }
+
+  // ============================================================
+  // 僵尸水族馆 (原版 Zombiquarium — Challenge.cpp 3307-3443 + Zombie.cpp 3079-3260)
+  // ============================================================
+  aqSpawnSnorkle() {
+    // 原版 ZombiquariumSpawnSnorkle: 随机位置 (50-650, 100-400)
+    const z = this.addZombie('SNORKEL', 0);
+    if (!z) return null;
+    z.posX = 50 + Math.random() * 600;
+    z.posY = 100 + Math.random() * 300;
+    z.x = Math.floor(z.posX); z.y = Math.floor(z.posY);
+    return z;
+  }
+
+  modeClickBeghouled(game, p) {
+    // 功能卡银行 (y<87)
+    if (p.y < 87) {
+      for (let i = 0; i < this.seedCards.length; i++) {
+        const x = game.packetX(i, this.seedCards.length);
+        if (p.x > x && p.x < x + 50 && p.y > 7) {
+          this.begCardClick(i, game);
+          return true;
+        }
+      }
+      return false;   // 阳光收集交给通用逻辑
+    }
+    const cell = game.pixelToCell(p.x, p.y);
+    if (!cell) return false;
+    const [c, r] = cell;
+    if (c >= 8) return false;
+    if (this.begTwist) {
+      this.begTryTwist(Math.min(c, 6), Math.min(r, this.rows - 2));
+      return true;
+    }
+    // 交换: 点击选中 + 点击相邻目标 (web 近似原版拖拽)
+    if (this.begSel) {
+      const [c0, r0] = this.begSel;
+      this.begSel = null;
+      if (Math.abs(c - c0) + Math.abs(r - r0) === 1) this.begTrySwap(c0, r0, c, r);
+      else if (!this.begEated[c][r] && this.begPlantAt(c, r)) this.begSel = [c, r];
+    } else {
+      if (!this.begEated[c][r] && this.begPlantAt(c, r)) this.begSel = [c, r];
+    }
+    return true;
+  }
+  modeClickZombiquarium(game, p) {
+    // 2 卡银行: 潜水僵尸 $100 / 奖杯 $1000 (原版 GetCost)
+    if (p.y < 87) {
+      for (let i = 0; i < 2; i++) {
+        const x = game.packetX(i, 2);
+        if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
+          const cost = i === 0 ? 100 : 1000;
+          if (this.sun < cost) { game.audio.play('buzzer'); return true; }
+          if (i === 0) {
+            if (this.zombies.filter(z => !z.dead).length > 20) return true;
+            this.sun -= cost;
+            this.aqSpawnSnorkle();
+            try { game.audio.play('zombiesplash'); } catch (e) { }
+            this.addEffect('dust', p.x, 200);
+          } else {
+            this.sun -= cost;
+            this.addEffect('text', 400, 280, { hold: 2.5, txt: '恭喜获得奖杯!', c: '#ffe86a', size: 24 });
+            this.triggerWin();
+          }
+          return true;
+        }
+      }
+      return false;
+    }
+    // 喂脑子 (原版 ZombiquariumMouseDown 3360-3379: 水域 80-720/90-430, 脑<3, 5 阳光)
+    if (p.x >= 80 && p.x <= 720 && p.y >= 90 && p.y <= 430) {
+      const nBrains = this.brains.filter(br => !br.taken).length;
+      if (nBrains < 3 && this.sun >= 5) {
+        this.sun -= 5;
+        this.brains.push({ x: p.x - 15, y: p.y - 15, t: 0, taken: false });
+        try { game.audio.play('seedlift'); } catch (e) { }
+      } else if (this.sun < 5) {
+        this.addEffect('text', p.x, p.y - 10, { hold: 1.2, txt: '需要 5 阳光!', c: '#ffd76a', size: 14 });
+      }
+      return true;
+    }
+    return false;
   }
 
   updateMode(dt) {
@@ -1552,13 +2587,18 @@ class Board {
         break;
       }
       case 'raining': {
-        // 种子包掉落
+        // 种子包掉落 (原版 UpdateRainingSeeds: 500-999tick 随机间隔, x 100-649)
         this.rainT -= dt;
         if (this.rainT <= 0 && this.heldCards.length < 4) {
-          this.rainT = 5 + Math.random() * 4;
-          const pool = availablePlants(Math.min(this.level.id || 40, 50)).filter(t => PLANTS[t].cost <= 300);
-          const type = pool[Math.floor(Math.random() * pool.length)];
-          this.rainCards.push({ type, x: 120 + Math.random() * 600, y: -40, vy: 55, land: 90 + Math.random() * 60, taken: false, life: 11 });
+          this.rainT = 5 + Math.random() * 5;
+          // 原版排除表: 升级植物/向日葵/双子/咖啡豆/叶子伞/阳光菇/模仿者 + 墓碑吞噬者(无墓碑不推荐)
+          const excl = new Set(['SUNFLOWER', 'TWINSUNFLOWER', 'COFFEEBEAN', 'UMBRELLALEAF', 'SUNSHROOM', 'IMITATER', 'MARIGOLD', 'GRAVEBUSTER']);
+          const pool = availablePlants(50, this.game && this.game.purchasedSet).filter(t => !excl.has(t));
+          let type = pool[Math.floor(Math.random() * pool.length)];
+          // 原版: 睡莲概率 30%→1% (场上睡莲数 0→18 线性) — 泳池浓雾关补给
+          const lilyCount = this.plants.filter(p => !p.dead && p.type === 'LILYPAD').length;
+          if (Math.random() * 100 < 30 - (30 - 1) * Math.min(18, lilyCount) / 18) type = 'LILYPAD';
+          this.rainCards.push({ type, x: 100 + Math.random() * 550, y: -40, vy: 55, land: 90 + Math.random() * 60, taken: false, life: 11 });
         }
         for (const c of this.rainCards) {
           if (c.taken) continue;
@@ -1568,13 +2608,286 @@ class Board {
         this.rainCards = this.rainCards.filter(c => !c.taken);
         break;
       }
+      case 'beghouled': {
+        this.begUpdate(dt);
+        break;
+      }
+      case 'zombiquarium': {
+        // 脑子下沉 (原版 3429-3442: +0.15/tick, y≥500 消失)
+        const tk2 = Math.max(1, Math.round(dt * 100));
+        for (const br of this.brains) {
+          if (br.taken) continue;
+          br.t += tk2;
+          br.y += 0.15 * tk2;
+          if (br.y >= 500) br.taken = true;
+        }
+        this.brains = this.brains.filter(br => !br.taken);
+        // 全灭 → 判负 (原版 ZombiquariumUpdate: zombies 空 → ZombiesWon)
+        if (!this.zombies.some(z => !z.dead) && this.state === 'playing') {
+          this.triggerLose(0);
+        }
+        break;
+      }
+      case 'slotmachine': {
+        // 拉杆 reanim 懒建 (原版 Challenge 构造: SlotMachine @ (96,-20), animRate=0)
+        if (!this._slotHandle && RE.hasDef('SlotMachine')) {
+          const h = Assets.reanim('SlotMachine');
+          h.setPosition(96, -20);
+          this._slotHandle = h;
+        }
+        // ---- 转轮物理 (原版 SeedPacket::Update 184-208): cd 300tick;
+        //      翻面速度 6→2/s 线性减速; pos≥1 → 换面, cd==0 → 停 ----
+        const tk = Math.max(1, Math.round(dt * 100));
+        for (let k = 0; k < tk; k++) {
+          for (let i = 0; i < 3; i++) {
+            const reel = this.slotReels[i];
+            if (reel.cd > 0) {
+              reel.cd--;
+              const flips = 6 + (2 - 6) * (reel.cd / 300);
+              reel.pos += flips * 0.01;
+              if (reel.pos >= 1) {
+                reel.type = reel.next;
+                if (reel.cd === 0) { reel.pos = 0; }
+                else { reel.pos -= 1; reel.next = this.pickSlotSeed(i); }
+              } else if (reel.cd === 0) { reel.cd = 1; }   // 原版: 未翻到整格续 1tick
+            }
+          }
+        }
+        // 全停 → 结算 (原版 STATECHALLENGE_SLOT_MACHINE_ROLLING → NORMAL)
+        if (this.slotSpinning && !this.slotReels.some(r => r.cd > 0)) {
+          this.slotSpinning = false;
+          if (this._slotHandle && this._slotHandle.animExists('anim_return')) {
+            this._slotHandle.play('anim_return', RE.PLAY_ONCE_HOLD, 0, 24);
+          }
+          this.slotSettle(this.game);
+        }
+        // 奖励掉落物物理 (原版 COIN_MOTION_COIN: 弹出+重力)
+        for (const pk of this.slotPayouts) {
+          if (pk.taken) continue;
+          pk.vy += 500 * dt;
+          pk.x += pk.vx * dt;
+          pk.y += pk.vy * dt;
+          if (pk.y > pk.ground) {
+            pk.y = pk.ground;
+            if (Math.abs(pk.vy) > 60) { pk.vy = -pk.vy * 0.4; pk.vx *= 0.5; }
+            else { pk.vy = 0; pk.vx = 0; }
+          }
+          pk.life -= dt;
+        }
+        this.slotPayouts = this.slotPayouts.filter(pk => !pk.taken && pk.life > 0);
+        break;
+      }
     }
+  }
+
+  // ============================================================
+  // 传送门战斗 (原版 Challenge.cpp 2870-3202)
+  // ============================================================
+  portalPartner(p) {
+    return this.portals.find(q => q !== p && q.kind === p.kind && !q.closing) || null;
+  }
+  updatePortals(tk) {
+    // 懒建门 reanim (原版 GridItem::OpenPortal: circle (col*80-6, row0Y-65); square (-4, +25))
+    for (const p of this.portals) {
+      if (p.anim || p.closing) continue;
+      const def = p.kind === 'square' ? 'Portal_Square' : 'Portal_Circle';
+      if (!RE.hasDef(def)) continue;
+      const a = Assets.reanim(def);
+      // 原版 GridItem::OpenPortal: aXPos = mGridX*80-6 (方门再-4), aYPos = GridToPixelY(0, mGridY)-65 (方门+25)
+      const px = p.col * 80 - 6 - (p.kind === 'square' ? 4 : 0);
+      const py = this.gridY(p.row) - 65 + (p.kind === 'square' ? 25 : 0);
+      a.setPosition(px, py);
+      a.play('anim_appear', RE.PLAY_ONCE_HOLD, 0, 24);
+      p.anim = a;
+      p.appeared = false;
+    }
+    for (const p of this.portals) {
+      const a = p.anim;
+      if (!a) continue;
+      if (!p.appeared && a.loopType === RE.PLAY_ONCE_HOLD && a.loopCount > 0) {
+        a.play('anim_pulse', RE.LOOP, 0, 12);
+        p.appeared = true;
+      }
+      if (p.closing) {
+        // 消散完 → 旧 reanim 回收, 新位置重新开门 (原版 ClosePortal → GridItemDie)
+        if (a.loopType === RE.PLAY_ONCE_HOLD && a.loopCount > 0) {
+          a.reanimDie();
+          p.anim = null;
+          p.closing = false;
+        }
+        continue;
+      }
+      const other = this.portalPartner(p);
+      if (!other || !other.anim || other.closing) continue;
+      // 僵尸传送 (原版 UpdatePortal 2914-2937: |zx-(col*80+25)|≤45)
+      for (const z of this.zombies) {
+        if (z.dead || z.row !== p.row || z.lastPortalX === p.col) continue;
+        const zx = z.x + (z.zombieRect ? z.zombieRect.x + z.zombieRect.w / 2 : 40);
+        const ppx = p.col * 80 + 25;
+        if (Math.abs(zx - ppx) <= 45) {
+          const diffX = zx - z.x;
+          z.posX = other.col * 80 - diffX;
+          z.x = Math.floor(z.posX);
+          z.setRow(other.row);
+          z.posY = this.getPosYBasedOnRow(other.row);
+          z.y = Math.floor(z.posY);
+          z.lastPortalX = other.col;
+          try { this.game.audio.play('portal'); } catch (e) { }
+        }
+      }
+      // 直线子弹传送 (原版 2939-2962: |px-(col*80+55)|≤40, y 随行差 ×100)
+      for (const pr of this.projectiles) {
+        if (pr.dead || pr.def.lob || pr.def.cob || pr.def.gloom || pr.def.fume || pr.zombieProj) continue;
+        if (pr.row !== p.row || pr.lastPortalX === p.col) continue;
+        const ppx = p.col * 80 + 55;
+        if (Math.abs(pr.x - ppx) <= 40) {
+          const dy = (other.row - p.row) * 100;
+          pr.x += other.col * 80 - pr.x + 60;
+          pr.row = other.row;
+          pr.y += dy;
+          pr.lastPortalX = other.col;
+        }
+      }
+      // 割草机传送 (原版 2965-2983: |mx+45-(col*80+25)|≤20)
+      for (const m of this.mowers) {
+        if (!m || m.state !== 'running' || m.row !== p.row || m.lastPortalX === p.col) continue;
+        const mx = m.x + 45;
+        const ppx = p.col * 80 + 25;
+        if (Math.abs(mx - ppx) <= 20) {
+          m.x = other.col * 80 + 25;
+          m.row = other.row;
+          m.lastPortalX = other.col;
+        }
+      }
+    }
+    // 周期搬家 (原版 UpdatePortalCombat: 首次 9000tick, 之后每 6000; 剩500时提示)
+    this.portalCounter -= tk;
+    if (this.portalCounter === 500) {
+      this.addEffect('text', 400, 320, { hold: 2, txt: '传送门即将搬家!', c: '#9ad8ff', size: 16 });
+    } else if (this.portalCounter <= 0) {
+      this.portalCounter = 6000;
+      this.moveAPortal();
+    }
+  }
+  // 原版 MoveAPortal 3014-3062: 随机挑一门搬迁; 新位不得与伙伴同列/同行/压门
+  moveAPortal() {
+    const open = this.portals.filter(p => !p.closing);
+    if (!open.length) return;
+    const p = open[Math.floor(Math.random() * open.length)];
+    const other = this.portalPartner(p);
+    if (!other) return;
+    const cands = [];
+    for (let gx = 0; gx < 10; gx++) {
+      for (let gy = 0; gy < 5; gy++) {
+        if (gx === other.col || gy === other.row) continue;
+        if (this.portals.some(q => q !== p && !q.closing && q.col === gx && q.row === gy)) continue;
+        cands.push([gx, gy]);
+      }
+    }
+    if (!cands.length) return;
+    const pick = cands[Math.floor(Math.random() * cands.length)];
+    if (p.anim) { p.anim.play('anim_dissapear', RE.PLAY_ONCE_HOLD, 0, 24); p.closing = true; }
+    p.col = pick[0]; p.row = pick[1];
+    try { this.game.audio.play('portal'); } catch (e) { }
+  }
+  // 原版 PortalCombatRowSpawnWeight 3096-3106: 近割草机(门链距离<5) 0.01 / 有门行 1.0 / 其他 0.2
+  portalDistanceToMower(row) {
+    let gx = 10, gy = row, dist = 0, guard = 8;
+    while (dist < 40 && guard-- > 0) {
+      const left = this.portals.filter(q => !q.closing && q.row === gy && q.col < gx)
+        .sort((a, b) => b.col - a.col)[0];
+      if (!left) { dist += gx; break; }
+      const other = this.portalPartner(left);
+      if (!other) { dist += gx - left.col; break; }
+      dist += gx - left.col;
+      gx = other.col;
+      gy = other.row;
+    }
+    return dist;
+  }
+  portalRowWeight(r) {
+    if (this.portalDistanceToMower(r) < 5) return 0.01;
+    if (this.portals.some(p => !p.closing && p.row === r)) return 1.0;
+    return 0.2;
+  }
+
+  // ============================================================
+  // 最后防线 (原版 LastStand — Challenge.cpp 4855-4940)
+  // ============================================================
+  lastStandStageComplete() {
+    this.lsStage++;
+    const flags = this.lsStage;
+    this.game.audio.play('hugewave');
+    // 卡片刷新 (原版 RefreshAllPackets)
+    for (const c of this.seedCards) c.cd = 0;
+    if (flags >= 5) {
+      // 5 面旗防守成功 → 奖杯 (原版 SurvivalCompletedStage → 奖励)
+      this.triggerWin();
+      return;
+    }
+    this.addEffect('text', 400, 300, { hold: 3, txt: '成功防守 ' + flags + ' 面旗帜!', c: '#ffe86a', size: 24 });
+    // 重建下一阶段波次 (原版 points = (stage*10+wave+10)*2/5+1)
+    this.lsPhase = 'build';
+    this.wavesStarted = false;
+    this.wave = 0;
+    this.waves = this.buildWaves(this.level);
+    this.totalWaves = this.waves.length;
+    this.hugeWaveWarned = false;
+  }
+  lastStandStartOnslaught() {
+    this.lsPhase = 'onslaught';
+    this.wavesStarted = false;
+    this.beginWaves();
+    this.addEffect('text', 400, 250, { hold: 1.6, txt: '一大波僵尸正在接近!', c: '#ff6a5a', size: 22 });
   }
 
   // 模式点击处理 (返回 true 表示已消费)
   modeClick(game, p) {
     if (this.state !== 'playing') return false;
+    // 最后防线: 建造期"开始进攻"按钮 (原版 StoreButton: (300,559,210×46) / 续期 (270,559,257×46))
+    if (this.level.lastStand && this.lsPhase === 'build') {
+      const first = this.lsStage === 0;
+      const bx = first ? 300 : 270, bw = first ? 210 : 257;
+      if (p.x >= bx && p.x <= bx + bw && p.y >= 549 && p.y <= 605) {
+        game.audio.play('gravebutton');
+        this.lastStandStartOnslaught();
+        return true;
+      }
+      return false;
+    }
     switch (this.mode) {
+      case 'beghouled': return this.modeClickBeghouled(game, p);
+      case 'zombiquarium': return this.modeClickZombiquarium(game, p);
+      case 'slotmachine': {
+        // 拉杆热区 (原版 SlotMachineGetHandleRect: seedBank.x+473, y, 55×80)
+        if (p.x >= 473 && p.x < 528 && p.y >= 0 && p.y < 80) {
+          return this.slotPull(game);
+        }
+        // 转轮上点击非植物符号 → 提示拉杆 (原版 SeedPacket::MouseDown 733-741)
+        // 种子包拾取 (原版 COIN_USABLE_SEED_PACKET/阳光/钻石 → 点击收集)
+        for (const pk of this.slotPayouts) {
+          if (pk.taken) continue;
+          if (Math.abs(p.x - pk.x) < 28 && Math.abs(p.y - (pk.y - 20)) < 34) {
+            pk.taken = true;
+            if (pk.kind === 'seed') {
+              game.freePlant = pk.plant;
+              game._freePlantPos = { x: pk.x, y: pk.ground };
+              game.selectedCard = -1;
+              game.audio.play('seedlift');
+            } else if (pk.kind === 'sun') {
+              this.sun = Math.min(9990, this.sun + CONST.SUN_VALUE);
+              game.audio.play('points');
+            } else {
+              // 钻石 → 金币奖励 (原版 COIN_DIAMOND)
+              game.coins += 1000;
+              game.saveShop();
+              game.audio.play('coin');
+            }
+            return true;
+          }
+        }
+        return false;   // 其余交给通用逻辑 (选卡/种植/收阳光)
+      }
       case 'whack': {
         // ---- 原版 Board::MouseHitTest: 锤子光标下 阳光/种子银行点击优先于锤击 ----
         // 种植进行中 → 交回通用逻辑 (选格种植/右键取消)

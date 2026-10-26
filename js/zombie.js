@@ -40,6 +40,8 @@ const PH = {
   BOSS_ENTER: 74, BOSS_IDLE: 75, BOSS_SPAWNING: 76, BOSS_STOMPING: 77, BOSS_BUNGEES_ENTER: 78, BOSS_BUNGEES_DROP: 79, BOSS_BUNGEES_LEAVE: 80, BOSS_DROP_RV: 81, BOSS_HEAD_ENTER: 82, BOSS_HEAD_IDLE_BEFORE_SPIT: 83, BOSS_HEAD_IDLE_AFTER_SPIT: 84, BOSS_HEAD_SPIT: 85, BOSS_HEAD_LEAVE: 86,
   YETI_RUNNING: 87,
   SQUASH_PRE_LAUNCH: 88, SQUASH_RISING: 89, SQUASH_FALLING: 90, SQUASH_DONE_FALLING: 91,
+  // 僵尸水族馆 (原版 PHASE_ZOMBIQUARIUM_* Zombie.cpp)
+  ZQ_DRIFT: 92, ZQ_ACCEL: 93, ZQ_BACK_FORTH: 94, ZQ_BITE: 95,
 };
 
 // ---------- 高度状态 (ZombieHeight) ----------
@@ -106,6 +108,13 @@ const ZDEF = {
   GARGANTUAR: { reanim: 'Zombie_gargantuar', value: 10, level: 48, firstWave: 15, weight: 1500 },
   REDEYE: { reanim: 'Zombie_gargantuar', value: 10, level: 48, firstWave: 15, weight: 6000 },
   IMP: { reanim: 'Zombie_imp', value: 10, level: 48, firstWave: 1, weight: 0 },
+  // Zombotany 植物头僵尸 (原版 gZombieDefs 107-112: 仅豌豆大战 1/2)
+  PEA_HEAD: { reanim: 'Zombie', value: 1, level: 99, firstWave: 1, weight: 4000, zombotany: 'PEASHOOTER', headAnim: 'anim_head_idle' },
+  WALLNUT_HEAD: { reanim: 'Zombie', value: 4, level: 99, firstWave: 1, weight: 3000, zombotany: 'WALLNUT', headAnim: 'anim_idle' },
+  JALAPENO_HEAD: { reanim: 'Zombie', value: 3, level: 99, firstWave: 10, weight: 1000, zombotany: 'JALAPENO', headAnim: 'anim_idle' },
+  GATLING_HEAD: { reanim: 'Zombie', value: 3, level: 99, firstWave: 10, weight: 2000, zombotany: 'GATLINGPEA', headAnim: 'anim_head_idle' },
+  SQUASH_HEAD: { reanim: 'Zombie', value: 3, level: 99, firstWave: 10, weight: 2000, zombotany: 'SQUASH', headAnim: 'anim_idle' },
+  TALLNUT_HEAD: { reanim: 'Zombie', value: 4, level: 99, firstWave: 10, weight: 2000, zombotany: 'TALLNUT', headAnim: 'anim_idle' },
   BOSS: { reanim: 'Zombie_boss', value: 10, level: 50, firstWave: 1, weight: 0 },
 };
 
@@ -122,6 +131,7 @@ function curve(aMin, aMax, v, from, to, ease) {
   t = clamp(t, 0, 1);
   if (ease === 'ease_in') t = t * t;
   else if (ease === 'ease_out') t = 1 - (1 - t) * (1 - t);
+  else if (ease === 'ease_in_out') t = t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t);
   else if (ease === 'bounce') t = 1 - Math.abs(1 - 2 * t) * (1 - t * 0.3);
   return from + (to - from) * t;
 }
@@ -358,9 +368,21 @@ class Zombie {
       case 'SNORKEL':
         this.zombieRect = rect(12, 0, 62, 115);
         this.zombieAttackRect = rect(-5, 0, 55, 115);
+        this.variant = false;
+        this.bodyHealth = 500;   // 原版 gZombieDefs: 潜水僵尸 500 血 (旧实现漏设恒 270)
+        if (b && b.mode === 'zombiquarium') {
+          // 水族馆初始化 (原版 ZombiquariumSpawnSnorkle + UpdateZombiquarium 相位)
+          this.bodyHealth = 500;
+          this.velZ = Math.random() * Math.PI * 2;
+          this.velX = 0.2;
+          this.phase = PH.ZQ_DRIFT;
+          this.phaseCounter = 300 + Math.floor(Math.random() * 700);
+          this.summonCounter = 1000 + Math.floor(Math.random() * 500);
+          this.playZombieReanim('anim_aquarium_swim', RE.LOOP, 20, 15);
+          break;
+        }
         this.setupWaterTrack('Zombie_snorkle_whitewater');
         this.setupWaterTrack('Zombie_snorkle_whitewater2');
-        this.variant = false;
         this.phase = PH.SNORKEL_WALKING;
         break;
       case 'JACK': {
@@ -412,6 +434,44 @@ class Zombie {
         body.attachToTrack('Zombie_flaghand', flag, 0, 0);
         body.frameBasePose = 0;
         this.posX = 800;
+        break;
+      }
+      // ---- Zombotany 植物头僵尸 (原版 Zombie.cpp 707-855: 植物头 reanim 挂头轨/身轨) ----
+      case 'PEA_HEAD':
+      case 'GATLING_HEAD':
+      case 'SQUASH_HEAD': {
+        // 头轨方案: 隐 hair/head2, 头轨 imageOverride 置空 (原版 IMAGE_BLANK) — 轨迹仍驱动挂件
+        this.loadPlainZombieReanim();
+        this.reanimShowPrefix('anim_hair', RG.HIDDEN);
+        this.reanimShowPrefix('anim_head2', RG.HIDDEN);
+        this.variant = false;
+        this.attachZombotanyHead('anim_head1');
+        if (this.isOnBoard) this.playZombieReanim('anim_walk2', RE.LOOP, 0, 12);
+        if (this.type === 'PEA_HEAD' || this.type === 'GATLING_HEAD') this.phaseCounter = 150;
+        if (this.type === 'SQUASH_HEAD') this.phase = PH.SQUASH_PRE_LAUNCH;
+        break;
+      }
+      case 'WALLNUT_HEAD':
+      case 'TALLNUT_HEAD':
+      case 'JALAPENO_HEAD': {
+        // 身轨方案: 隐 hair/head1/head2/tie (原版 ReanimShowPrefix("anim_head", HIDDEN))
+        this.loadPlainZombieReanim();
+        this.reanimShowPrefix('anim_hair', RG.HIDDEN);
+        this.reanimShowPrefix('anim_head1', RG.HIDDEN);
+        this.reanimShowPrefix('anim_head2', RG.HIDDEN);
+        this.reanimShowPrefix('Zombie_tie', RG.HIDDEN);
+        this.variant = false;
+        // 原版头盔: 坚果头 HELM 1100 / 高坚果头 HELM 2200 (植物头即头盔)
+        if (this.type === 'WALLNUT_HEAD') { this.helmType = 'wallnut'; this.helmHealth = 1100; }
+        if (this.type === 'TALLNUT_HEAD') { this.helmType = 'tallnut'; this.helmHealth = 2200; }
+        this.attachZombotanyHead('Zombie_body');
+        if (this.type === 'JALAPENO_HEAD') {
+          this.bodyHealth = 500;
+          // 原版: 距离 275+rand175 → 相位计数 = 距离/速度 × LIMP 因子 (同小丑)
+          const dist = 275 + Math.random() * 175;
+          this.phaseCounter = Math.floor(dist / Math.max(0.01, this.velX)) * ZOMBIE_LIMP_SPEED_FACTOR;
+        }
+        if (this.type === 'TALLNUT_HEAD') this.posX += 30;
         break;
       }
       case 'POGO':
@@ -544,6 +604,35 @@ class Zombie {
     return r;
   }
 
+  // Zombotany 植物头挂接 (原版: 植物头 reanim 挂僵尸轨道 + PvzpScaleRotateTransformMatrix 偏移)
+  //   头轨方案 (豌豆/机枪/倭瓜): attach anim_head1, (65,-5,0.2,-1,1) / 倭瓜 (55,-15,0.2,-0.75,0.75)
+  //   身轨方案 (坚果/高坚果/辣椒): attach Zombie_body, (50,0,0.2,-0.8,0.8) / 高坚果 (37,0) / 辣椒 (55,-5,0.2,-1,1)
+  attachZombotanyHead(trackName) {
+    const d = this.def;
+    if (!d.zombotany || !RE.hasDef(d.zombotany)) return;
+    const head = Assets.reanim(d.zombotany);
+    head.play(d.headAnim || 'anim_idle', RE.LOOP, 15);
+    this.specialHeadReanim = head;
+    const r = this.bodyReanim;
+    if (!r || !r.trackExists(trackName)) return;
+    // 头轨方案: 置 imageOverride 不存在键 → 轨道不绘但仍驱动附件 (原版 IMAGE_BLANK)
+    if (trackName === 'anim_head1') {
+      try { r.tracks[r.trackIndex('anim_head1')].imageOverride = '__zombotany_blank__'; } catch (e) { }
+    }
+    const OFF = {
+      PEA_HEAD: [65, -5, 0.2, -1, 1],
+      GATLING_HEAD: [65, -5, 0.2, -1, 1],
+      SQUASH_HEAD: [55, -15, 0.2, -0.75, 0.75],
+      WALLNUT_HEAD: [50, 0, 0.2, -0.8, 0.8],
+      TALLNUT_HEAD: [37, 0, 0.2, -0.8, 0.8],
+      JALAPENO_HEAD: [55, -5, 0.2, -1, 1],
+    }[this.type] || [50, 0, 0, 1, 1];
+    const att = r.attachToTrack(trackName, head, 0, 0);
+    att.offset = MAT.scaleRot(OFF[0], OFF[1], OFF[2], OFF[3], OFF[4]);
+    r.frameBasePose = 0;
+    this._zombotanyAtt = att;
+  }
+
   loadPlainZombieReanim() {
     this.zombieAttackRect = rect(20, 0, 50, 115);
     const r = this.bodyReanim;
@@ -668,10 +757,8 @@ class Zombie {
     } else {
       this.velX = 0.23 + Math.random() * 0.14;
     }
-    // 高速僵尸小游戏 (Zombies on Speed): 速度倍率
-    if (this.board && this.board.level && this.board.level.speedMul && this.velX > 0) {
-      this.velX *= this.board.level.speedMul;
-    }
+    // 高速僵尸 (Zombie Nimble): 整局 2x 由 board.speed 驱动 (main.js sdt = dt*board.speed,
+    //   原版 Challenge::Update 额外调一次 UpdateGame) — 僵尸自身速度不再加倍
     this.updateAnimSpeed();
   }
 
@@ -729,7 +816,7 @@ class Zombie {
       this.playZombieReanim('anim_swim', RE.LOOP, blendTime, 0);
     } else {
       let walkVariant = Math.random() * 2 | 0;
-      if (this.type === 'PEA_HEAD' || this.type === 'FLAG') walkVariant = 0;
+      if (this.type === 'PEA_HEAD' || this.type === 'GATLING_HEAD' || this.type === 'SQUASH_HEAD' || this.type === 'FLAG') walkVariant = 0;
       if (walkVariant === 0 && r.animExists('anim_walk2')) {
         this.playZombieReanim('anim_walk2', RE.LOOP, blendTime, 0);
       } else if (r.animExists('anim_walk')) {
@@ -974,7 +1061,7 @@ class Zombie {
     if (this.type === 'POLEVAULTER') this.updateZombiePolevaulter();
     if (this.type === 'CATAPULT') this.updateZombieCatapult();
     if (this.type === 'DOLPHIN') this.updateZombieDolphinRider();
-    if (this.type === 'SNORKEL') this.updateZombieSnorkel();
+    if (this.type === 'SNORKEL') { if (this.board && this.board.mode === 'zombiquarium') this.updateZombiquarium(); else this.updateZombieSnorkel(); }
     if (this.type === 'BALLOON') this.updateZombieFlyer();
     if (this.type === 'NEWSPAPER') this.updateZombieNewspaper();
     if (this.type === 'DIGGER') this.updateZombieDigger();
@@ -987,10 +1074,17 @@ class Zombie {
     if (this.type === 'DANCER') this.updateZombieDancer();
     if (this.type === 'BACKUP') this.updateZombieBackupDancer();
     if (this.type === 'IMP') this.updateZombieImp();
+    // Zombotany 植物头行为 (原版 Zombie.cpp 4519-4534)
+    if (this.type === 'PEA_HEAD') this.updateZombiePeaHead();
+    if (this.type === 'GATLING_HEAD') this.updateZombieGatlingHead();
+    if (this.type === 'JALAPENO_HEAD') this.updateZombieJalapenoHead();
+    if (this.type === 'SQUASH_HEAD') this.updateZombieSquashHead();
   }
 
   updateZombiePosition() {
     if (this.type === 'BUNGEE' || this.type === 'BOSS' || this.phase === PH.RISING_FROM_GRAVE) return;
+    // 水族馆: 自由游动, 不受行/边界/啃食约束 (原版 UpdateZombiquarium 全权管理)
+    if (this.board && this.board.mode === 'zombiquarium' && this.type === 'SNORKEL') return;
     this.updateZombieWalking();
     // 巨人/冰车/投石 践踏
     if ((this.type === 'ZAMBONI' || this.type === 'CATAPULT') && !this.flatTires) {
@@ -1613,6 +1707,224 @@ class Zombie {
         if (this.board.mode === 'vasebreaker') this.board.scaryPotterJackExplode(px, py);
         this.dieNoLoot();
       }
+    }
+  }
+
+  // ---------------- Zombotany 行为 (原版 Zombie.cpp 2317-2609) ----------------
+  // 头部发射点 (原版: anim_head1 轨道位置 -9/+6)
+  zombotanyFireOrigin() {
+    const r = this.bodyReanim;
+    if (r && r.trackExists('anim_head1')) {
+      const tp = this.getTrackPosition('anim_head1');
+      if (tp) return [tp[0] - 9, tp[1] + 6 - this.altitude];
+    }
+    return [this.posX + 40, this.posY + 20];
+  }
+  // 发射僵尸豌豆 (原版 PROJECTILE_ZOMBIE_PEA MOTION_BACKWARDS; 魅惑后变正向豌豆)
+  fireZombiePea() {
+    this.board.game.audio.play('throw');
+    const [ox, oy] = this.zombotanyFireOrigin();
+    if (this.mindControlled) {
+      this.board.addProjectile('pea', ox + 30, oy, this.row, {});
+    } else {
+      this.board.addProjectile('zpea', ox, oy, this.row, { zProj: true });
+    }
+  }
+  // 豌豆头: 150tick 循环, 35→射击动画, 0→发弹 (原版 UpdateZombiePeaHead)
+  updateZombiePeaHead() {
+    if (!this.hasHead) return;
+    if (this.phaseCounter === 35) {
+      if (this.specialHeadReanim && this.specialHeadReanim.animExists('anim_shooting')) {
+        this.specialHeadReanim.play('anim_shooting', RE.PLAY_ONCE_HOLD, 20, 35);
+      }
+    } else if (this.phaseCounter === 0) {
+      if (this.specialHeadReanim) {
+        this.specialHeadReanim.play(this.def.headAnim || 'anim_head_idle', RE.PLAY_ONCE_HOLD, 20, 15);
+      }
+      this.fireZombiePea();
+      this.phaseCounter = 150;
+    }
+  }
+  // 机枪头: 150tick 循环, 100→射击动画, 18/35/51/68→四连发 (原版 UpdateZombieGatlingHead)
+  updateZombieGatlingHead() {
+    if (!this.hasHead) return;
+    if (this.phaseCounter === 100) {
+      if (this.specialHeadReanim && this.specialHeadReanim.animExists('anim_shooting')) {
+        this.specialHeadReanim.play('anim_shooting', RE.PLAY_ONCE_HOLD, 20, 38);
+      }
+    } else if (this.phaseCounter === 18 || this.phaseCounter === 35 || this.phaseCounter === 51 || this.phaseCounter === 68) {
+      this.fireZombiePea();
+    } else if (this.phaseCounter === 0) {
+      if (this.specialHeadReanim) {
+        this.specialHeadReanim.play(this.def.headAnim || 'anim_head_idle', RE.PLAY_ONCE_HOLD, 20, 15);
+      }
+      this.phaseCounter = 150;
+    }
+  }
+  // 辣椒头: 走到距离尽头 → 整行火焰烧死植物 + 自爆 (原版 UpdateZombieJalapenoHead)
+  updateZombieJalapenoHead() {
+    if (!this.hasHead) return;
+    if (this.phaseCounter <= 0) {
+      const b = this.board;
+      b.game.audio.play('jalapeno');
+      b.addEffect('jala_row', b.gridX(0), this.row, { row: this.row, hold: 0.8 });
+      b.shakeBoard(3, -4);
+      for (const p of b.plants) {
+        if (p.dead || p.row !== this.row) continue;
+        if (p.type === 'LILYPAD' || p.type === 'FLOWERPOT' || p.type === 'PUMPKIN') continue;   // 原版 NotOnGround 载体豁免近似
+        try { p.die(); } catch (e) { p.dead = true; }
+      }
+      this.dieNoLoot();
+    }
+  }
+  // 倭瓜头: 开吃 → 头跳起(95t) → 落下(10t) 砸碎本格植物 → 僵尸自亡 (原版 UpdateZombieSquashHead)
+  updateZombieSquashHead() {
+    if (this.hasHead && this.isEating && this.phase === PH.SQUASH_PRE_LAUNCH) {
+      this.stopEating();
+      this.playZombieReanim('anim_idle', RE.LOOP, 20, 12);
+      this.hasHead = false;
+      const head = this.specialHeadReanim;
+      if (head) {
+        // 脱离挂接 → 转入特效层自由飞行 (原版 AttachmentDetach + SetPosition + OverrideScale 0.75)
+        if (this._zombotanyAtt) this._zombotanyAtt.dead = true;
+        head.overlay = MAT.id();
+        head.scale = 0.75;
+        head.renderOrder = this.renderOrder + 1;
+        head.play('anim_jumpup', RE.PLAY_ONCE_HOLD, 20, 24);
+        (this.board.reanims || (this.board.reanims = [])).push(head);
+        this._squashHeadFree = head;
+        this._squashHeadPos = [this.posX + 6, this.posY - 21];
+      }
+      this.phase = PH.SQUASH_RISING;
+      this.phaseCounter = 95;
+    }
+    const b = this.board;
+    if (this.phase === PH.SQUASH_RISING) {
+      const destCol = b.pixelToGridXKeepOnBoard(this.x, this.y);
+      const destX = b.gridX(destCol);
+      const px = curve(50, 20, this.phaseCounter, 0, destX - this.posX, 'ease_in_out');
+      const py = curve(50, 20, this.phaseCounter, 0, -20, 'ease_in_out');
+      if (this._squashHeadFree) this._squashHeadFree.setPosition(this.posX + 6 + px, this.posY - 21 + py);
+      if (this.phaseCounter === 0) {
+        if (this._squashHeadFree) this._squashHeadFree.play('anim_jumpdown', RE.PLAY_ONCE_HOLD, 0, 60);
+        this.phase = PH.SQUASH_FALLING;
+        this.phaseCounter = 10;
+      }
+    }
+    if (this.phase === PH.SQUASH_FALLING) {
+      const destCol = b.pixelToGridXKeepOnBoard(this.x, this.y);
+      const destX = b.gridX(destCol);
+      const py = curve(10, 0, this.phaseCounter, -20, 74);
+      if (this._squashHeadFree) this._squashHeadFree.setPosition(destX + 6, this.posY - 21 + py);
+      if (this.phaseCounter === 2) {
+        this.squishAllInSquare(destCol, this.row, 'chew');
+      }
+      if (this.phaseCounter === 0) {
+        this.phase = PH.SQUASH_DONE_FALLING;
+        this.phaseCounter = 100;
+        b.shakeBoard(1, 4);
+        b.game.audio.play('thump');
+      }
+    }
+    if (this.phase === PH.SQUASH_DONE_FALLING && this.phaseCounter === 0) {
+      if (this._squashHeadFree) { this._squashHeadFree.reanimDie(); this._squashHeadFree = null; }
+      this.specialHeadReanim = null;
+      this.takeDamage(1800, DMG_SYS);
+    }
+  }
+
+  // ---------------- 僵尸水族馆 (原版 Zombie.cpp 3079-3260 UpdateZombiquarium) ----------------
+  updateZombiquarium() {
+    const b = this.board;
+    if (this.isDeadOrDying) return;
+    // 产阳光 (原版 mSummonCounter: 1000-1500tick → COIN_SUN)
+    if (this.summonCounter > 0) {
+      this.summonCounter--;
+      if (this.summonCounter === 0) {
+        b.addSun(this.posX + 50, this.posY + 30, Math.min(540, this.posY + 60), 'coin');
+        this.summonCounter = 1000 + Math.floor(Math.random() * 500);
+      }
+    }
+    // 饿 (原版: 每 100tick 挨 10 伤, 死亡播 zombaquarium_die)
+    if (this.zombieAge > 0 && this.zombieAge % 100 === 0) {
+      this.takeDamage(10, DMG_SYS);
+      if (this.isDeadOrDying || this.dead) {
+        try { b.game.audio.play('zombaquarium_die'); } catch (e) { }
+        return;
+      }
+    }
+    // AI (原版 ZombiquariumFindClosestBrain + 相位机)
+    if (this.phase === PH.ZQ_BITE) {
+      const r = this.bodyReanim;
+      if (r && r.loopType === RE.PLAY_ONCE_HOLD && r.loopCount > 0) {
+        this.playZombieReanim('anim_aquarium_swim', RE.LOOP, 20, 8 + Math.random() * 2);
+        this.phase = PH.ZQ_DRIFT;
+        this.phaseCounter = 100;
+      }
+    } else {
+      let hunting = false;
+      if (this.bodyHealth <= 150) {
+        // 找最近脑 (原版 t≥15)
+        let best = null, bd = 0;
+        for (const br of b.brains) {
+          if (br.taken || br.t < 15) continue;
+          const d = Math.hypot(br.x + 15 - (this.posX + 50), br.y + 15 - (this.posY + 40));
+          if (!best || d < bd) { bd = d; best = br; }
+        }
+        if (best) {
+          if (bd < 50) {
+            best.taken = true;
+            try { b.game.audio.play('slurp'); } catch (e) { }
+            this.bodyHealth = Math.min(this.bodyMaxHealth, this.bodyHealth + 200);
+            this.playZombieReanim('anim_aquarium_bite', RE.PLAY_ONCE_HOLD, 10, 24);
+            this.phase = PH.ZQ_BITE;
+            this.phaseCounter = 200;
+            hunting = true;
+          } else {
+            this.velZ = Math.atan2(best.y + 15 - (this.posY + 40), best.x + 15 - (this.posX + 50));
+            if (this.velZ < 0) this.velZ += Math.PI * 2;
+            this.phase = PH.ZQ_ACCEL;
+            hunting = true;
+          }
+        }
+      }
+      if (!hunting && this.phaseCounter <= 0) {
+        const hit = Math.floor(Math.random() * 7);
+        if (hit <= 4) {
+          this.phase = PH.ZQ_ACCEL;
+          this.velZ = Math.random() * Math.PI * 2;
+        } else if (hit === 5) {
+          this.phase = PH.ZQ_BACK_FORTH;
+          this.velZ = 0;
+        } else {
+          this.phase = PH.ZQ_BACK_FORTH;
+          this.velZ = Math.PI;
+        }
+        this.phaseCounter = 300 + Math.floor(Math.random() * 700);
+      }
+    }
+    // 移动 (原版 3183-3236: 加速朝 velZ 方向; 出界减速回头; 来回相位限制 x 200-550)
+    let vx = Math.cos(this.velZ), vy = Math.sin(this.velZ);
+    let maxSpeed = 0.5;
+    const oob = (this.posX < 0 && vx < 0) || (this.posX > 680 && vx > 0) || (this.posY < 100 && vy < 0) || (this.posY > 400 && vy > 0);
+    if (oob) {
+      maxSpeed = 0.15;
+      this.phaseCounter = Math.min(100, this.phaseCounter);
+    } else if (this.phase === PH.ZQ_BACK_FORTH) {
+      if (this.posX < 200 && vx < 0) this.velZ = 0;
+      if (this.posX > 550 && vx > 0) this.velZ = Math.PI;
+      vx = Math.cos(this.velZ); vy = Math.sin(this.velZ);
+      maxSpeed = 0.3;
+    } else if (this.phase === PH.ZQ_DRIFT || this.phase === PH.ZQ_BITE) {
+      maxSpeed = 0.05;
+    }
+    this.velX = Math.min(maxSpeed, this.velX + 0.01);
+    this.posX += vx * this.velX;
+    this.posY += vy * this.velX;
+    this.x = Math.floor(this.posX);
+    this.y = Math.floor(this.posY);
+    if (this.bodyReanim && !this.bodyReanim.dead) {
+      this.bodyReanim.setPosition(this.x, this.y);
     }
   }
 
@@ -3200,6 +3512,19 @@ class Zombie {
       track = 'anim_bucket'; centerImg = 'zombie_bucket1';
       this.reanimShowPrefix('anim_bucket', RG.HIDDEN);
       kind = 'bucket';
+    } else if (this.helmType === 'wallnut' || this.helmType === 'tallnut') {
+      // Zombotany 坚果头: 头部植物脱落 (原版 DropHelm → 头部 reanim 消亡 + 植物图掉落)
+      if (this._zombotanyAtt) this._zombotanyAtt.dead = true;
+      if (this.specialHeadReanim) { this.specialHeadReanim.reanimDie(); this.specialHeadReanim = null; }
+      kind = 'helm';
+      // 掉落图: 坚果/高坚果主体贴图
+      const tc = this.getTrackPosition('Zombie_body');
+      if (tc) { px = tc[0] + 20; py = tc[1]; }
+      this.board.addLimbParticle('helm', px, py, this.helmType === 'wallnut' ? 'Wallnut_body' : 'Tallnut_body', this.row);
+      this.helmType = null;
+      this.helmHealth = 0;
+      this.updateDamageStates(flags);
+      return;
     }
     // #7 防具掉落点居中: 轨道变换点 = 图像左上角 → 补半图偏移到防具中心
     //   (旧实现掉落贴图整体偏左上 半图尺寸, 路障偏 ~30x28px / 铁桶 ~31x34px)
@@ -3927,6 +4252,12 @@ class Zombie {
     if (this.dead) return;
     const r = this.bodyReanim;
     if (!r) return;
+    // 隐形僵尸 (原版 Invisi-Ghoul: 完全隐形 — 仅冰冻/减速/被黄油/魅惑时显形; 死亡动画可见)
+    if (this.board && this.board.level && this.board.level.invisibleZ &&
+        this.chilledCounter <= 0 && this.iceTrapCounter <= 0 && this.butteredCounter <= 0 && !this.mindControlled &&
+        !this.isDeadOrDying) {
+      return;
+    }
     const dp = this.getDrawPos();
 
     // 原版 GameObject::BeginDraw: g->Translate(mX, mY) — reanim overlay 为相对偏移

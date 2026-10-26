@@ -44,7 +44,7 @@ const Audio2 = (function () {
     basketball: 'sounds/basketball.ogg', basketballhit: 'SFX/item/bonk.ogg',
     chomp: 'SFX/zombie/chomp.ogg', chomp1: 'SFX/zombie/chomp.ogg', chomp2: 'SFX/zombie/chomp2.ogg',
     bigchomp: 'SFX/plant/bigchomp.ogg', biggulp: 'sounds/gulp.ogg',
-    points: 'SFX/button/points.ogg', coin: 'SFX/item/coin.ogg',
+    points: 'SFX/button/points.ogg', coin: 'SFX/item/coin.ogg', slotmachine: 'sounds/slotmachine.ogg', portal: 'sounds/portal.ogg',
     plant: 'SFX/plant_create/plant.ogg', plant2: 'SFX/plant_create/plant2.ogg',
     plant_water: 'SFX/plant_create/plant_water.ogg',
     shovel: 'SFX/card_and_shovel/shovel.ogg', buzzer: 'SFX/card_and_shovel/buzzer.ogg',

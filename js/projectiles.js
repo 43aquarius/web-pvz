@@ -22,7 +22,7 @@ class Projectile {
     this.backward = !!opts.backward;
     this.maxDist = opts.maxDist || 900;
     this.startX = x;
-    this.zombieProj = !!opts.zProj;
+    this.zombieProj = !!opts.zProj || !!this.def.zproj;
     // 直线弹
     this.vx = (opts.vx !== undefined ? opts.vx : (this.def.speed || 0)) * (this.backward ? -1 : 1);
     this.vy = opts.vy || 0;
@@ -462,6 +462,26 @@ class Projectile {
         }
       }
       if (this.x < -180) this.dead = true;
+      return;
+    }
+    // 僵尸豌豆 (原版 PROJECTILE_ZOMBIE_PEA: 直线逆向飞行, 命中同行植物)
+    if (this.type === 'zpea') {
+      this.x -= this.def.speed * dt;
+      const col = Math.floor((this.x - CONST.LAWN_XMIN) / 80);
+      if (col >= 0 && col < 9 && board.grid[this.row]) {
+        const plant = board.grid[this.row][col];
+        const pot = !plant && board.gridPot[this.row] && board.gridPot[this.row][col];
+        const lily = !plant && !pot && board.gridLily[this.row] && board.gridLily[this.row][col];
+        const hit = plant || pot || lily;
+        if (hit && !hit.dead) {
+          hit.takeDamage(this.def.dmg, board);
+          board.addEffect('splat', this.x - 6, this.y);
+          board.game.audio.play('plastichit');
+          this.dead = true;
+          return;
+        }
+      }
+      if (this.x < CONST.LAWN_XMIN - 60) this.dead = true;
       return;
     }
     // 篮球(抛物线, 原版物理)

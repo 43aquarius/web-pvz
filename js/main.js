@@ -513,6 +513,14 @@ const Game = {
       const x = this.packetX(i, cards.length);
       if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
         const c = cards[i];
+        // 老虎机: 空轮/太阳/钻石符号不可选 (原版 SeedPacket::MouseDown 733-741 → 提示拉杆)
+        if (board.mode === 'slotmachine') {
+          if (!c.type || !PLANTS[c.type]) {
+            this.audio.play('buzzer');
+            board.addEffect('text', 400, 320, { hold: 1.4, txt: '拉动右侧拉杆获得种子!', c: '#ffd76a', size: 15 });
+            return;
+          }
+        }
         const free = board.mode === 'conveyor';   // 传送带关卡无阳光花费
         if (c.cd <= 0 && (free || board.sun >= PLANTS[c.type].cost)) {
           this.selectedCard = this.selectedCard === i ? -1 : i;
@@ -715,6 +723,25 @@ const Game = {
     else if (type === 'PUMPKIN') board.gridPumpkin[row][col] = p;
     else if (GROUNDCOVER.has(type)) board.gridSpikes[row][col] = p;
     else board.grid[row][col] = p;
+    // 列队僵尸: 种子填满整列 (原版 CHALLENGE_COLUMN — 一列一列种下去)
+    if (board.level.columnFill) {
+      for (let rr = 0; rr < board.rows; rr++) {
+        if (rr === row) continue;
+        if (!board.grassRows.includes(rr) && !board.isWater(rr, col)) continue;
+        // 占位: 已有植物/南瓜/地刺 (屋顶花盆是载体不挡种植; 睡莲看水行)
+        if (board.grid[rr][col] || board.gridPumpkin[rr][col] || board.gridSpikes[rr][col]) continue;
+        if (type === 'LILYPAD' && board.gridLily[rr][col]) continue;
+        if (type !== 'LILYPAD' && type !== 'PUMPKIN' && board.isWater(rr, col) && !board.gridLily[rr][col]) continue;
+        if (board.isRoof && type !== 'FLOWERPOT' && !board.gridPot[rr][col]) continue;
+        const pp = new Plant(type, rr, col, board);
+        board.plants.push(pp);
+        if (type === 'LILYPAD') board.gridLily[rr][col] = pp;
+        else if (type === 'FLOWERPOT') board.gridPot[rr][col] = pp;
+        else if (type === 'PUMPKIN') board.gridPumpkin[rr][col] = pp;
+        else if (GROUNDCOVER.has(type)) board.gridSpikes[rr][col] = pp;
+        else board.grid[rr][col] = pp;
+      }
+    }
     // 音效 + 消耗
     if (!conveyor && !free) board.sun -= def.cost;
     if (!conveyor && !free && card) card.cd = def.cd / 1000;
@@ -724,6 +751,13 @@ const Game = {
     if (free) this.freePlant = null;      // 免费植物用后清空
     // 打僵尸: 首次种植完成教程 (原版 SeedPacket.cpp:863 → TUTORIAL_WHACK_A_ZOMBIE_COMPLETED)
     if (board.mode === 'whack' && board.whackFlashT > 0) board.whackFlashT = 0;
+    // 老虎机: 转轮种植后用尽 (原版 WasPlanted → Deactivate 880-883)
+    if (board.mode === 'slotmachine' && this.selectedCard >= 0 && board.slotReels && board.slotReels[this.selectedCard]) {
+      board.slotReels[this.selectedCard].type = null;
+      if (board.seedCards[this.selectedCard]) board.seedCards[this.selectedCard].type = null;
+    }
+    // 看星星: 星形阵补全检查 (原版 PlantAdded → CheckForCompleteArtChallenge)
+    if (board.checkStarPattern) board.checkStarPattern(this);
     this.selectedCard = -1;
     this.audio.play(board.isWater(row, col) ? 'plant_water' : (Math.random() < 0.5 ? 'plant' : 'plant2'));
     return true;
@@ -816,7 +850,7 @@ const Game = {
     this.littleTrouble = !!level.littleTrouble || (!this.modeKey && lv === 25);
     // 铲子解锁 (原版 CutScene.cpp 1338 ShowShovel: lv>4 均显示 — 含保龄球/传送带各关;
     //          仅打僵尸(锤子光标)/我不是僵尸(僵尸卡)无铲子; 罐子关有铲子可砸罐)
-    const specialNoShovel = ['whack', 'izombie'].includes(level.fixed);
+    const specialNoShovel = ['whack', 'izombie', 'slotmachine', 'beghouled', 'zombiquarium'].includes(level.fixed);
     const firstTime = this.progress.unlocked <= lv;
     if (specialNoShovel) this.shovelUnlocked = false;
     else if (lv === 5 && firstTime) this.shovelUnlocked = false;   // 1-5 首次: 由戴夫对话解锁
@@ -878,16 +912,16 @@ const Game = {
   beginPlay() {
     const board = this.board;
     const level = board.level;
-    if (board.mode !== 'vasebreaker' && board.mode !== 'whack') {
+    if (board.mode !== 'vasebreaker' && board.mode !== 'whack' && board.mode !== 'slotmachine' && board.mode !== 'beghouled' && board.mode !== 'zombiquarium') {
       board.seedCards = board.chosenSeeds.map(t => ({ type: t, cd: 0 }));
       // 初始冷却 (原版: 开局短暂冷却)
       for (const c of board.seedCards) c.cd = 2;
-    }   // 罐子关: 保持 initMode 的 1 格樱桃炸弹; 打僵尸关: 保持 3 卡 (土豆雷/咬咬碑/樱桃)
+    }   // 罐子关: 保持 initMode 的 1 格樱桃炸弹; 打僵尸关: 保持 3 卡 (土豆雷/咬咬碑/樱桃); 老虎机: 保持 3 转轮视图
     board.state = 'intro';
     this.state = 'playing';
     this.audio.playBGM(level.bgm);
     // 特殊玩法: 简短过场 (无选卡/无戴夫/无 RSP)
-    const quiet = ['whack', 'vasebreaker', 'izombie'].includes(level.fixed);
+    const quiet = ['whack', 'vasebreaker', 'izombie', 'slotmachine', 'beghouled', 'zombiquarium'].includes(level.fixed);
     // #1 僵王关无 READY-SET-PLANT (原版 CutScene.cpp 1308: IsFinalBossLevel 不添加 RSP)
     if (quiet || level.fixed === 'boss') { level.noReadySet = true; }
     Cutscene.start(board);

@@ -230,6 +230,13 @@ const Renderer = {
         }
       });
     }
+    // 传送门 (原版 RENDER_LAYER_PARTICLE 行内偏移 — 僵尸层之上, 门内穿越)
+    if (board.portals) {
+      for (const p of board.portals) {
+        if (!p.anim || p.anim.dead) continue;
+        list.push({ o: p.row * 10000 + RENDER_LAYER.PARTICLE, d: () => { p.anim.update(1 / 60); p.anim.draw(ctx); } });
+      }
+    }
     // 割草机 (RENDER_LAYER_LAWN_MOWER)
     for (const m of board.mowers) {
       if (m.state === 'gone' || m.hidden) continue;

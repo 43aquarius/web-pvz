@@ -177,6 +177,45 @@ const UI = {
     }
   },
 
+  // 老虎机符号绘制 (原版: 植物=种子包; SLOT_SUN=太阳图; SLOT_DIAMOND=钻石图)
+  drawSlotSymbol(ctx, sym, x, y, opts = {}) {
+    if (!sym) {
+      // 已用掉的转轮: 空包
+      const seeds = Assets.image('seeds');
+      if (seeds) ctx.drawImage(seeds, 100, 0, 50, 70, x, y, 50, 70);
+      else { ctx.fillStyle = '#9a8a66'; ctx.fillRect(x, y, 50, 70); }
+      return;
+    }
+    if (sym === 'SLOT_SUN') {
+      const sunIcon = this.getSunIcon ? this.getSunIcon() : null;
+      const seeds = Assets.image('seeds');
+      if (seeds) ctx.drawImage(seeds, 100, 0, 50, 70, x, y, 50, 70);
+      if (sunIcon) ctx.drawImage(sunIcon, x + 2, y + 5, 46, 46);
+      else { ctx.fillStyle = '#ffd23a'; ctx.beginPath(); ctx.arc(x + 25, y + 28, 18, 0, Math.PI * 2); ctx.fill(); }
+    } else if (sym === 'SLOT_DIAMOND') {
+      const dia = Assets.image('diamond');
+      const seeds = Assets.image('seeds');
+      if (seeds) ctx.drawImage(seeds, 100, 0, 50, 70, x, y, 50, 70);
+      if (dia) ctx.drawImage(dia, x + 8, y + 16, 34, 34);
+      else { ctx.fillStyle = '#7ae8ff'; ctx.beginPath(); ctx.moveTo(x + 25, y + 12); ctx.lineTo(x + 40, y + 32); ctx.lineTo(x + 25, y + 52); ctx.lineTo(x + 10, y + 32); ctx.closePath(); ctx.fill(); }
+    } else {
+      this.drawSeedCard(ctx, sym, x, y, opts);
+    }
+    if (opts.selected) {
+      ctx.save();
+      ctx.strokeStyle = '#ffef7a'; ctx.lineWidth = 3;
+      ctx.strokeRect(x - 1.5, y - 1.5, 53, 73);
+      ctx.restore();
+    }
+    if (opts.disabled) {
+      ctx.save();
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = 'rgb(70,70,70)';
+      ctx.fillRect(x, y, 50, 70);
+      ctx.restore();
+    }
+  },
+
   // ---------- 原版卡包位置 (Board::GetSeedPacketPositionX) ----------
   packetX(i, n) {
     if (n <= 7) return i * 59 + 85;
@@ -386,6 +425,264 @@ const UI = {
         ctx.fillText(txt, 400, 250);
         ctx.restore();
       }
+      return;
+    }
+    // ---- 老虎机: 原版 SUNBANK 银行 + 3 转轮 + SLOTMACHINE_OVERLAY + 拉杆 (SeedBank::Draw 942-974) ----
+    if (board.mode === 'slotmachine') {
+      const bankY = cs.active ? cs.seedBankY : 0;
+      if (bankY > -87) {
+        const sunbank = Assets.image('sunbank.png');
+        if (sunbank) ctx.drawImage(sunbank, 0, bankY);
+        else { ctx.fillStyle = '#8a6642'; ctx.fillRect(0, bankY, 500, 87); }
+        // 阳光计数 (分数, 原版 (34,78) 黑字)
+        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#000';
+        ctx.fillText(String(Math.max(0, board.sun)), 34, bankY + 78);
+        // 目标分提示 (原版 ADVICE_SLOT_MACHINE_COLLECT_SUN: 攒 2000 阳光)
+        ctx.font = 'bold 12px "Noto Sans SC", sans-serif';
+        ctx.fillStyle = board.sun >= 1900 ? '#ffe86a' : 'rgba(60,40,12,0.75)';
+        ctx.fillText('目标 2000', 34, bankY + 30);
+        // 3 转轮 (原版: 标准卡位; 转动中垂直翻面滚动 SeedPacket::Draw 621-630)
+        for (let i = 0; i < 3; i++) {
+          const reel = board.slotReels[i];
+          const x = this.packetX(i, 3);
+          const y = 7 + bankY;
+          if (reel.cd > 0 && reel.next) {
+            const offY = -70 * reel.pos;
+            ctx.save();
+            ctx.beginPath(); ctx.rect(x, y, 50, 70); ctx.clip();
+            this.drawSlotSymbol(ctx, reel.type, x, y + offY);
+            this.drawSlotSymbol(ctx, reel.next, x, y + 70 + offY);
+            ctx.restore();
+          } else {
+            this.drawSlotSymbol(ctx, reel.type, x, y, {
+              selected: game.selectedCard === i && reel.type,
+              disabled: !reel.type || (board.sun < (PLANTS[reel.type] ? PLANTS[reel.type].cost : 1e9)),
+            });
+          }
+        }
+        // 机身罩 (原版 SLOTMACHINE_OVERLAY @ 189,-2)
+        const overlay = Assets.image('slotmachine_overlay.png');
+        if (overlay) ctx.drawImage(overlay, 189, -2 + bankY);
+        // 拉杆 (原版 SlotMachine.reanim: shaft/base/ball, handle 热区 473..528)
+        if (board._slotHandle) {
+          board._slotHandle.setPosition(96, -20 + bankY);
+          board._slotHandle.update(1 / 60);
+          board._slotHandle.draw(ctx);
+        } else {
+          // 兜底: 静态拉杆绘制 (misc 分包未就绪时)
+          ctx.fillStyle = '#6a4a26';
+          ctx.fillRect(492, bankY + 26, 12, 46);
+          ctx.fillStyle = '#c03a2a';
+          ctx.beginPath(); ctx.arc(498, bankY + 22, 11, 0, Math.PI * 2); ctx.fill();
+        }
+        // 拉杆闪烁提示 (原版 mSlotMachineRollCount<3 → GetFlashingColor)
+        if (board.slotRolls < 3 && !board.slotSpinning && Math.floor(board.time * 4) % 2 === 0) {
+          ctx.strokeStyle = 'rgba(255,240,120,0.9)'; ctx.lineWidth = 3;
+          ctx.strokeRect(473, bankY, 55, 80);
+        }
+      }
+      this.drawProgressBar(ctx, board);
+      this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
+      this.drawLevelText(ctx, board);
+      return;
+    }
+    // ---- 消消乐: 原版种子银行 + 功能卡 + 消除进度 (SeedPacket.cpp BeghouledPacketClicked) ----
+    if (board.mode === 'beghouled') {
+      const bankY = cs.active ? cs.seedBankY : 0;
+      if (bankY > -87) {
+        const bank = Assets.image('seedbank.png');
+        const nB = Math.max(1, board.seedCards.length);
+        const extra = nB <= 6 ? 0 : nB === 7 ? 60 : 76;
+        if (bank) ctx.drawImage(bank, 0, 0, 446, 87, 0, bankY, 446 + extra, 87);
+        else { ctx.fillStyle = '#8a6642'; ctx.fillRect(0, bankY, 446 + extra, 87); }
+        // 阳光计数
+        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#000';
+        ctx.fillText(String(Math.max(0, board.sun)), 34, bankY + 78);
+        // 功能卡 (BEG_*): 植物升级卡用缩略图; 洗牌/清坑用文字钮
+        const n = board.seedCards.length;
+        for (let i = 0; i < n; i++) {
+          const c = board.seedCards[i];
+          const x = this.packetX(i, n);
+          const y = 7 + bankY;
+          const cost = board.BEG_COSTS()[c.type];
+          const afford = board.sun >= cost && !(c.used);
+          const PLANT_MAP = { BEG_REPEATER: 'REPEATER', BEG_FUMESHROOM: 'FUMESHROOM', BEG_TALLNUT: 'TALLNUT' };
+          if (PLANT_MAP[c.type]) {
+            this.drawSeedCard(ctx, PLANT_MAP[c.type], x, y, { disabled: !afford });
+            // 价格 (原版 GetCost)
+            ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = afford ? '#000' : '#a33';
+            ctx.fillText(String(cost), x + 25, y + h0 - 8);
+          } else {
+            // 洗牌/清坑: 文字钮
+            const seeds = Assets.image('seeds');
+            if (seeds) ctx.drawImage(seeds, 100, 0, 50, 70, x, y, 50, 70);
+            else { ctx.fillStyle = '#c9a86b'; ctx.fillRect(x, y, 50, 70); }
+            ctx.font = 'bold 22px "Noto Sans SC", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#3a2a10';
+            ctx.fillText(c.type === 'BEG_SHUFFLE' ? '洗' : '坑', x + 25, y + 42);
+            ctx.font = 'bold 12px "Noto Sans SC", sans-serif';
+            ctx.fillStyle = afford ? '#000' : '#a33';
+            ctx.fillText(String(cost), x + 25, y + 62);
+            if (!afford) {
+              ctx.save(); ctx.globalAlpha = 0.45; ctx.fillStyle = 'rgb(70,70,70)'; ctx.fillRect(x, y, 50, 70); ctx.restore();
+            }
+          }
+        }
+        // 消除进度 (原版 mProgressMeterWidth = score/75)
+        ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(20,12,0,0.8)';
+        const st = '消除 ' + (board.begScore || 0) + ' / 75';
+        ctx.strokeText(st, 470, bankY + 30);
+        ctx.fillStyle = '#ffe9a8';
+        ctx.fillText(st, 470, bankY + 30);
+        // 进度条
+        const pw = 170 * Math.min(1, (board.begScore || 0) / 75);
+        ctx.fillStyle = 'rgba(20,12,0,0.55)';
+        ctx.fillRect(470, bankY + 42, 170, 10);
+        ctx.fillStyle = '#8ae87a';
+        ctx.fillRect(470, bankY + 42, pw, 10);
+      }
+      this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
+      this.drawLevelText(ctx, board);
+      return;
+    }
+    // ---- 僵尸水族馆: 原版 2 卡银行 (潜水僵尸 $100 / 奖杯 $1000) ----
+    if (board.mode === 'zombiquarium') {
+      const bankY = cs.active ? cs.seedBankY : 0;
+      if (bankY > -87) {
+        const bank = Assets.image('seedbank.png');
+        if (bank) ctx.drawImage(bank, 0, 0, 446, 87, 0, bankY, 246, 87);
+        else { ctx.fillStyle = '#8a6642'; ctx.fillRect(0, bankY, 246, 87); }
+        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#000';
+        ctx.fillText(String(Math.max(0, board.sun)), 34, bankY + 78);
+        // 卡 1: 潜水僵尸 $100
+        const x1 = this.packetX(0, 2), x2 = this.packetX(1, 2);
+        const y = 7 + bankY;
+        const seeds = Assets.image('seeds');
+        if (seeds) ctx.drawImage(seeds, 0, 0, 50, 70, x1, y, 50, 70);
+        const th = this.getZombieThumb('SNORKEL');
+        if (th) ctx.drawImage(th, x1 + 2, y + 8, 46, 44);
+        ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = board.sun >= 100 ? '#000' : '#a33';
+        ctx.fillText('100', x1 + 25, y + 66);
+        // 卡 2: 奖杯 $1000
+        if (seeds) ctx.drawImage(seeds, 1 * 50, 0, 50, 70, x2, y, 50, 70);
+        const trophy = Assets.image('trophy_hi_res.png');
+        if (trophy) ctx.drawImage(trophy, x2 + 10, y + 14, 30, 38);
+        else { ctx.fillStyle = '#ffd23a'; ctx.beginPath(); ctx.arc(x2 + 25, y + 32, 14, 0, Math.PI * 2); ctx.fill(); }
+        ctx.fillStyle = board.sun >= 1000 ? '#000' : '#a33';
+        ctx.fillText('1000', x2 + 25, y + 66);
+      }
+      this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
+      this.drawLevelText(ctx, board);
+      return;
+    }
+    // ---- 消消乐: 原版种子银行 + 功能卡 + 消除进度 (SeedPacket.cpp BeghouledPacketClicked) ----
+    if (board.mode === 'beghouled') {
+      const bankY = cs.active ? cs.seedBankY : 0;
+      if (bankY > -87) {
+        const bank = Assets.image('seedbank.png');
+        const nB = Math.max(1, board.seedCards.length);
+        const extra = nB <= 6 ? 0 : nB === 7 ? 60 : 76;
+        if (bank) ctx.drawImage(bank, 0, 0, 446, 87, 0, bankY, 446 + extra, 87);
+        else { ctx.fillStyle = '#8a6642'; ctx.fillRect(0, bankY, 446 + extra, 87); }
+        // 阳光计数
+        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#000';
+        ctx.fillText(String(Math.max(0, board.sun)), 34, bankY + 78);
+        // 功能卡 (BEG_*): 植物升级卡用缩略图; 洗牌/清坑用文字钮
+        const n = board.seedCards.length;
+        for (let i = 0; i < n; i++) {
+          const c = board.seedCards[i];
+          const x = this.packetX(i, n);
+          const y = 7 + bankY;
+          const cost = board.BEG_COSTS()[c.type];
+          const afford = board.sun >= cost && !c.used;
+          const PLANT_MAP = { BEG_REPEATER: 'REPEATER', BEG_FUMESHROOM: 'FUMESHROOM', BEG_TALLNUT: 'TALLNUT' };
+          if (PLANT_MAP[c.type]) {
+            this.drawSeedCard(ctx, PLANT_MAP[c.type], x, y, { disabled: !afford });
+            ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = afford ? '#000' : '#a33';
+            ctx.fillText(String(cost), x + 25, y + 62);
+          } else {
+            const seeds = Assets.image('seeds');
+            if (seeds) ctx.drawImage(seeds, 100, 0, 50, 70, x, y, 50, 70);
+            else { ctx.fillStyle = '#c9a86b'; ctx.fillRect(x, y, 50, 70); }
+            ctx.font = 'bold 22px "Noto Sans SC", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#3a2a10';
+            ctx.fillText(c.type === 'BEG_SHUFFLE' ? '洗' : '坑', x + 25, y + 42);
+            ctx.font = 'bold 12px "Noto Sans SC", sans-serif';
+            ctx.fillStyle = afford ? '#000' : '#a33';
+            ctx.fillText(String(cost), x + 25, y + 62);
+            if (!afford) {
+              ctx.save(); ctx.globalAlpha = 0.45; ctx.fillStyle = 'rgb(70,70,70)'; ctx.fillRect(x, y, 50, 70); ctx.restore();
+            }
+          }
+        }
+        // 消除进度 (原版 mProgressMeterWidth = score/75×PROGRESS_METER_COUNTER)
+        ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(20,12,0,0.8)';
+        const stxt = '消除 ' + (board.begScore || 0) + ' / 75';
+        ctx.strokeText(stxt, 470, bankY + 30);
+        ctx.fillStyle = '#ffe9a8';
+        ctx.fillText(stxt, 470, bankY + 30);
+        const pw = 170 * Math.min(1, (board.begScore || 0) / 75);
+        ctx.fillStyle = 'rgba(20,12,0,0.55)';
+        ctx.fillRect(470, bankY + 42, 170, 10);
+        ctx.fillStyle = '#8ae87a';
+        ctx.fillRect(470, bankY + 42, pw, 10);
+      }
+      this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
+      this.drawLevelText(ctx, board);
+      return;
+    }
+    // ---- 僵尸水族馆: 原版 2 卡银行 (潜水僵尸 $100 / 奖杯 $1000) ----
+    if (board.mode === 'zombiquarium') {
+      const bankY = cs.active ? cs.seedBankY : 0;
+      if (bankY > -87) {
+        const bank = Assets.image('seedbank.png');
+        if (bank) ctx.drawImage(bank, 0, 0, 446, 87, 0, bankY, 246, 87);
+        else { ctx.fillStyle = '#8a6642'; ctx.fillRect(0, bankY, 246, 87); }
+        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#000';
+        ctx.fillText(String(Math.max(0, board.sun)), 34, bankY + 78);
+        // 卡 1: 潜水僵尸 $100
+        const x1 = this.packetX(0, 2), x2 = this.packetX(1, 2);
+        const y = 7 + bankY;
+        const seeds = Assets.image('seeds');
+        if (seeds) ctx.drawImage(seeds, 0, 0, 50, 70, x1, y, 50, 70);
+        const th = this.getZombieThumb('SNORKEL');
+        if (th) ctx.drawImage(th, x1 + 2, y + 8, 46, 44);
+        ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = board.sun >= 100 ? '#000' : '#a33';
+        ctx.fillText('100', x1 + 25, y + 66);
+        // 卡 2: 奖杯 $1000
+        if (seeds) ctx.drawImage(seeds, 50, 0, 50, 70, x2, y, 50, 70);
+        const trophy = Assets.image('trophy_hi_res.png');
+        if (trophy) ctx.drawImage(trophy, x2 + 10, y + 14, 30, 38);
+        else { ctx.fillStyle = '#ffd23a'; ctx.beginPath(); ctx.arc(x2 + 25, y + 32, 14, 0, Math.PI * 2); ctx.fill(); }
+        ctx.fillStyle = board.sun >= 1000 ? '#000' : '#a33';
+        ctx.fillText('1000', x2 + 25, y + 66);
+      }
+      this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
+      this.drawLevelText(ctx, board);
       return;
     }
     // ---- 雨天种子: 无常规银行 (持有卡由 drawModeOverlay 绘制) ----
@@ -787,7 +1084,101 @@ const UI = {
   },
 
   drawModeOverlay(ctx, board) {
-    if (!board || !board.mode) return;
+    if (!board) return;
+    // ---- 僵尸水族馆: 全屏水色 + 脑子 + 提示 ----
+    if (board.mode === 'zombiquarium' && board.state === 'playing') {
+      // 水体 (原版 BACKGROUND_ZOMBIQUARIUM — 全屏水族箱, 深海蓝)
+      ctx.save();
+      const grad = ctx.createLinearGradient(0, 90, 0, 500);
+      grad.addColorStop(0, 'rgba(30,105,175,0.62)');
+      grad.addColorStop(0.5, 'rgba(18,75,140,0.7)');
+      grad.addColorStop(1, 'rgba(10,50,105,0.8)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 88, 800, 415);
+      // 波纹
+      ctx.strokeStyle = 'rgba(190,230,255,0.16)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 5; i++) {
+        const wy = 130 + i * 76 + Math.sin(board.time * 1.2 + i * 2) * 5;
+        ctx.beginPath();
+        for (let wx = 20; wx < 790; wx += 26) {
+          ctx.lineTo(wx, wy + Math.sin(wx * 0.05 + board.time * 2 + i) * 3);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+      // 脑子 (原版 GRIDITEM_BRAIN 30x30)
+      const brainImg = Assets.image('brain.png');
+      for (const br of board.brains) {
+        if (br.taken) continue;
+        ctx.save();
+        if (brainImg) ctx.drawImage(brainImg, br.x, br.y, 30, 30);
+        else { ctx.fillStyle = '#e8a0b0'; ctx.beginPath(); ctx.ellipse(br.x + 15, br.y + 15, 14, 11, 0, 0, Math.PI * 2); ctx.fill(); }
+        ctx.restore();
+      }
+      // 教程提示 (原版 ADVICE_ZOMBIQUARIUM_CLICK_TO_FEED / COLLECT_SUN)
+      ctx.save();
+      ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(10,20,40,0.8)';
+      const tip = board.sun < 100 ? '点击水中扔脑子喂僵尸 (5 阳光)' : '攒 1000 阳光购买奖杯!';
+      ctx.strokeText(tip, 400, 530);
+      ctx.fillStyle = '#bfe6ff';
+      ctx.fillText(tip, 400, 530);
+      ctx.restore();
+    }
+    // ---- 消消乐: 弹坑 (原版 mBeghouledEated → IMAGE_CRATER) + 选中框 ----
+    if (board.mode === 'beghouled') {
+      const crater = Assets.image(board.isRoof ? 'crater_roof_center' : 'crater');
+      if (crater) {
+        for (let c = 0; c < 8; c++) for (let r = 0; r < board.rows; r++) {
+          if (!board.begEated[c][r]) continue;
+          ctx.drawImage(crater, board.gridX(c) + 8, board.cellY(r, c) + 40);
+        }
+      }
+      if (board.begSel) {
+        const [c, r] = board.begSel;
+        ctx.save();
+        ctx.strokeStyle = '#ffef7a'; ctx.lineWidth = 3;
+        ctx.strokeRect(board.gridX(c) + 2, board.cellY(r, c) + 2, 76, 86);
+        ctx.restore();
+      }
+    }
+    // ---- 最后防线: 建造期"开始进攻"石钮 (原版 StoreButton (300,559,210×46)/续期(270,559,257×46)) ----
+    if (board.level.lastStand && board.lsPhase === 'build' && board.state === 'playing') {
+      const first = board.lsStage === 0;
+      const bx = first ? 300 : 270, bw = first ? 210 : 257;
+      const label = first ? '开始进攻!' : '继续进攻!';
+      ctx.save();
+      // 石钮 (复用菜单石钮绘制)
+      this.drawStoneButton(ctx, bx, 559, bw, 46, label, 20);
+      ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,240,200,0.95)';
+      ctx.fillText('已防守 ' + (board.lsStage || 0) + ' / 5 面旗帜', 400, 545);
+      ctx.restore();
+    }
+    // ---- 看星星: 星形阵幽灵图 (原版 DrawArtChallenge: 未种格画 40% 透明度杨桃) ----
+    if (board.level.starPattern && board.state === 'playing') {
+      if (!board._starGhost && RE.hasDef('Starfruit')) {
+        const g = Assets.reanim('Starfruit');
+        g.play('anim_idle', RE.LOOP, 12);
+        board._starGhost = g;
+      }
+      if (board._starGhost) {
+        board._starGhost.update(1 / 60);
+        for (const [c, r] of board.starPatternCells()) {
+          const p = board.grid[r] && board.grid[r][c];
+          if (p && !p.dead) continue;
+          ctx.save();
+          ctx.globalAlpha = 0.4;
+          board._starGhost.setPosition(board.gridX(c), board.cellY(r, c));
+          board._starGhost.draw(ctx);
+          ctx.restore();
+        }
+      }
+    }
+    if (!board.mode) return;
     const game = this.game;
     switch (board.mode) {
       case 'vasebreaker': {
@@ -930,6 +1321,28 @@ const UI = {
           ctx.fillRect(x, 76 - 4 * p, 50, 4);
           ctx.restore();
         });
+        break;
+      }
+      case 'slotmachine': {
+        // 赔付掉落物 (原版 COIN_USABLE_SEED_PACKET / COIN_SUN / COIN_DIAMOND 落在草坪)
+        for (const pk of board.slotPayouts) {
+          if (pk.taken) continue;
+          ctx.save();
+          const flash = pk.life < 3 ? (Math.sin(board.time * 10) > 0 ? 0.4 : 1) : 1;
+          ctx.globalAlpha = flash;
+          if (pk.kind === 'seed') {
+            this.drawSeedCard(ctx, pk.plant, pk.x - 25, pk.y - 35, {});
+          } else if (pk.kind === 'sun') {
+            const sunIcon = this.getSunIcon ? this.getSunIcon() : null;
+            if (sunIcon) ctx.drawImage(sunIcon, pk.x - 22, pk.y - 22, 44, 44);
+            else { ctx.fillStyle = '#ffd23a'; ctx.beginPath(); ctx.arc(pk.x, pk.y, 18, 0, Math.PI * 2); ctx.fill(); }
+          } else {
+            const dia = Assets.image('diamond');
+            if (dia) ctx.drawImage(dia, pk.x - 16, pk.y - 16, 32, 32);
+            else { ctx.fillStyle = '#7ae8ff'; ctx.beginPath(); ctx.moveTo(pk.x, pk.y - 16); ctx.lineTo(pk.x + 13, pk.y); ctx.lineTo(pk.x, pk.y + 16); ctx.lineTo(pk.x - 13, pk.y); ctx.closePath(); ctx.fill(); }
+          }
+          ctx.restore();
+        }
         break;
       }
       case 'conveyor': {

@@ -171,6 +171,18 @@ const Assets = (function () {
       }
     }
     if (level.fixed === 'bungee') { for (const p of zombiePacksFor('BUNGEE')) packs.add(p); }
+    // 老虎机: SlotMachine 拉杆 reanim + 机身件在 misc 包 (SUNBANK 在 fx, overlay 在 ui — 均恒载)
+    if (level.fixed === 'slotmachine') packs.add('misc');
+    // 传送门战斗: Portal_Circle/Portal_Square reanim 在 misc 包
+    if (level.portals) packs.add('misc');
+    // 小游戏显式僵尸名单 (level.zombieTypes) — 名单内僵尸分包必载
+    // (原版 InitZombieWaves 直接置 mZombieAllowed, 与关卡解锁表无关)
+    if (level.zombieTypes) {
+      for (const t of level.zombieTypes) for (const p of zombiePacksFor(t)) packs.add(p);
+      // Zombotany 植物头分包 (豌豆/坚果/辣椒/机枪/倭瓜/高坚果 — 机枪为商店升级植物不随卡池载入)
+      const HEADP = { PEA_HEAD: 'PEASHOOTER', WALLNUT_HEAD: 'WALLNUT', JALAPENO_HEAD: 'JALAPENO', GATLING_HEAD: 'GATLINGPEA', SQUASH_HEAD: 'SQUASH', TALLNUT_HEAD: 'TALLNUT' };
+      for (const t of level.zombieTypes) if (HEADP[t]) packs.add('plant_' + HEADP[t]);
+    }
     // 蹦极闪电战 (5-5): BUNGEE + LADDER
     if (level.id === 45) { for (const p of zombiePacksFor('BUNGEE')) packs.add(p); for (const p of zombiePacksFor('LADDER')) packs.add(p); }
     // 植物: 本关可用卡池 (解锁顺序累积)
