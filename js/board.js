@@ -18,6 +18,7 @@ const SCENE_BG = {
   day: 'background1.jpg', night: 'background2.jpg',
   pool: 'background3.jpg', fog: 'background4.jpg', roof: 'background5.jpg',
   boss: 'background6boss.jpg',
+  aquarium: 'aquarium1.jpg',   // 僵尸水族馆 (原版 BACKGROUND_ZOMBIQUARIUM → IMAGE_AQUARIUM1)
 };
 // #10: 5-10 僵王博士 = 夜间屋顶 (原版 background6boss)
 function sceneBgName(board) {
@@ -96,9 +97,10 @@ class Board {
       this.fogOffset = this.maxFogOffset();
     }
 
-    // 割草机 (特殊玩法关卡无割草机: 保龄球/打僵尸/罐子/我不是僵尸)
-    // 原版: 泳池清洁车/屋顶清洁车需在戴夫商店购买
-    const noMowerModes = ['bowling', 'bowling2', 'whack', 'vasebreaker', 'izombie'];
+    // 割草机 (特殊玩法关卡无割草机: 保龄球/打僵尸/罐子/我不是僵尸/水族馆)
+    // 水族馆: 僵尸自由游动不受行约束 (原版 HEIGHT_ZOMBIQUARIUM 豁免割草机/进屋判定;
+    //   若带割草机会被游到左侧的潜水僵尸误触发 → 全场清扫 → 误判全灭失败)
+    const noMowerModes = ['bowling', 'bowling2', 'whack', 'vasebreaker', 'izombie', 'zombiquarium'];
     const bought = (game && game.purchased) || {};
     for (let r = 0; r < this.rows; r++) {
       if (noMowerModes.includes(level.fixed)) continue;
@@ -541,7 +543,8 @@ class Board {
       }
       this._stormT = (this._stormT === undefined ? 8 : this._stormT) - dt;
       if (this._stormT <= 0) {
-        this._stormT = 9 + Math.random() * 12;
+        // 原版 UpdateStormyNight: STORM_FLASH_TIME(150) + rand(300, 400|750) = 450~900tick
+        this._stormT = 4.5 + Math.random() * 4.5;
         this.addEffect('lightning', 0, 0, { hold: 0.35 });
         this.game.audio.play('thunder' in this.game.audio ? 'thunder' : 'bossstomp');
       }
@@ -1249,16 +1252,17 @@ class Board {
       this.mode = 'beghouled';
       this.begTwist = !!this.level.beghouledTwist;
       this.begScore = 0;             // 原版 mChallengeScore (75 胜)
-      this.begState = 'idle';        // idle | flashing | falling | moving
-      this.begStateT = 0;            // 100Hz 计时 (1500 → 提示/洗牌)
-      this.begDrag = null;           // {col,row,startX,startY}
-      this.begTwistSel = null;       // 旋转选中格 (2×2 左上)
+      this.begState = 'idle';        // idle(NORMAL) | moving | falling | nomoves
+      this.begStateT = 1500;         // 原版 StartLevel: mChallengeStateCounter=1500
+      this.begSel = null;            // 交换模式点选格
+      this.begTwistSel = null;       // 旋转悬停 2×2 锚点
       this.begEated = Array.from({ length: 9 }, () => new Array(5).fill(false));   // 弹坑 (僵尸吃掉)
       this.begUpgrades = { REPEATER: false, FUMESHROOM: false, TALLNUT: false };
       this.begMatchesThisMove = 0;
       this.sun = 0;
       this.seedCards = [];           // 首次消除后解锁 4-5 张功能卡
       this.beghouledMakeStartBoard();
+      this.addEffect('text', 400, 130, { hold: 4, txt: this.begTwist ? '点击旋转 2×2 方格, 凑三连!' : '拖动交换相邻植物, 凑三连!', c: '#ffe9a8', size: 16 });
     } else if (f === 'zombiquarium') {
       // 僵尸水族馆 (原版 Zombiquarium): 自由游动的潜水僵尸 + 喂脑子产阳光 + 1000 分买奖杯
       this.mode = 'zombiquarium';
@@ -1564,24 +1568,26 @@ class Board {
   }
 
   // ============================================================
-  // 消消乐 (原版 Beghouled — Challenge.cpp 107-879/1296-1376)
-  //   棋盘 8列×全行; 六种棋子: 小喷菇/杨桃/磁力菇/雪花豌豆/坚果/豌豆
-  //   交换(拖/点)/旋转 成三连 → 消除计分 + 掉阳光; 75 次消除获胜
+  // 消消乐 (原版 Beghouled — Challenge.cpp 107-879/1133-1376/3235-3290)
+  //   棋盘 8列x5行; 六种棋子: 小喷菇/杨桃/磁力菇/雪花豌豆/坚果/豌豆
+  //   交换/旋转 成三连 → 消除计分 + 掉阳光; 75 次消除获胜
+  //   状态机: idle(NORMAL) / moving / falling / nomoves — 动画驱动级联
+  //   (原版: 等所有植物滑到目标格才结算 → RemoveMatches → MakeFall → Populate)
   // ============================================================
   BEG_BASE() { return ['PUFFSHROOM', 'STARFRUIT', 'MAGNETSHROOM', 'SNOWPEA', 'WALLNUT', 'PEASHOOTER']; }
   BEG_COSTS() { return { BEG_REPEATER: 1000, BEG_FUMESHROOM: 500, BEG_TALLNUT: 250, BEG_SHUFFLE: 100, BEG_CRATER: 200 }; }
   begPlantAt(c, r) { return (this.grid[r] && this.grid[r][c] && !this.grid[r][c].dead) ? this.grid[r][c] : null; }
   beghouledLoadState() {
     // 原版 LoadBeghouledBoardState: 棋盘快照 [col][row] → 种子类型
-    const st = Array.from({ length: 8 }, () => new Array(this.rows).fill(null));
+    const st = Array.from({ length: 8 }, () => new Array(5).fill(null));
     for (const p of this.plants) {
-      if (p.dead || p._begRemoved || p.col >= 8) continue;
+      if (p.dead || p._begRemoved || p.col >= 8 || p.row >= 5) continue;
       st[p.col][p.row] = p.type;
     }
     return st;
   }
   beghouledMatchLen(c, r, st, horiz) {
-    // 原版 BeghouledHorizontal/VerticalMatchLength: 起点前一位同型 → 0 (非段首)
+    // 原版 BeghouledHorizontal/VerticalMatchLength: 段首前一位同型 → 0 (非段首)
     const t = st[c] && st[c][r];
     if (!t) return 0;
     if (horiz) {
@@ -1592,427 +1598,50 @@ class Board {
     }
     if (r > 0 && st[c][r - 1] === t) return 0;
     let len = 1;
-    while (r + len < this.rows && st[c][r + len] === t) len++;
+    while (r + len < 5 && st[c][r + len] === t) len++;
     return len;
   }
   beghouledHasMatch(st) {
-    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
+    // 原版 BeghouledBoardHasMatch: 固定 8x5
+    for (let c = 0; c < 8; c++) for (let r = 0; r < 5; r++) {
       if (this.beghouledMatchLen(c, r, st, true) >= 3 || this.beghouledMatchLen(c, r, st, false) >= 3) return true;
     }
     return false;
   }
-  beghouledPickSeed(c, r, st, allowMatches) {
-    // 原版 BeghouledPickSeed: 6 选 1, 已购升级替换后不得成三连 (allowMatches 例外)
-    const picks = [];
-    for (let t of this.BEG_BASE()) {
-      if (t === 'PEASHOOTER' && this.begUpgrades.REPEATER) t = 'REPEATER';
-      else if (t === 'PUFFSHROOM' && this.begUpgrades.FUMESHROOM) t = 'FUMESHROOM';
-      else if (t === 'WALLNUT' && this.begUpgrades.TALLNUT) t = 'TALLNUT';
-      st[c][r] = t;
-      if (allowMatches || !this.beghouledHasMatch(st)) picks.push(t);
-    }
-    st[c][r] = null;
-    return picks.length ? picks[Math.floor(Math.random() * picks.length)] : 'PEASHOOTER';
-  }
-  beghouledMakeStartBoard() {
-    // 原版 BeghouledMakeStartBoard: 填满无三连初始盘
-    const Plant = this._plantClass();
-    const st = Array.from({ length: 8 }, () => new Array(this.rows).fill(null));
-    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
-      if (this.begEated[c][r]) continue;
-      st[c][r] = this.beghouledPickSeed(c, r, st, false);
-    }
-    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
-      if (this.begEated[c][r] || !st[c][r] || this.begPlantAt(c, r)) continue;
-      const p = new Plant(st[c][r], r, c, this);
-      this.plants.push(p);
-      this.grid[r][c] = p;
-    }
-  }
-  beghouledScore(c, r, n, horiz) {
-    // 原版 BeghouledScore 606-673: 计分 + 阳光弹出 + 功能卡解锁 + 75 胜
-    this.begScore++;
-    let suns = n - 2 + this.begMatchesThisMove;
-    if (n >= 5) suns += 2;
-    suns = Math.max(1, Math.min(5, suns));
-    const off = n === 3 ? 80 : n === 4 ? 120 : 160;
-    const px = this.gridX(c) + (horiz ? off : 40);
-    const py = this.cellY(r, c) + (horiz ? 40 : off);
-    for (let i = 0; i < suns; i++) this.addSun(px + 20 * i - 10, py, Math.min(540, py + 36), 'coin');
-    try { this.game.audio.play('points'); } catch (e) { }
-    if (!this.seedCards.length) {
-      // 原版: 首次消除 → 解锁 4 张功能卡 (双发/大喷/高坚果/洗牌)
-      this.seedCards = [
-        { type: 'BEG_REPEATER', cd: 0 }, { type: 'BEG_FUMESHROOM', cd: 0 },
-        { type: 'BEG_TALLNUT', cd: 0 }, { type: 'BEG_SHUFFLE', cd: 0 },
-      ];
-      this.addEffect('text', 400, 300, { hold: 3, txt: '存阳光升级植物! 消除 75 次获胜', c: '#8ae87a', size: 16 });
-    }
-    if (this.begScore >= 75) {
-      this.begScore = 75;
-      this.triggerWin();
-    } else if (this.begScore >= 70) {
-      this.addEffect('text', 400, 200, { hold: 1.5, txt: '就差一点点!', c: '#ffe86a', size: 15 });
-    }
-    this.begMatchesThisMove++;
-  }
-  beghouledRemoveMatches() {
-    // 原版 BeghouledRemoveMatches 675-696: 横向先行 (在快照上连续标记), 纵向基于横清后的盘
-    const st = this.beghouledLoadState();
-    const marked = new Set();
-    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
-      const hl = this.beghouledMatchLen(c, r, st, true);
-      if (hl >= 3) {
-        for (let i = 0; i < hl; i++) st[c + i][r] = null;
-        this.beghouledScore(c, r, hl, true);
-        for (let i = 0; i < hl; i++) marked.add((c + i) + ',' + r);
-      }
-    }
-    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
-      const vl = this.beghouledMatchLen(c, r, st, false);
-      if (vl >= 3) {
-        for (let i = 0; i < vl; i++) st[c][r + i] = null;
-        this.beghouledScore(c, r, vl, false);
-        for (let i = 0; i < vl; i++) marked.add(c + ',' + (r + i));
-      }
-    }
-    for (const key of marked) {
-      const [c, r] = key.split(',').map(Number);
-      const p = this.begPlantAt(c, r);
-      if (p) { p._begRemoved = true; p.dead = true; this.grid[r][c] = null; }
-    }
-    return marked.size;
-  }
-  beghouledMakeFall() {
-    // 原版 BeghouledMakePlantsFall 560-572: 空格上方最近植物下落 (弹坑格不下落不供给)
-    let moved = false;
-    for (let r = this.rows - 1; r >= 0; r--) {
-      for (let c = 0; c < 8; c++) {
-        if (this.begPlantAt(c, r)) continue;
-        for (let rr = r - 1; rr >= 0; rr--) {
-          if (this.begEated[c][rr]) break;   // 弹坑截断供给
-          const p = this.begPlantAt(c, rr);
-          if (p) {
-            this.grid[rr][c] = null;
-            p.row = r;
-            this.grid[r][c] = p;
-            moved = true;
-            break;
-          }
-        }
-      }
-    }
-    return moved;
-  }
-  beghouledPopulate() {
-    // 原版 BeghouledPopulateBoard 831-847: 补满空格 (已有三连时允许 — 级联)
-    const Plant = this._plantClass();
-    const st = this.beghouledLoadState();
-    const allow = this.beghouledHasMatch(st);
-    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
-      if (st[c][r] || this.begEated[c][r]) continue;
-      st[c][r] = this.beghouledPickSeed(c, r, st, allow);
-    }
-    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
-      if (this.begEated[c][r] || this.begPlantAt(c, r) || !st[c][r]) continue;
-      const p = new Plant(st[c][r], r, c, this);
-      p.y = this.cellY(r, c) - 90;    // 从上方掉入
-      this.plants.push(p);
-      this.grid[r][c] = p;
-    }
-  }
-  beghouledShuffle() {
-    // 原版 BeghouledShuffle 3277-3289: 全部移除重摆 (弹坑保留)
-    for (const p of this.plants) {
-      if (!p.dead && !p._begRemoved && p.col < 8) { p._begRemoved = true; p.dead = true; }
-    }
-    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
-      if (!this.begEated[c][r]) this.grid[r][c] = null;
-    }
-    this.beghouledMakeStartBoard();
-    this.addEffect('screen_flash', 0, 0, { hold: 0.4 });
-    try { this.game.audio.play('floop'); } catch (e) { }
-  }
-  begHasAnyMove() {
-    // 原版 BeghouledCheckForPossibleMoves 849-879: 交换/旋转任一可成三连
-    if (this.begTwist) {
-      for (let r = 0; r < this.rows - 1; r++) for (let c = 0; c < 7; c++) {
-        if (!this.begTwistValid(c, r)) continue;
-        this.begTwistRotate(c, r);
-        const ok = this.beghouledHasMatch(this.beghouledLoadState());
-        this.begTwistRotate(c, r); this.begTwistRotate(c, r); this.begTwistRotate(c, r);
-        if (ok) return true;
-      }
-      return false;
-    }
-    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
-      if (this.begIsValidMove(c, r, c + 1, r) || this.begIsValidMove(c, r, c, r + 1)) return true;
-    }
-    return false;
-  }
-  begIsValidMove(c1, r1, c2, r2) {
-    // 原版 BeghouledIsValidMove 419-441: 交换后成三连才有效
-    if (c2 >= 8 || r2 >= this.rows) return false;
+  begStateSwap(st, c1, r1, c2, r2) { const t = st[c1][r1]; st[c1][r1] = st[c2][r2]; st[c2][r2] = t; }
+  begIsValidMoveOnState(c1, r1, c2, r2, st) {
+    // 原版 BeghouledIsValidMove 419-441 (在状态快照上交换后查三连)
+    if (c1 < 0 || c1 > 7 || c2 < 0 || c2 > 7 || r1 < 0 || r1 > 4 || r2 < 0 || r2 > 4) return false;
     if (this.begEated[c1][r1] || this.begEated[c2][r2]) return false;
-    const p1 = this.begPlantAt(c1, r1), p2 = this.begPlantAt(c2, r2);
-    if (!p1 || !p2) return false;
-    const st = this.beghouledLoadState();
-    const t = st[c1][r1]; st[c1][r1] = st[c2][r2]; st[c2][r2] = t;
+    if (st[c1][r1] == null) return false;
+    this.begStateSwap(st, c1, r1, c2, r2);
     const ok = this.beghouledHasMatch(st);
+    this.begStateSwap(st, c1, r1, c2, r2);
     return ok;
   }
-  begTrySwap(c1, r1, c2, r2) {
-    if (this.begState !== 'idle' || !this.begIsValidMove(c1, r1, c2, r2)) {
-      try { this.game.audio.play('floop'); } catch (e) { }
-      return;
-    }
-    const p1 = this.begPlantAt(c1, r1), p2 = this.begPlantAt(c2, r2);
-    this.grid[r1][c1] = p2; this.grid[r2][c2] = p1;
-    if (p2) { p2.col = c1; p2.row = r1; }
-    if (p1) { p1.col = c2; p1.row = r2; }
-    this.begState = 'flash'; this.begStateT = 25;
-    try { this.game.audio.play('seedlift'); } catch (e) { }
+  begTwistCausesMatchOnState(c, r, st) {
+    // 原版 BeghouledTwistMoveCausesMatch 331-359 (试转 2x2 后查三连, 不提交)
+    if (r < 0 || c < 0 || c > 6 || r > 3) return false;
+    if (st[c][r] == null || st[c + 1][r] == null || st[c][r + 1] == null || st[c + 1][r + 1] == null) return false;
+    const a1 = st[c][r], a2 = st[c + 1][r], a3 = st[c][r + 1], a4 = st[c + 1][r + 1];
+    st[c + 1][r] = a1; st[c + 1][r + 1] = a2; st[c][r + 1] = a4; st[c][r] = a3;
+    const ok = this.beghouledHasMatch(st);
+    st[c][r] = a1; st[c + 1][r] = a2; st[c][r + 1] = a3; st[c + 1][r + 1] = a4;
+    return ok;
   }
-  begTwistValid(c, r) {
-    return c >= 0 && c <= 6 && r >= 0 && r <= this.rows - 2 &&
-      !this.begEated[c][r] && !this.begEated[c + 1][r] && !this.begEated[c][r + 1] && !this.begEated[c + 1][r + 1] &&
-      this.begPlantAt(c, r) && this.begPlantAt(c + 1, r) && this.begPlantAt(c, r + 1) && this.begPlantAt(c + 1, r + 1);
-  }
-  begTwistRotate(c, r) {
-    // 原版 BeghouledTwistMouseDown 346-349: 顺时针 a1→右 a2→右下 a4→左下(上) a3→左
-    const a1 = this.grid[r][c], a2 = this.grid[r][c + 1], a3 = this.grid[r + 1][c], a4 = this.grid[r + 1][c + 1];
-    this.grid[r][c] = a3; this.grid[r][c + 1] = a1; this.grid[r + 1][c] = a4; this.grid[r + 1][c + 1] = a2;
-    if (a3) { a3.row = r; a3.col = c; }
-    if (a1) { a1.row = r; a1.col = c + 1; }
-    if (a4) { a4.row = r + 1; a4.col = c; }
-    if (a2) { a2.row = r + 1; a2.col = c + 1; }
-  }
-  begTryTwist(c, r) {
-    if (this.begState !== 'idle' || !this.begTwistValid(c, r)) {
-      try { this.game.audio.play('floop'); } catch (e) { }
-      return;
-    }
-    this.begTwistRotate(c, r);
-    if (!this.beghouledHasMatch(this.beghouledLoadState())) {
-      this.begTwistRotate(c, r); this.begTwistRotate(c, r); this.begTwistRotate(c, r);   // 转回
-      try { this.game.audio.play('floop'); } catch (e) { }
-      return;
-    }
-    this.begState = 'flash'; this.begStateT = 25;
-    try { this.game.audio.play('seedlift'); } catch (e) { }
-  }
-  begCardClick(i, game) {
-    // 原版 BeghouledPacketClicked 3235-3275: 升级一次性购买 / 洗牌 / 清坑
-    const card = this.seedCards[i];
-    if (!card) return;
-    const cost = this.BEG_COSTS()[card.type];
-    if (this.sun < cost) { game.audio.play('buzzer'); return; }
-    const Plant = this._plantClass();
-    const swapAll = (from, to) => {
-      for (const p of this.plants) {
-        if (p.dead || p.type !== from || p.col >= 8) continue;
-        const np = new Plant(to, p.row, p.col, this);
-        p._begRemoved = true; p.dead = true;
-        this.plants.push(np);
-        this.grid[p.row][p.col] = np;
-      }
-    };
-    if (card.type === 'BEG_REPEATER') {
-      if (this.begUpgrades.REPEATER) return;
-      this.begUpgrades.REPEATER = true;
-      swapAll('PEASHOOTER', 'REPEATER');
-      card.used = true;
-    } else if (card.type === 'BEG_FUMESHROOM') {
-      if (this.begUpgrades.FUMESHROOM) return;
-      this.begUpgrades.FUMESHROOM = true;
-      swapAll('PUFFSHROOM', 'FUMESHROOM');
-      card.used = true;
-    } else if (card.type === 'BEG_TALLNUT') {
-      if (this.begUpgrades.TALLNUT) return;
-      this.begUpgrades.TALLNUT = true;
-      swapAll('WALLNUT', 'TALLNUT');
-      card.used = true;
-    } else if (card.type === 'BEG_SHUFFLE') {
-      this.beghouledShuffle();
-      this.begState = 'flash'; this.begStateT = 25;
-    } else if (card.type === 'BEG_CRATER') {
-      // 原版 BeghouledClearCrater: 从左上扫清 1 坑 + 补格
-      let cleared = false;
-      for (let cc = 0; cc < 8 && !cleared; cc++) for (let rr = 0; rr < this.rows && !cleared; rr++) {
-        if (this.begEated[cc][rr]) { this.begEated[cc][rr] = false; cleared = true; }
-      }
-      if (cleared) this.beghouledPopulate();
-    }
-    this.sun -= cost;
-    game.audio.play('points');
-  }
-  begUpdate(dt) {
-    // 原版 UpdateBeghouled 1296-1376: flash→fall→populate 级联 + 无操作提示/卡死洗牌
-    const tk = Math.max(1, Math.round(dt * 100));
-    this.begStateT -= tk;
-    if (this.begState === 'flash' && this.begStateT <= 0) {
-      this.beghouledRemoveMatches();
-      const moved = this.beghouledMakeFall();
-      this.begState = 'fall'; this.begStateT = 28;
-      void moved;
-    } else if (this.begState === 'fall' && this.begStateT <= 0) {
-      this.begState = 'populate'; this.begStateT = 12;
-    } else if (this.begState === 'populate' && this.begStateT <= 0) {
-      this.beghouledPopulate();
-      if (this.beghouledHasMatch(this.beghouledLoadState())) {
-        this.begState = 'flash'; this.begStateT = 25;   // 级联
+  begCheckPossibleMovesOnState(st) {
+    // 原版 BeghouledCheckForPossibleMoves 849-879
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 8; c++) {
+      if (this.begTwist) {
+        if (this.begTwistCausesMatchOnState(c, r, st)) return true;
       } else {
-        this.begMatchesThisMove = 0;
-        this.begState = 'idle'; this.begStateT = 1500;
-        this._begHinted = false;
-        if (!this.begHasAnyMove()) { this.beghouledShuffle(); this.begState = 'flash'; this.begStateT = 25; }
+        if (this.begIsValidMoveOnState(c, r, c + 1, r, st) || this.begIsValidMoveOnState(c, r, c, r + 1, st)) return true;
       }
-    } else if (this.begState === 'idle' && this.begStateT <= 0) {
-      // 原版: 1500tick 无操作 → 闪可行步; 再 1500 → 洗牌
-      if (this._begHinted) {
-        this.beghouledShuffle();
-        this.begState = 'flash'; this.begStateT = 25;
-        this._begHinted = false;
-      } else {
-        this._begHinted = true;
-        this.begStateT = 1500;
-      }
-    }
-    // 僵尸哦死植物 → 弹坑 (原版 ZombieAtePlant 1869-1886; 解锁清坑卡)
-    for (const p of this.plants) {
-      if (!p.dead || p._begRemoved || p._begEatenMarked || p.col >= 8) continue;
-      p._begEatenMarked = true;
-      this.begEated[p.col][p.row] = true;
-      if (this.seedCards.length === 4) {
-        this.seedCards.push({ type: 'BEG_CRATER', cd: 0 });
-        this.addEffect('text', 400, 300, { hold: 2.5, txt: '僵尸吃出了弹坑! 花 200 阳光清理', c: '#8ad8ff', size: 15 });
-      }
-    }
-  }
-
-  // ============================================================
-  // 僵尸水族馆 (原版 Zombiquarium — Challenge.cpp 3307-3443 + Zombie.cpp 3079-3260)
-  // ============================================================
-  aqSpawnSnorkle() {
-    // 原版 ZombiquariumSpawnSnorkle: 随机位置 (50-650, 100-400)
-    const z = this.addZombie('SNORKEL', 0);
-    if (!z) return null;
-    z.posX = 50 + Math.random() * 600;
-    z.posY = 100 + Math.random() * 300;
-    z.x = Math.floor(z.posX); z.y = Math.floor(z.posY);
-    return z;
-  }
-
-  modeClickBeghouled(game, p) {
-    // 功能卡银行 (y<87)
-    if (p.y < 87) {
-      for (let i = 0; i < this.seedCards.length; i++) {
-        const x = game.packetX(i, this.seedCards.length);
-        if (p.x > x && p.x < x + 50 && p.y > 7) {
-          this.begCardClick(i, game);
-          return true;
-        }
-      }
-      return false;   // 阳光收集交给通用逻辑
-    }
-    const cell = game.pixelToCell(p.x, p.y);
-    if (!cell) return false;
-    const [c, r] = cell;
-    if (c >= 8) return false;
-    if (this.begTwist) {
-      this.begTryTwist(Math.min(c, 6), Math.min(r, this.rows - 2));
-      return true;
-    }
-    // 交换: 点击选中 + 点击相邻目标 (web 近似原版拖拽)
-    if (this.begSel) {
-      const [c0, r0] = this.begSel;
-      this.begSel = null;
-      if (Math.abs(c - c0) + Math.abs(r - r0) === 1) this.begTrySwap(c0, r0, c, r);
-      else if (!this.begEated[c][r] && this.begPlantAt(c, r)) this.begSel = [c, r];
-    } else {
-      if (!this.begEated[c][r] && this.begPlantAt(c, r)) this.begSel = [c, r];
-    }
-    return true;
-  }
-  modeClickZombiquarium(game, p) {
-    // 2 卡银行: 潜水僵尸 $100 / 奖杯 $1000 (原版 GetCost)
-    if (p.y < 87) {
-      for (let i = 0; i < 2; i++) {
-        const x = game.packetX(i, 2);
-        if (p.x > x && p.x < x + 50 && p.y > 7 && p.y < 77) {
-          const cost = i === 0 ? 100 : 1000;
-          if (this.sun < cost) { game.audio.play('buzzer'); return true; }
-          if (i === 0) {
-            if (this.zombies.filter(z => !z.dead).length > 20) return true;
-            this.sun -= cost;
-            this.aqSpawnSnorkle();
-            try { game.audio.play('zombiesplash'); } catch (e) { }
-            this.addEffect('dust', p.x, 200);
-          } else {
-            this.sun -= cost;
-            this.addEffect('text', 400, 280, { hold: 2.5, txt: '恭喜获得奖杯!', c: '#ffe86a', size: 24 });
-            this.triggerWin();
-          }
-          return true;
-        }
-      }
-      return false;
-    }
-    // 喂脑子 (原版 ZombiquariumMouseDown 3360-3379: 水域 80-720/90-430, 脑<3, 5 阳光)
-    if (p.x >= 80 && p.x <= 720 && p.y >= 90 && p.y <= 430) {
-      const nBrains = this.brains.filter(br => !br.taken).length;
-      if (nBrains < 3 && this.sun >= 5) {
-        this.sun -= 5;
-        this.brains.push({ x: p.x - 15, y: p.y - 15, t: 0, taken: false });
-        try { game.audio.play('seedlift'); } catch (e) { }
-      } else if (this.sun < 5) {
-        this.addEffect('text', p.x, p.y - 10, { hold: 1.2, txt: '需要 5 阳光!', c: '#ffd76a', size: 14 });
-      }
-      return true;
-    }
-    return false;
-  }
-
-  // ============================================================
-  // 消消乐 (原版 Beghouled — Challenge.cpp 107-879/1296-1376)
-  //   棋盘 8列×全行; 六种棋子: 小喷菇/杨桃/磁力菇/雪花豌豆/坚果/豌豆
-  //   交换(点选两格)/旋转 成三连 → 消除计分 + 掉阳光; 75 次消除获胜
-  // ============================================================
-  BEG_BASE() { return ['PUFFSHROOM', 'STARFRUIT', 'MAGNETSHROOM', 'SNOWPEA', 'WALLNUT', 'PEASHOOTER']; }
-  BEG_COSTS() { return { BEG_REPEATER: 1000, BEG_FUMESHROOM: 500, BEG_TALLNUT: 250, BEG_SHUFFLE: 100, BEG_CRATER: 200 }; }
-  begPlantAt(c, r) { return (this.grid[r] && this.grid[r][c] && !this.grid[r][c].dead) ? this.grid[r][c] : null; }
-  beghouledLoadState() {
-    // 原版 LoadBeghouledBoardState: 棋盘快照 [col][row] → 种子类型
-    const st = Array.from({ length: 8 }, () => new Array(this.rows).fill(null));
-    for (const p of this.plants) {
-      if (p.dead || p._begRemoved || p.col >= 8) continue;
-      st[p.col][p.row] = p.type;
-    }
-    return st;
-  }
-  beghouledMatchLen(c, r, st, horiz) {
-    // 原版 BeghouledHorizontal/VerticalMatchLength: 段首前一位同型 → 0
-    const t = st[c] && st[c][r];
-    if (!t) return 0;
-    if (horiz) {
-      if (c > 0 && st[c - 1][r] === t) return 0;
-      let len = 1;
-      while (c + len < 8 && st[c + len][r] === t) len++;
-      return len;
-    }
-    if (r > 0 && st[c][r - 1] === t) return 0;
-    let len = 1;
-    while (r + len < this.rows && st[c][r + len] === t) len++;
-    return len;
-  }
-  beghouledHasMatch(st) {
-    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
-      if (this.beghouledMatchLen(c, r, st, true) >= 3 || this.beghouledMatchLen(c, r, st, false) >= 3) return true;
     }
     return false;
   }
   beghouledPickSeed(c, r, st, allowMatches) {
-    // 原版 BeghouledPickSeed: 6 选 1, 已购升级替换, 默认不成三连
+    // 原版 BeghouledPickSeed 740-789: 6 选 1, 已购升级替换, 默认不成三连
     const picks = [];
     for (let t of this.BEG_BASE()) {
       if (t === 'PEASHOOTER' && this.begUpgrades.REPEATER) t = 'REPEATER';
@@ -2024,171 +1653,227 @@ class Board {
     st[c][r] = null;
     return picks.length ? picks[Math.floor(Math.random() * picks.length)] : 'PEASHOOTER';
   }
-  beghouledMakeStartBoard() {
-    // 原版 BeghouledMakeStartBoard: 填满无三连初始盘 (弹坑格保留)
+  beghouledFillHoles(st, allowMatches) {
+    // 原版 BeghouledFillHoles 791-805: 列优先 (aCol 外层, aRow 内层)
+    for (let c = 0; c < 8; c++) for (let r = 0; r < 5; r++) {
+      if (st[c][r] == null && !this.begEated[c][r]) {
+        st[c][r] = this.beghouledPickSeed(c, r, st, allowMatches);
+      }
+    }
+  }
+  beghouledCreatePlants(old, st) {
+    // 原版 BeghouledCreatePlants 807-829: 每列自底向上, 新植物 mY 依次 -20/-120/-220
     const Plant = this._plantClass();
-    const st = Array.from({ length: 8 }, () => new Array(this.rows).fill(null));
-    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
-      if (this.begEated[c][r]) continue;
-      st[c][r] = this.beghouledPickSeed(c, r, st, false);
+    let created = false;
+    for (let c = 0; c < 8; c++) {
+      let fallY = 80;
+      for (let r = 4; r >= 0; r--) {
+        if (old[c][r] == null && st[c][r] != null) {
+          fallY -= 100;
+          const p = new Plant(st[c][r], r, c, this);
+          p.y = fallY;
+          this.plants.push(p);
+          this.grid[r][c] = p;
+          created = true;
+        }
+      }
     }
-    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
-      if (this.begEated[c][r] || !st[c][r] || this.begPlantAt(c, r)) continue;
-      const p = new Plant(st[c][r], r, c, this);
-      this.plants.push(p);
-      this.grid[r][c] = p;
+    if (created) this.begStartFalling('falling');
+  }
+  beghouledMakeStartBoard() {
+    // 原版 BeghouledMakeStartBoard 831-847: 空盘补满无三连 (含弹坑保留)
+    const empty = this.beghouledLoadState();
+    const st = this.beghouledLoadState();
+    this.beghouledFillHoles(st, false);
+    if (!this.beghouledHasMatch(st)) this.beghouledCreatePlants(empty, st);
+  }
+  beghouledPopulate() {
+    // 原版 BeghouledPopulateBoard 831-847*: 补满 + 无可行步重摇 1 次 + 落入动画
+    const old = this.beghouledLoadState();
+    const allow = this.beghouledHasMatch(old);
+    let st = null;
+    for (let i = 0; i < 2; i++) {
+      st = this.beghouledLoadState();
+      this.beghouledFillHoles(st, allow);
+      if (this.begCheckPossibleMovesOnState(st)) break;
     }
+    this.beghouledCreatePlants(old, st);
+  }
+  begStartFalling(state) {
+    // 原版 BeghouledStartFalling: 置状态 + counter=100
+    this.begState = state;
+    this.begStateT = 100;
+    this._begHinted = false;
   }
   beghouledScore(c, r, n, horiz) {
     // 原版 BeghouledScore 606-673: 计分 + 阳光弹出 + 功能卡解锁 + 75 胜
     this.begScore++;
-    let suns = n - 2 + this.begMatchesThisMove;
-    if (n >= 5) suns += 2;
-    suns = Math.max(1, Math.min(5, suns));
-    const off = n === 3 ? 80 : n === 4 ? 120 : 160;
-    const px = this.gridX(c) + (horiz ? off : 40);
-    const py = this.cellY(r, c) + (horiz ? 40 : off);
-    for (let i = 0; i < suns; i++) this.addSun(px + 20 * i - 10, py, Math.min(540, py + 36), 'coin');
-    try { this.game.audio.play('points'); } catch (e) { }
     if (!this.seedCards.length) {
       // 原版: 首次消除 → 解锁 4 张功能卡 (双发1000/大喷500/高坚果250/洗牌100)
       this.seedCards = [
         { type: 'BEG_REPEATER', cd: 0 }, { type: 'BEG_FUMESHROOM', cd: 0 },
         { type: 'BEG_TALLNUT', cd: 0 }, { type: 'BEG_SHUFFLE', cd: 0 },
       ];
+      if (this.begEated.flat().some(e => e)) this.seedCards.push({ type: 'BEG_CRATER', cd: 0 });
       this.addEffect('text', 400, 300, { hold: 3, txt: '存阳光升级植物! 消除 75 次获胜', c: '#8ae87a', size: 16 });
+    } else if (this.begScore < 75) {
+      this.addEffect('text', 400, 120, { hold: 1.2, txt: '再消除 ' + (75 - this.begScore) + ' 次获胜', c: '#cfe8ff', size: 14 });
     }
     if (this.begScore >= 75) {
       this.begScore = 75;
+      // 原版 SpawnLevelAward: 奖杯 + 全屏闪 + 全场僵尸 1800 伤
+      this.addEffect('screen_flash', 0, 0, { hold: 0.4 });
+      for (const z of this.zombies) { if (!z.dead && !z.isDeadOrDying) z.takeDamage(1800, 8); }
       this.triggerWin();
-    } else if (this.begScore >= 70) {
+      return;
+    }
+    if (this.begScore >= 70) {
       this.addEffect('text', 400, 200, { hold: 1.5, txt: '就差一点点!', c: '#ffe86a', size: 15 });
     }
+    let suns = n - 2 + this.begMatchesThisMove;
+    if (n >= 5) suns += 2;
+    suns = Math.max(1, Math.min(5, suns));
+    const off = n === 3 ? 80 : n === 4 ? 120 : 160;
+    const px = this.gridX(c) + (horiz ? off : 40);
+    const py = this.cellY(r, c) + (horiz ? 40 : off);
+    for (let i = 0; i < suns; i++) this.addSun(px + 20 * i - 10, py, Math.min(540, py + 36), 'coin');
+    try { this.game.audio.play('points'); } catch (e) { }
     this.begMatchesThisMove++;
   }
   beghouledRemoveMatches() {
-    // 原版 BeghouledRemoveMatches 675-696: 横向先行 (快照连续标记), 纵向基于横清后盘面
+    // 原版 BeghouledRemoveMatches 675-698: 行主序逐格, 横竖同格双查, 快照全程不变
+    //   (十字/T/L 形横竖各计一次分; 植物经 kill 集合只死一次)
     const st = this.beghouledLoadState();
-    const marked = new Set();
-    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
+    const kill = new Set();
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 8; c++) {
       const hl = this.beghouledMatchLen(c, r, st, true);
       if (hl >= 3) {
-        for (let i = 0; i < hl; i++) st[c + i][r] = null;
+        for (let i = 0; i < hl; i++) kill.add((c + i) + ',' + r);
         this.beghouledScore(c, r, hl, true);
-        for (let i = 0; i < hl; i++) marked.add((c + i) + ',' + r);
       }
-    }
-    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
       const vl = this.beghouledMatchLen(c, r, st, false);
       if (vl >= 3) {
-        for (let i = 0; i < vl; i++) st[c][r + i] = null;
+        for (let i = 0; i < vl; i++) kill.add(c + ',' + (r + i));
         this.beghouledScore(c, r, vl, false);
-        for (let i = 0; i < vl; i++) marked.add(c + ',' + (r + i));
       }
     }
-    for (const key of marked) {
+    for (const key of kill) {
       const [c, r] = key.split(',').map(Number);
       const p = this.begPlantAt(c, r);
       if (p) { p._begRemoved = true; p.dead = true; this.grid[r][c] = null; }
     }
-    return marked.size;
   }
   beghouledMakeFall() {
-    // 原版 BeghouledMakePlantsFall 560-572: 空格上方最近植物下落 (弹坑截断供给)
-    let moved = false;
-    for (let r = this.rows - 1; r >= 0; r--) {
+    // 原版 BeghouledMakePlantsFall 560-596: 自底向上逐空格, 上方最近植物落入
+    //   (弹坑目标格不落入; 但供给扫描可穿过弹坑 — 原版扫描无 eated 检查)
+    for (let r = 4; r >= 0; r--) {
       for (let c = 0; c < 8; c++) {
-        if (this.begPlantAt(c, r)) continue;
+        if (this.begEated[c][r] || this.begPlantAt(c, r)) continue;
         for (let rr = r - 1; rr >= 0; rr--) {
-          if (this.begEated[c][rr]) break;
           const p = this.begPlantAt(c, rr);
           if (p) {
             this.grid[rr][c] = null;
             p.row = r;
             this.grid[r][c] = p;
-            moved = true;
+            this.begStartFalling('falling');
             break;
           }
         }
       }
     }
-    return moved;
-  }
-  beghouledPopulate() {
-    // 原版 BeghouledPopulateBoard 831-847: 补满空格 (盘面已有三连时允许 — 级联)
-    const Plant = this._plantClass();
-    const st = this.beghouledLoadState();
-    const allow = this.beghouledHasMatch(st);
-    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
-      if (st[c][r] || this.begEated[c][r]) continue;
-      st[c][r] = this.beghouledPickSeed(c, r, st, allow);
-    }
-    for (let c = 0; c < 8; c++) for (let r = 0; r < this.rows; r++) {
-      if (this.begEated[c][r] || this.begPlantAt(c, r) || !st[c][r]) continue;
-      const p = new Plant(st[c][r], r, c, this);
-      p.y = this.cellY(r, c) - 90;    // 从上方掉入
-      this.plants.push(p);
-      this.grid[r][c] = p;
-    }
   }
   beghouledShuffle() {
-    // 原版 BeghouledShuffle 3277-3289: 全部移除重摆 (弹坑保留)
+    // 原版 BeghouledShuffle 3277-3290: 全部植物死亡 + 进入 falling — 级联结算时自动重摆
     for (const p of this.plants) {
-      if (!p.dead && !p._begRemoved && p.col < 8) { p._begRemoved = true; p.dead = true; }
+      if (!p.dead && p.col < 8) { p._begRemoved = true; p.dead = true; }
     }
-    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
-      if (!this.begEated[c][r]) this.grid[r][c] = null;
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 8; c++) {
+      if (this.grid[r][c] && this.grid[r][c].dead) this.grid[r][c] = null;
     }
-    this.beghouledMakeStartBoard();
-    this.addEffect('screen_flash', 0, 0, { hold: 0.4 });
-    try { this.game.audio.play('floop'); } catch (e) { }
+    this.begStartFalling('falling');
   }
-  begHasAnyMove() {
-    // 原版 BeghouledCheckForPossibleMoves 849-879
+  begFlashPlant(c, r, fc, fr, tc, tr) {
+    // 原版 BeghouledFlashPlant 1168-1189: 提示闪烁的是交换配对格 (300tick)
+    if (c === fc && r === fr) { c = tc; r = tr; }
+    else if (c === tc && r === tr) { c = fc; r = fr; }
+    const p = this.begPlantAt(c, r);
+    if (p && !p.begFlash) p.begFlash = 300;
+  }
+  begFlashAMatch() {
+    // 原版 BeghouledFlashAMatch 1264-1293: 闪第一个可行步 (交换/旋转)
+    const st = this.beghouledLoadState();
     if (this.begTwist) {
-      for (let r = 0; r < this.rows - 1; r++) for (let c = 0; c < 7; c++) {
-        if (!this.begTwistValid(c, r)) continue;
-        this.begTwistRotate(c, r);
-        const ok = this.beghouledHasMatch(this.beghouledLoadState());
-        this.begTwistRotate(c, r); this.begTwistRotate(c, r); this.begTwistRotate(c, r);
-        if (ok) return true;
+      for (let r = 0; r < 4; r++) for (let c = 0; c < 7; c++) {
+        if (!this.begTwistCausesMatchOnState(c, r, st)) continue;
+        for (let i = 0; i < 4; i++) {
+          const p = this.begPlantAt(c + (i % 2), r + Math.floor(i / 2));
+          if (p && !p.begFlash) p.begFlash = 300;
+        }
+        return;
       }
-      return false;
+      return;
     }
-    for (let r = 0; r < this.rows; r++) for (let c = 0; c < 8; c++) {
-      if (this.begIsValidMove(c, r, c + 1, r) || this.begIsValidMove(c, r, c, r + 1)) return true;
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 8; c++) {
+      const dirs = [];
+      if (c < 7) dirs.push([c + 1, r]);
+      if (r < 4) dirs.push([c, r + 1]);
+      for (const [tc, tr] of dirs) {
+        if (this.begEated[c][r] || this.begEated[tc][tr]) continue;
+        const a = st[c][r], b = st[tc][tr];
+        if (a == null) continue;
+        this.begStateSwap(st, c, r, tc, tr);
+        let found = false;
+        for (let rr = 0; rr < 5 && !found; rr++) for (let cc = 0; cc < 8 && !found; cc++) {
+          const hl = this.beghouledMatchLen(cc, rr, st, true);
+          if (hl >= 3) { for (let i = 0; i < 3; i++) this.begFlashPlant(cc + i, rr, c, r, tc, tr); found = true; }
+          else {
+            const vl = this.beghouledMatchLen(cc, rr, st, false);
+            if (vl >= 3) { for (let i = 0; i < 3; i++) this.begFlashPlant(cc, rr + i, c, r, tc, tr); found = true; }
+          }
+        }
+        this.begStateSwap(st, c, r, tc, tr);
+        if (found) return;
+      }
     }
-    return false;
+  }
+  begCheckStuck() {
+    // 原版 BeghouledCheckStuckState 1854-1866: 无可行步 → nomoves + 500tick + 提示
+    if (this.begState !== 'idle') return;
+    if (!this.begCheckPossibleMovesOnState(this.beghouledLoadState())) {
+      this.begState = 'nomoves';
+      this.begStateT = 500;
+      this.addEffect('text', 400, 200, { hold: 3, txt: '没有可消除的组合了, 即将洗牌…', c: '#ff9a6a', size: 16 });
+    }
   }
   begIsValidMove(c1, r1, c2, r2) {
-    // 原版 BeghouledIsValidMove 419-441: 交换后成三连才有效
-    if (c2 >= 8 || r2 >= this.rows) return false;
-    if (this.begEated[c1][r1] || this.begEated[c2][r2]) return false;
-    const p1 = this.begPlantAt(c1, r1), p2 = this.begPlantAt(c2, r2);
-    if (!p1 || !p2) return false;
-    const st = this.beghouledLoadState();
-    const t = st[c1][r1]; st[c1][r1] = st[c2][r2]; st[c2][r2] = t;
-    return this.beghouledHasMatch(st);
+    return this.begIsValidMoveOnState(c1, r1, c2, r2, this.beghouledLoadState());
   }
   begTrySwap(c1, r1, c2, r2) {
-    if (this.begState !== 'idle' || !this.begIsValidMove(c1, r1, c2, r2)) {
+    // 原版 BeghouledDragUpdate 443-498: 有效 → 交换 + MOVING; 无效 → 抖动 + floop
+    const p1 = this.begPlantAt(c1, r1), p2 = this.begPlantAt(c2, r2);
+    if (!this.begIsValidMove(c1, r1, c2, r2)) {
+      if (p1) {
+        if (c2 > c1) p1.x += 30;
+        else if (c2 < c1) p1.x -= 30;
+        else if (r2 > r1) p1.y += 30;
+        else if (r2 < r1) p1.y -= 30;
+      }
       try { this.game.audio.play('floop'); } catch (e) { }
       return;
     }
-    const p1 = this.begPlantAt(c1, r1), p2 = this.begPlantAt(c2, r2);
     this.grid[r1][c1] = p2; this.grid[r2][c2] = p1;
     if (p2) { p2.col = c1; p2.row = r1; }
     if (p1) { p1.col = c2; p1.row = r2; }
-    this.begState = 'flash'; this.begStateT = 25;
+    this.begState = 'moving'; this.begStateT = 100;
     try { this.game.audio.play('seedlift'); } catch (e) { }
   }
   begTwistValid(c, r) {
-    return c >= 0 && c <= 6 && r >= 0 && r <= this.rows - 2 &&
+    return c >= 0 && c <= 6 && r >= 0 && r <= 3 &&
       !this.begEated[c][r] && !this.begEated[c + 1][r] && !this.begEated[c][r + 1] && !this.begEated[c + 1][r + 1] &&
       this.begPlantAt(c, r) && this.begPlantAt(c + 1, r) && this.begPlantAt(c, r + 1) && this.begPlantAt(c + 1, r + 1);
   }
   begTwistRotate(c, r) {
-    // 原版 BeghouledTwistMouseDown 346-349: 顺时针 左上→右上→右下→左下
+    // 原版 BeghouledTwistMouseDown 397-407: 顺时针 左上→右上→右下→左下→左上
     const a1 = this.grid[r][c], a2 = this.grid[r][c + 1], a3 = this.grid[r + 1][c], a4 = this.grid[r + 1][c + 1];
     this.grid[r][c] = a3; this.grid[r][c + 1] = a1; this.grid[r + 1][c] = a4; this.grid[r + 1][c + 1] = a2;
     if (a3) { a3.row = r; a3.col = c; }
@@ -2197,27 +1882,48 @@ class Board {
     if (a2) { a2.row = r + 1; a2.col = c + 1; }
   }
   begTryTwist(c, r) {
-    if (this.begState !== 'idle' || !this.begTwistValid(c, r)) {
+    // 原版 BeghouledTwistMouseDown 381-412: 有效 → 旋转 + MOVING; 无效 → 四格抖动 + floop
+    if (!this.begTwistValid(c, r)) return;
+    const st = this.beghouledLoadState();
+    if (!this.begTwistCausesMatchOnState(c, r, st)) {
+      const p1 = this.begPlantAt(c, r), p2 = this.begPlantAt(c + 1, r), p3 = this.begPlantAt(c, r + 1), p4 = this.begPlantAt(c + 1, r + 1);
+      if (p1) p1.x += 20;
+      if (p2) p2.y += 20;
+      if (p3) p3.y -= 20;
+      if (p4) p4.x -= 20;
       try { this.game.audio.play('floop'); } catch (e) { }
       return;
     }
     this.begTwistRotate(c, r);
-    if (!this.beghouledHasMatch(this.beghouledLoadState())) {
-      this.begTwistRotate(c, r); this.begTwistRotate(c, r); this.begTwistRotate(c, r);   // 转回
-      try { this.game.audio.play('floop'); } catch (e) { }
-      return;
-    }
-    this.begState = 'flash'; this.begStateT = 25;
+    this.begState = 'moving'; this.begStateT = 100;
     try { this.game.audio.play('seedlift'); } catch (e) { }
   }
   begCardClick(i, game) {
-    // 原版 BeghouledPacketClicked 3235-3275: 升级一次性购买 / 洗牌 / 清坑
+    // 原版 BeghouledPacketClicked 3235-3275: 洗牌/清坑须 idle; 升级随时可买
     const card = this.seedCards[i];
-    if (!card) return;
+    if (!card || card.used) return;
     const cost = this.BEG_COSTS()[card.type];
     if (this.sun < cost) { game.audio.play('buzzer'); return; }
-    const Plant = this._plantClass();
-    const swapAll = (from, to) => {
+    const busy = this.begState === 'falling' || this.begState === 'moving';
+    if (card.type === 'BEG_SHUFFLE') {
+      if (busy) return;
+      this.beghouledShuffle();
+    } else if (card.type === 'BEG_CRATER') {
+      if (busy) return;
+      // 原版 BeghouledClearCrater 584-604: 从左上扫清 1 坑; 清后补格 (进入 falling 由级联补)
+      let cleared = false;
+      for (let cc = 0; cc < 8 && !cleared; cc++) for (let rr = 0; rr < 5 && !cleared; rr++) {
+        if (this.begEated[cc][rr]) { this.begEated[cc][rr] = false; cleared = true; }
+      }
+      if (!cleared) return;
+      this.begStartFalling('falling');
+    } else {
+      // 升级卡 (一次性): 全场对应植物原位替换 (原版 Die + AddPlant, 无落动画)
+      const MAP = { BEG_REPEATER: ['PEASHOOTER', 'REPEATER'], BEG_FUMESHROOM: ['PUFFSHROOM', 'FUMESHROOM'], BEG_TALLNUT: ['WALLNUT', 'TALLNUT'] };
+      const [from, to] = MAP[card.type];
+      if (this.begUpgrades[to]) return;
+      this.begUpgrades[to] = true;
+      const Plant = this._plantClass();
       for (const p of this.plants) {
         if (p.dead || p.type !== from || p.col >= 8) continue;
         const np = new Plant(to, p.row, p.col, this);
@@ -2225,68 +1931,57 @@ class Board {
         this.plants.push(np);
         this.grid[p.row][p.col] = np;
       }
-    };
-    if (card.type === 'BEG_REPEATER') {
-      if (this.begUpgrades.REPEATER) return;
-      this.begUpgrades.REPEATER = true;
-      swapAll('PEASHOOTER', 'REPEATER');
       card.used = true;
-    } else if (card.type === 'BEG_FUMESHROOM') {
-      if (this.begUpgrades.FUMESHROOM) return;
-      this.begUpgrades.FUMESHROOM = true;
-      swapAll('PUFFSHROOM', 'FUMESHROOM');
-      card.used = true;
-    } else if (card.type === 'BEG_TALLNUT') {
-      if (this.begUpgrades.TALLNUT) return;
-      this.begUpgrades.TALLNUT = true;
-      swapAll('WALLNUT', 'TALLNUT');
-      card.used = true;
-    } else if (card.type === 'BEG_SHUFFLE') {
-      this.beghouledShuffle();
-      this.begState = 'flash'; this.begStateT = 25;
-    } else if (card.type === 'BEG_CRATER') {
-      // 原版 BeghouledClearCrater 584-604: 从左上扫清 1 坑 + 补格
-      let cleared = false;
-      for (let cc = 0; cc < 8 && !cleared; cc++) for (let rr = 0; rr < this.rows && !cleared; rr++) {
-        if (this.begEated[cc][rr]) { this.begEated[cc][rr] = false; cleared = true; }
-      }
-      if (cleared) this.beghouledPopulate();
     }
     this.sun -= cost;
     game.audio.play('points');
   }
   begUpdate(dt) {
-    // 原版 UpdateBeghouled 1296-1376: flash→fall→populate 级联 + 无操作提示/卡死洗牌
+    // 原版 UpdateBeghouled 1296-1376: 动画驱动级联 + 空闲提示/卡死洗牌
     const tk = Math.max(1, Math.round(dt * 100));
-    this.begStateT -= tk;
-    if (this.begState === 'flash' && this.begStateT <= 0) {
+    // 1. 植物滑向目标格 (原版 UpdateBeghouledPlant 1133-1166)
+    //    moving=3px/tick; falling=PvzpAnimateCurve(90,30,counter,1,20,EASE_IN) 由慢到快
+    let moving = false;
+    for (const p of this.plants) {
+      if (p.dead) continue;
+      if (p.begFlash > 0) p.begFlash = Math.max(0, p.begFlash - tk);
+      const tx = this.gridX(p.col), ty = this.cellY(p.row, p.col);
+      if (Math.abs(p.x - tx) <= 0.5 && Math.abs(p.y - ty) <= 0.5) { p.x = tx; p.y = ty; continue; }
+      let spd;
+      if (this.begState === 'moving') spd = 3;
+      else {
+        const x = Math.max(0, Math.min(1, (90 - Math.max(0, this.begStateT)) / 60));
+        spd = 1 + 19 * x * x;
+      }
+      const step = spd * tk;
+      if (Math.abs(tx - p.x) <= step) p.x = tx; else { p.x += Math.sign(tx - p.x) * step; moving = true; }
+      if (Math.abs(ty - p.y) <= step) p.y = ty; else { p.y += Math.sign(ty - p.y) * step; moving = true; }
+    }
+    // 2. 级联结算 (无移动中植物 且 falling/moving)
+    if (!moving && (this.begState === 'falling' || this.begState === 'moving')) {
+      this.begState = 'idle';
       this.beghouledRemoveMatches();
       this.beghouledMakeFall();
-      this.begState = 'fall'; this.begStateT = 28;
-    } else if (this.begState === 'fall' && this.begStateT <= 0) {
-      this.begState = 'populate'; this.begStateT = 12;
-    } else if (this.begState === 'populate' && this.begStateT <= 0) {
       this.beghouledPopulate();
-      if (this.beghouledHasMatch(this.beghouledLoadState())) {
-        this.begState = 'flash'; this.begStateT = 25;   // 级联
-      } else {
-        this.begMatchesThisMove = 0;
-        this.begState = 'idle'; this.begStateT = 1500;
-        this._begHinted = false;
-        if (!this.begHasAnyMove()) { this.beghouledShuffle(); this.begState = 'flash'; this.begStateT = 25; }
-      }
-    } else if (this.begState === 'idle' && this.begStateT <= 0) {
-      // 原版: 1500tick 无操作 → 闪可行步; 再 1500 → 洗牌
-      if (this._begHinted) {
-        this.beghouledShuffle();
-        this.begState = 'flash'; this.begStateT = 25;
-        this._begHinted = false;
-      } else {
-        this._begHinted = true;
-        this.begStateT = 1500;
+      if (this.begState === 'falling') { this.begStateT = 100; return; }
+      this.begStateT = 1500;
+      this.begMatchesThisMove = 0;
+      this.begCheckStuck();
+    }
+    // 3. 计时器 (idle: 1500 → 闪可行步; nomoves: 500 → 全屏闪 + 洗牌)
+    if (this.begStateT > 0) {
+      this.begStateT -= tk;
+      if (this.begStateT <= 0 && this.state === 'playing') {
+        if (this.begState === 'idle') {
+          this.begFlashAMatch();
+          this.begStateT = 1500;
+        } else if (this.begState === 'nomoves') {
+          this.addEffect('screen_flash', 0, 0, { hold: 0.4 });
+          this.beghouledShuffle();
+        }
       }
     }
-    // 僵尸啃死植物 → 弹坑 (原版 ZombieAtePlant 1869-1886; 同时解锁清坑卡)
+    // 4. 僵尸啃死植物 → 弹坑 (原版 ZombieAtePlant 1869-1886; 首个弹坑解锁清坑卡)
     for (const p of this.plants) {
       if (!p.dead || p._begRemoved || p._begEatenMarked || p.col >= 8) continue;
       p._begEatenMarked = true;
@@ -2295,13 +1990,18 @@ class Board {
         this.seedCards.push({ type: 'BEG_CRATER', cd: 0 });
         this.addEffect('text', 400, 300, { hold: 2.5, txt: '僵尸吃出了弹坑! 花 200 阳光清理', c: '#8ad8ff', size: 15 });
       }
+      this.begCheckStuck();
     }
-    // 掉落视觉: 新植物/下落植物向目标 y 渐进
-    for (const p of this.plants) {
-      if (p.dead) continue;
-      const ty = this.cellY(p.row, p.col);
-      if (Math.abs(p.y - ty) > 2) p.y += (ty - p.y) * Math.min(1, dt * 10);
-      else p.y = ty;
+    // 5. 旋转模式: 悬停 2x2 方框跟踪 (原版 UpdateBeghouled 1316-1330)
+    if (this.begTwist) {
+      const m = this.game.mouse;
+      this.begTwistSel = null;
+      if (m && this.begState === 'idle') {
+        const cell = this.game.pixelToCell(m.x - 40, m.y - 40);
+        if (cell && cell[0] >= 0 && cell[0] <= 6 && cell[1] >= 0 && cell[1] <= 3 && this.begTwistValid(cell[0], cell[1])) {
+          this.begTwistSel = cell;
+        }
+      }
     }
   }
 
@@ -2330,15 +2030,21 @@ class Board {
       }
       return false;   // 阳光收集交给通用逻辑
     }
+    // 原版 Challenge::MouseDown: state != NORMAL → 输入屏蔽
+    if (this.begState !== 'idle') return true;
     const cell = game.pixelToCell(p.x, p.y);
     if (!cell) return false;
     const [c, r] = cell;
     if (c >= 8) return false;
     if (this.begTwist) {
-      this.begTryTwist(Math.min(c, 6), Math.min(r, this.rows - 2));
+      // 原版 BeghouledTwistSquareFromMouse: 以点击点减半格 (40px) 定 2x2 锚点
+      const tcell = game.pixelToCell(p.x - 40, p.y - 40);
+      if (tcell && tcell[0] >= 0 && tcell[0] <= 6 && tcell[1] >= 0 && tcell[1] <= 3) {
+        this.begTryTwist(tcell[0], tcell[1]);
+      }
       return true;
     }
-    // 交换: 点击选中 + 点击相邻目标 (web 近似原版拖拽)
+    // 交换: 点击选中 + 点击相邻目标 (web 近似原版拖拽; 相邻无效也走抖动反馈)
     if (this.begSel) {
       const [c0, r0] = this.begSel;
       this.begSel = null;
@@ -2358,14 +2064,16 @@ class Board {
           const cost = i === 0 ? 100 : 1000;
           if (this.sun < cost) { game.audio.play('buzzer'); return true; }
           if (i === 0) {
-            if (this.zombies.filter(z => !z.dead).length > 20) return true;
+            if (this.zombies.filter(z => !z.dead).length > 100) return true;   // 原版 CountZombiesOnScreen()>100
             this.sun -= cost;
-            this.aqSpawnSnorkle();
+            const z = this.aqSpawnSnorkle();
             try { game.audio.play('zombiesplash'); } catch (e) { }
-            this.addEffect('dust', p.x, 200);
+            if (z) this.addEffect('dust', z.x + 60, z.y + 20);
           } else {
             this.sun -= cost;
-            this.addEffect('text', 400, 280, { hold: 2.5, txt: '恭喜获得奖杯!', c: '#ffe86a', size: 24 });
+            // 原版 SpawnLevelAward(2,0): 奖杯即收 + 全屏闪 + spawn_sun 音
+            this.addEffect('screen_flash', 0, 0, { hold: 0.4 });
+            try { game.audio.play('points'); } catch (e) { }
             this.triggerWin();
           }
           return true;
@@ -2379,7 +2087,7 @@ class Board {
       if (nBrains < 3 && this.sun >= 5) {
         this.sun -= 5;
         this.brains.push({ x: p.x - 15, y: p.y - 15, t: 0, taken: false });
-        try { game.audio.play('seedlift'); } catch (e) { }
+        try { game.audio.play('tap'); } catch (e) { try { game.audio.play('seedlift'); } catch (e2) { } }
       } else if (this.sun < 5) {
         this.addEffect('text', p.x, p.y - 10, { hold: 1.2, txt: '需要 5 阳光!', c: '#ffd76a', size: 14 });
       }
@@ -2387,6 +2095,7 @@ class Board {
     }
     return false;
   }
+
 
   updateMode(dt) {
     // 传送带在过场期间同样运转 (原版 SeedBank::UpdateConveyorBelt 不受 GameScene 门控 —

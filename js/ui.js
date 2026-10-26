@@ -517,7 +517,7 @@ const UI = {
             ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
             ctx.textAlign = 'center';
             ctx.fillStyle = afford ? '#000' : '#a33';
-            ctx.fillText(String(cost), x + 25, y + h0 - 8);
+            ctx.fillText(String(cost), x + 25, y + 62);
           } else {
             // 洗牌/清坑: 文字钮
             const seeds = Assets.image('seeds');
@@ -583,103 +583,19 @@ const UI = {
         else { ctx.fillStyle = '#ffd23a'; ctx.beginPath(); ctx.arc(x2 + 25, y + 32, 14, 0, Math.PI * 2); ctx.fill(); }
         ctx.fillStyle = board.sun >= 1000 ? '#000' : '#a33';
         ctx.fillText('1000', x2 + 25, y + 66);
-      }
-      this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
-      this.drawLevelText(ctx, board);
-      return;
-    }
-    // ---- 消消乐: 原版种子银行 + 功能卡 + 消除进度 (SeedPacket.cpp BeghouledPacketClicked) ----
-    if (board.mode === 'beghouled') {
-      const bankY = cs.active ? cs.seedBankY : 0;
-      if (bankY > -87) {
-        const bank = Assets.image('seedbank.png');
-        const nB = Math.max(1, board.seedCards.length);
-        const extra = nB <= 6 ? 0 : nB === 7 ? 60 : 76;
-        if (bank) ctx.drawImage(bank, 0, 0, 446, 87, 0, bankY, 446 + extra, 87);
-        else { ctx.fillStyle = '#8a6642'; ctx.fillRect(0, bankY, 446 + extra, 87); }
-        // 阳光计数
-        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#000';
-        ctx.fillText(String(Math.max(0, board.sun)), 34, bankY + 78);
-        // 功能卡 (BEG_*): 植物升级卡用缩略图; 洗牌/清坑用文字钮
-        const n = board.seedCards.length;
-        for (let i = 0; i < n; i++) {
-          const c = board.seedCards[i];
-          const x = this.packetX(i, n);
-          const y = 7 + bankY;
-          const cost = board.BEG_COSTS()[c.type];
-          const afford = board.sun >= cost && !c.used;
-          const PLANT_MAP = { BEG_REPEATER: 'REPEATER', BEG_FUMESHROOM: 'FUMESHROOM', BEG_TALLNUT: 'TALLNUT' };
-          if (PLANT_MAP[c.type]) {
-            this.drawSeedCard(ctx, PLANT_MAP[c.type], x, y, { disabled: !afford });
-            ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillStyle = afford ? '#000' : '#a33';
-            ctx.fillText(String(cost), x + 25, y + 62);
-          } else {
-            const seeds = Assets.image('seeds');
-            if (seeds) ctx.drawImage(seeds, 100, 0, 50, 70, x, y, 50, 70);
-            else { ctx.fillStyle = '#c9a86b'; ctx.fillRect(x, y, 50, 70); }
-            ctx.font = 'bold 22px "Noto Sans SC", sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillStyle = '#3a2a10';
-            ctx.fillText(c.type === 'BEG_SHUFFLE' ? '洗' : '坑', x + 25, y + 42);
-            ctx.font = 'bold 12px "Noto Sans SC", sans-serif';
-            ctx.fillStyle = afford ? '#000' : '#a33';
-            ctx.fillText(String(cost), x + 25, y + 62);
-            if (!afford) {
-              ctx.save(); ctx.globalAlpha = 0.45; ctx.fillStyle = 'rgb(70,70,70)'; ctx.fillRect(x, y, 50, 70); ctx.restore();
-            }
-          }
-        }
-        // 消除进度 (原版 mProgressMeterWidth = score/75×PROGRESS_METER_COUNTER)
+        // 进度 (原版 mProgressMeterWidth = sun/1000, PROGRESS_METER 计量条)
         ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
         ctx.textAlign = 'left';
         ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(20,12,0,0.8)';
-        const stxt = '消除 ' + (board.begScore || 0) + ' / 75';
-        ctx.strokeText(stxt, 470, bankY + 30);
+        const st = '阳光 ' + Math.min(1000, Math.max(0, board.sun)) + ' / 1000';
+        ctx.strokeText(st, 250, bankY + 30);
         ctx.fillStyle = '#ffe9a8';
-        ctx.fillText(stxt, 470, bankY + 30);
-        const pw = 170 * Math.min(1, (board.begScore || 0) / 75);
+        ctx.fillText(st, 250, bankY + 30);
+        const pw = 170 * Math.min(1, Math.max(0, board.sun) / 1000);
         ctx.fillStyle = 'rgba(20,12,0,0.55)';
-        ctx.fillRect(470, bankY + 42, 170, 10);
-        ctx.fillStyle = '#8ae87a';
-        ctx.fillRect(470, bankY + 42, pw, 10);
-      }
-      this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
-      this.drawLevelText(ctx, board);
-      return;
-    }
-    // ---- 僵尸水族馆: 原版 2 卡银行 (潜水僵尸 $100 / 奖杯 $1000) ----
-    if (board.mode === 'zombiquarium') {
-      const bankY = cs.active ? cs.seedBankY : 0;
-      if (bankY > -87) {
-        const bank = Assets.image('seedbank.png');
-        if (bank) ctx.drawImage(bank, 0, 0, 446, 87, 0, bankY, 246, 87);
-        else { ctx.fillStyle = '#8a6642'; ctx.fillRect(0, bankY, 246, 87); }
-        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#000';
-        ctx.fillText(String(Math.max(0, board.sun)), 34, bankY + 78);
-        // 卡 1: 潜水僵尸 $100
-        const x1 = this.packetX(0, 2), x2 = this.packetX(1, 2);
-        const y = 7 + bankY;
-        const seeds = Assets.image('seeds');
-        if (seeds) ctx.drawImage(seeds, 0, 0, 50, 70, x1, y, 50, 70);
-        const th = this.getZombieThumb('SNORKEL');
-        if (th) ctx.drawImage(th, x1 + 2, y + 8, 46, 44);
-        ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillStyle = board.sun >= 100 ? '#000' : '#a33';
-        ctx.fillText('100', x1 + 25, y + 66);
-        // 卡 2: 奖杯 $1000
-        if (seeds) ctx.drawImage(seeds, 50, 0, 50, 70, x2, y, 50, 70);
-        const trophy = Assets.image('trophy_hi_res.png');
-        if (trophy) ctx.drawImage(trophy, x2 + 10, y + 14, 30, 38);
-        else { ctx.fillStyle = '#ffd23a'; ctx.beginPath(); ctx.arc(x2 + 25, y + 32, 14, 0, Math.PI * 2); ctx.fill(); }
-        ctx.fillStyle = board.sun >= 1000 ? '#000' : '#a33';
-        ctx.fillText('1000', x2 + 25, y + 66);
+        ctx.fillRect(250, bankY + 42, 170, 10);
+        ctx.fillStyle = '#8ad8ff';
+        ctx.fillRect(250, bankY + 42, pw, 10);
       }
       this.drawStoneButton(ctx, 681, -10, 117, 46, '菜 单', 18);
       this.drawLevelText(ctx, board);
@@ -1087,12 +1003,12 @@ const UI = {
     if (!board) return;
     // ---- 僵尸水族馆: 全屏水色 + 脑子 + 提示 ----
     if (board.mode === 'zombiquarium' && board.state === 'playing') {
-      // 水体 (原版 BACKGROUND_ZOMBIQUARIUM — 全屏水族箱, 深海蓝)
+      // 水体 (原版 IMAGE_AQUARIUM1 背景 + 轻度水色叠加; 原泳池草皮渐变已废弃)
       ctx.save();
       const grad = ctx.createLinearGradient(0, 90, 0, 500);
-      grad.addColorStop(0, 'rgba(30,105,175,0.62)');
-      grad.addColorStop(0.5, 'rgba(18,75,140,0.7)');
-      grad.addColorStop(1, 'rgba(10,50,105,0.8)');
+      grad.addColorStop(0, 'rgba(30,105,175,0.20)');
+      grad.addColorStop(0.5, 'rgba(18,75,140,0.24)');
+      grad.addColorStop(1, 'rgba(10,50,105,0.30)');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 88, 800, 415);
       // 波纹
@@ -1127,7 +1043,7 @@ const UI = {
       ctx.fillText(tip, 400, 530);
       ctx.restore();
     }
-    // ---- 消消乐: 弹坑 (原版 mBeghouledEated → IMAGE_CRATER) + 选中框 ----
+    // ---- 消消乐: 弹坑 (原版 mBeghouledEated → IMAGE_CRATER) + 选中框 + 旋转悬停框 + 提示闪烁 ----
     if (board.mode === 'beghouled') {
       const crater = Assets.image(board.isRoof ? 'crater_roof_center' : 'crater');
       if (crater) {
@@ -1141,6 +1057,27 @@ const UI = {
         ctx.save();
         ctx.strokeStyle = '#ffef7a'; ctx.lineWidth = 3;
         ctx.strokeRect(board.gridX(c) + 2, board.cellY(r, c) + 2, 76, 86);
+        ctx.restore();
+      }
+      // 旋转模式: 悬停 2×2 方框 (原版 mChallengeGridX/Y 悬停跟踪)
+      if (board.begTwist && board.begTwistSel) {
+        const [c, r] = board.begTwistSel;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,245,170,0.9)'; ctx.lineWidth = 3;
+        ctx.setLineDash([8, 5]);
+        ctx.strokeRect(board.gridX(c) + 2, board.cellY(r, c) + 2, 156, 186);
+        ctx.restore();
+      }
+      // 提示闪烁 (原版 mBeghouledFlashCountdown=300, 白色叠加 bounce 曲线 alpha 1..128)
+      for (const p of board.plants) {
+        if (p.dead || !p.begFlash) continue;
+        const ph = (p.begFlash % 50) / 50;
+        const alpha = (1 + 127 * (1 - Math.abs(2 * ph - 1))) / 255;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(p.x + 2, p.y + 2, 76, 86);
         ctx.restore();
       }
     }

@@ -382,12 +382,13 @@ class Plant {
           if (hitZombie) {
             const zx = this.x + 40, zy = this.y + 40;
             if (this.type === 'EXPLODEONUT') {
-              // 原版: 爆炸坚果 KillAllZombiesInRadius(90, 1, theBurn=true) → ApplyBurn
-              //   (火系烧杀: 防具随本体蒸发, 不掉粒子)
+              // 原版: KillAllZombiesInRadius(mRow, x, y, 90, rowRange=1, burn) — 90px 圆形 + 相邻行
               board.addEffect('powie', zx, zy);
               for (const z2 of board.zombies) {
                 if (z2.dead || z2.boss) continue;
-                if (Math.abs(z2.hitX() - zx) < 115 && Math.abs(z2.row - this.row) <= 1) {
+                if (Math.abs(z2.row - this.row) > 1) continue;
+                const zy2 = board.cellY(z2.row, Math.max(0, z2.col || 0)) + 40;
+                if (Math.hypot(z2.hitX() - zx, zy2 - zy) <= 90) {
                   try { z2.removeColdEffects && z2.removeColdEffects(); } catch (e) { }
                   try { z2.applyBurn && z2.applyBurn(); } catch (e) { z2.takeDamage(1800, board, { exploded: true, noFlash: true }); }
                 }

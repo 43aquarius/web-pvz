@@ -1061,7 +1061,7 @@ class Zombie {
     if (this.type === 'POLEVAULTER') this.updateZombiePolevaulter();
     if (this.type === 'CATAPULT') this.updateZombieCatapult();
     if (this.type === 'DOLPHIN') this.updateZombieDolphinRider();
-    if (this.type === 'SNORKEL') { if (this.board && this.board.mode === 'zombiquarium') this.updateZombiquarium(); else this.updateZombieSnorkel(); }
+    if (this.type === 'SNORKEL') { if (this.board && this.board.mode === 'zombiquarium') this.updateZombiquarium(0.01); else this.updateZombieSnorkel(); }
     if (this.type === 'BALLOON') this.updateZombieFlyer();
     if (this.type === 'NEWSPAPER') this.updateZombieNewspaper();
     if (this.type === 'DIGGER') this.updateZombieDigger();
@@ -1834,26 +1834,31 @@ class Zombie {
   }
 
   // ---------------- 僵尸水族馆 (原版 Zombie.cpp 3079-3260 UpdateZombiquarium) ----------------
-  updateZombiquarium() {
+  //   原版全部计数器按 100Hz tick 递减 (mSummonCounter / mPhaseCounter / mZombieAge%100 / 移动加速)
+  updateZombiquarium(dt = 1 / 60) {
     const b = this.board;
     if (this.isDeadOrDying) return;
-    // 产阳光 (原版 mSummonCounter: 1000-1500tick → COIN_SUN)
+    const tk = Math.max(1, Math.round(dt * 100));
+    // 产阳光 (原版 mSummonCounter: 1000-1500tick → COIN_SUN @ (x+50,y+40) FROM_PLANT + FOLEY_SPAWN_SUN)
     if (this.summonCounter > 0) {
-      this.summonCounter--;
-      if (this.summonCounter === 0) {
-        b.addSun(this.posX + 50, this.posY + 30, Math.min(540, this.posY + 60), 'coin');
+      this.summonCounter -= tk;
+      if (this.summonCounter <= 0) {
+        b.addSun(this.posX + 50, this.posY + 40, Math.min(540, this.posY + 70), 'coin');
+        try { b.game.audio.play('points'); } catch (e) { }   // 原版 FOLEY_SPAWN_SUN → 以 points 近似
         this.summonCounter = 1000 + Math.floor(Math.random() * 500);
       }
     }
-    // 饿 (原版: 每 100tick 挨 10 伤, 死亡播 zombaquarium_die)
-    if (this.zombieAge > 0 && this.zombieAge % 100 === 0) {
+    // 饿 (原版: 每 100tick 挨 10 伤, 死亡播 zombaquarium_die; 不掉头 → 无流血加速)
+    this._aqHunger = (this._aqHunger || 0) + tk;
+    while (this._aqHunger >= 100) {
+      this._aqHunger -= 100;
       this.takeDamage(10, DMG_SYS);
       if (this.isDeadOrDying || this.dead) {
         try { b.game.audio.play('zombaquarium_die'); } catch (e) { }
         return;
       }
     }
-    // AI (原版 ZombiquariumFindClosestBrain + 相位机)
+    // AI (原版 ZombiquariumFindClosestBrain + 相位机; mPhaseCounter 按 tick 递减)
     if (this.phase === PH.ZQ_BITE) {
       const r = this.bodyReanim;
       if (r && r.loopType === RE.PLAY_ONCE_HOLD && r.loopCount > 0) {
@@ -1888,27 +1893,30 @@ class Zombie {
           }
         }
       }
-      if (!hunting && this.phaseCounter <= 0) {
-        const hit = Math.floor(Math.random() * 7);
-        if (hit <= 4) {
-          this.phase = PH.ZQ_ACCEL;
-          this.velZ = Math.random() * Math.PI * 2;
-        } else if (hit === 5) {
-          this.phase = PH.ZQ_BACK_FORTH;
-          this.velZ = 0;
-        } else {
-          this.phase = PH.ZQ_BACK_FORTH;
-          this.velZ = Math.PI;
+      if (!hunting) {
+        this.phaseCounter -= tk;
+        if (this.phaseCounter <= 0) {
+          const hit = Math.floor(Math.random() * 7);
+          if (hit <= 4) {
+            this.phase = PH.ZQ_ACCEL;
+            this.velZ = Math.random() * Math.PI * 2;
+          } else if (hit === 5) {
+            this.phase = PH.ZQ_BACK_FORTH;
+            this.velZ = 0;
+          } else {
+            this.phase = PH.ZQ_BACK_FORTH;
+            this.velZ = Math.PI;
+          }
+          this.phaseCounter = 300 + Math.floor(Math.random() * 700);
         }
-        this.phaseCounter = 300 + Math.floor(Math.random() * 700);
       }
     }
-    // 移动 (原版 3183-3236: 加速朝 velZ 方向; 出界减速回头; 来回相位限制 x 200-550)
+    // 移动 (原版 3183-3236: 每 tick 加速 0.01 朝 velZ 方向; 出界减速回头; 来回相位限制 x 200-550)
     let vx = Math.cos(this.velZ), vy = Math.sin(this.velZ);
     let maxSpeed = 0.5;
     const oob = (this.posX < 0 && vx < 0) || (this.posX > 680 && vx > 0) || (this.posY < 100 && vy < 0) || (this.posY > 400 && vy > 0);
     if (oob) {
-      maxSpeed = 0.15;
+      maxSpeed = this.velX * 0.3;   // 原版: mVelX*0.3 — 按当前速度比例减速
       this.phaseCounter = Math.min(100, this.phaseCounter);
     } else if (this.phase === PH.ZQ_BACK_FORTH) {
       if (this.posX < 200 && vx < 0) this.velZ = 0;
@@ -1918,9 +1926,9 @@ class Zombie {
     } else if (this.phase === PH.ZQ_DRIFT || this.phase === PH.ZQ_BITE) {
       maxSpeed = 0.05;
     }
-    this.velX = Math.min(maxSpeed, this.velX + 0.01);
-    this.posX += vx * this.velX;
-    this.posY += vy * this.velX;
+    this.velX = Math.min(maxSpeed, this.velX + 0.01 * tk);
+    this.posX += vx * this.velX * tk;
+    this.posY += vy * this.velX * tk;
     this.x = Math.floor(this.posX);
     this.y = Math.floor(this.posY);
     if (this.bodyReanim && !this.bodyReanim.dead) {
@@ -3371,6 +3379,9 @@ class Zombie {
   }
 
   get canLoseBodyParts() {
+    // 原版 CanLoseBodyParts 3488-3500: 水族馆僵尸 (HEIGHT_ZOMBIQUARIUM) 不掉身体部件
+    //   (饥饿扣血不得触发掉头 → 否则无头流血 3伤/帧 快速死亡, 违背 10血/s 慢饿语义)
+    if (this.board && this.board.mode === 'zombiquarium') return false;
     if (this.type === 'GARGANTUAR' || this.type === 'REDEYE' || this.type === 'ZAMBONI' || this.type === 'CATAPULT' || this.type === 'BOSS') return false;
     if (this.type === 'BOBSLED') return false;
     return true;

@@ -154,7 +154,8 @@ const Assets = (function () {
     const packs = new Set(['ui', 'fx']);
     const scene = level.scene || 'day';
     // boss 场景背景 (background6boss.jpg) 实际归 bg_roof 包; boss 关同时补 roof 屋顶素材
-    packs.add(scene === 'boss' ? 'bg_roof' : 'bg_' + scene);
+    // 水族馆背景 (aquarium1.jpg) 归 misc 包 → 不按场景名组包
+    packs.add(scene === 'boss' ? 'bg_roof' : scene === 'aquarium' ? 'misc' : 'bg_' + scene);
     const lv = level.id && level.id <= 50 ? level.id : (level.mode ? 50 : 50);
     // 僵尸: 该关允许的全部类型
     for (const t of Object.keys(ZOMBIES)) {

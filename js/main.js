@@ -767,6 +767,8 @@ const Game = {
     // 看星星: 星形阵补全检查 (原版 PlantAdded → CheckForCompleteArtChallenge)
     if (board.checkStarPattern) board.checkStarPattern(this);
     this.selectedCard = -1;
+    // 坚果保龄球: 种下即滚 (原版 Board.cpp 3944: 种植播 SOUND_BOWLING)
+    if (bowling) this.audio.play('bowling');
     this.audio.play(board.isWater(row, col) ? 'plant_water' : (Math.random() < 0.5 ? 'plant' : 'plant2'));
     return true;
   },
