@@ -569,19 +569,14 @@ const Game = {
         this.audio.play('shovel');
         return;
       }
+      if (board.mode === 'raining' && board.rainCursor) {
+        // 雨天种子: 光标上的种子包免费种植 (原版 CURSOR_TYPE_PLANT_FROM_USABLE_COIN;
+        //   种失败光标保留, 种成功清空)
+        const ok = this.tryPlant(board.rainCursor, row, col, board, { free: true });
+        if (ok) board.rainCursor = null;
+        return;
+      }
       if (this.selectedCard >= 0) {
-        // 雨天种子: 持有卡 (捡到的种子免费种植, 原版 CURSOR_TYPE_PLANT_FROM_COIN)
-        if (board.mode === 'raining') {
-          const held = board.heldCards[this.selectedCard];
-          if (held) {
-            this.tryPlant(held.type, row, col, board, { free: true });
-            if (board.plants[board.plants.length - 1] && board.plants[board.plants.length - 1].row === row && board.plants[board.plants.length - 1].col === col) {
-              board.heldCards.splice(this.selectedCard, 1);
-              this.selectedCard = -1;
-            }
-          }
-          return;
-        }
         const plantedOk = this.tryPlant(cards[this.selectedCard].type, row, col, board);
         // 传送带: 点击无效位置 → 卡回最左槽位 (原版 RefreshSeedPacketFromCursor, #15)
         if (board.mode === 'conveyor' && !plantedOk) this.selectedCard = -1;
@@ -661,14 +656,15 @@ const Game = {
     if (!board.grassRows.includes(row) && !board.isWater(row, col)) { this.audio.play('buzzer'); return; }
     // 种植规则
     const isWater = board.isWater(row, col);
-    // 水生植物必须种水, 非水生需要睡莲
-    if (AQUATIC.has(type) && type !== 'LILYPAD' && type !== 'CATTAIL') {
+    // 原版 CanPlantAt (Board.cpp 2772-2781):
+    //   缠绕海藻/海蘑菇: 仅泳池格, 格内无任何植物 (含睡莲) → 直接种水面, 无需睡莲
+    //   睡莲: 仅泳池格; 香蒲: 泳池格 + 需睡莲 (替换); 其余: 水格需睡莲
+    if (type === 'TANGLEKELP' || type === 'SEASHROOM') {
+      if (!isWater || board.grid[row][col] || board.gridLily[row][col]) { this.audio.play('buzzer'); return; }
+    } else if (type === 'LILYPAD') {
       if (!isWater) { this.audio.play('buzzer'); return; }
-      if (type !== 'LILYPAD' && !board.gridLily[row][col]) { this.audio.play('buzzer'); return; }
-      if (type === 'TANGLEKELP' && !board.gridLily[row][col]) { this.audio.play('buzzer'); return; }
-    } else if (AQUATIC.has(type)) { // LILYPAD/CATTAIL
-      if (!isWater) { if (type === 'LILYPAD') { this.audio.play('buzzer'); return; } }
-      if (type === 'CATTAIL' && (!isWater || !board.gridLily[row][col])) { this.audio.play('buzzer'); return; }
+    } else if (AQUATIC.has(type)) { // CATTAIL
+      if (!isWater || !board.gridLily[row][col]) { this.audio.play('buzzer'); return; }
     } else {
       if (isWater && !board.gridLily[row][col]) { this.audio.play('buzzer'); return; }
       if (board.isRoof && type !== 'FLOWERPOT' && !board.gridPot[row][col] && !isWater) { this.audio.play('buzzer'); return; }
@@ -1153,11 +1149,6 @@ const Game = {
         Cutscene.update(sdt);
         // 卡片冷却
         for (const c of this.board.seedCards) c.cd = Math.max(0, c.cd - sdt);
-        // 雨天种子: 持有卡倒计时
-        if (this.board.mode === 'raining') {
-          for (const h of this.board.heldCards) h.life -= sdt;
-          this.board.heldCards = this.board.heldCards.filter(h => h.life > 0);
-        }
       }
     }
   },
@@ -1290,13 +1281,10 @@ const Game = {
     }
     // 种植预览
     let selType = null;
-    if (this.selectedCard >= 0) {
-      if (board.mode === 'raining') {
-        const held = board.heldCards[this.selectedCard];
-        selType = held ? held.type : null;
-      } else if (board.seedCards[this.selectedCard]) {
-        selType = board.seedCards[this.selectedCard].type;
-      }
+    if (board.mode === 'raining') {
+      selType = board.rainCursor || null;
+    } else if (this.selectedCard >= 0 && board.seedCards[this.selectedCard]) {
+      selType = board.seedCards[this.selectedCard].type;
     }
     if (!selType && this.freePlant) selType = this.freePlant;
     if (selType) {

@@ -1233,31 +1233,21 @@ const UI = {
         break;
       }
       case 'raining': {
-        // 掉落中的种子包
+        // 掉落/落地的种子包 (原版 COIN_USABLE_SEED_PACKET:
+        //   FROM_SKY_SLOW 33px/s 匀速直落; 落地后 750tick 消失, 最后 300tick 闪矃 60tick 周期)
         for (const c of board.rainCards) {
           ctx.save();
           const x = c.x, y = c.y;
-          ctx.globalAlpha = 0.9;
-          // 降落伞风格下落
+          let alpha = 0.95;
+          if (y >= c.land && c.t > 4.5) alpha = (Math.floor(c.t * 3.333) % 2 === 0) ? 0.95 : 0.3;
+          ctx.globalAlpha = alpha;
           this.drawSeedCard(ctx, c.type, x - 25, y - 35, {});
-          // 阴影
+          // 落点阴影
           ctx.globalAlpha = 0.25;
           ctx.fillStyle = '#000';
-          ctx.beginPath(); ctx.ellipse(x, y + 40, 22, 6, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.ellipse(x, c.land + 40, 22, 6, 0, 0, Math.PI * 2); ctx.fill();
           ctx.restore();
         }
-        // 持有卡 (顶部)
-        board.heldCards.forEach((h, i) => {
-          const x = 130 + i * 60;
-          const sel = game.selectedCard === i;
-          ctx.save();
-          this.drawSeedCard(ctx, h.type, x, 6, { selected: sel });
-          // 剩余时间条
-          const p = Math.max(0, Math.min(1, h.life / 14));
-          ctx.fillStyle = 'rgba(255,80,80,0.85)';
-          ctx.fillRect(x, 76 - 4 * p, 50, 4);
-          ctx.restore();
-        });
         break;
       }
       case 'slotmachine': {

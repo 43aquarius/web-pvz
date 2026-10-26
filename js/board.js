@@ -339,10 +339,13 @@ class Board {
       if (level.columnFill) points *= 6;
       else if ((this.game && this.game.littleTrouble) || level.fixed === 'bowling' || level.fixed === 'bowling2') points *= 4;
       else if (level.conveyorPool === 'bungee_blitz' || level.portals || level.invisibleZ) points *= 2;
-      // 原版 Board.cpp 727-743 列队僵尸特殊波: wave%10==5 → 梯子僵尸×10; wave%10==8 → 小丑×10
+      // 原版 Board.cpp 727-747 列队僵尸特殊波: wave%10==5 → 梯子僵尸×10; wave%10==8 → 小丑×10;
+      //   wave19 → 巨人×3 / wave29 → 巨人×5 (PutZombieInWave 绕过 mZombieAllowed 直接入波)
       if (level.columnFill) {
         if (w % 10 === 5) { for (let i = 0; i < 10; i++) types.push(['LADDER', 1]); }
         if (w % 10 === 8) { for (let i = 0; i < 10; i++) types.push(['JACK', 1]); }
+        if (w === 19) { for (let i = 0; i < 3; i++) types.push(['GARGANTUAR', 1]); }
+        if (w === 29) { for (let i = 0; i < 5; i++) types.push(['GARGANTUAR', 1]); }
       }
       const pool = Object.keys(ZOMBIES).filter(ty => {
         const d = ZOMBIES[ty];
@@ -357,12 +360,16 @@ class Board {
           // 困难生存: 全兵种僵尸池 (按 unlock 门槛, 门槛内全部可用)
           if ((d.unlock || 99) > 48) return false;
         } else if (!zombieAllowedOnLevel(ty, lv)) return false;
-        if ((d.firstWave || 1) > w + 1) return false;
+        // 原版 Board.cpp 2420: POGO_PARTY/BOBSLED_BONANZA/AIR_RAID 同时豁免
+        //   FirstAllowedWave 与点数检查 (同一 else-if 块) — 前几波即出满阵容
+        if (!level.noPointsGate && (d.firstWave || 1) > w + 1) return false;
         return true;
       });
-      let guard = 60;
+      let guard = 50;   // 原版 MAX_ZOMBIES_IN_WAVE = 50 (Board.h 44)
       while (points > 0 && guard-- > 0) {
-        const cands = pool.filter(ty => ZOMBIES[ty].value <= points);
+        // 原版 Board.cpp 2420: POGO_PARTY / BOBSLED_BONANZA / AIR_RAID 豁免
+        //   "theZombiePoints < mZombieValue → continue" — 点数不足也能多生成一只 (PutZombieInWave 扣至负值)
+        const cands = level.noPointsGate ? pool : pool.filter(ty => ZOMBIES[ty].value <= points);
         if (!cands.length) break;
         const totalW = cands.reduce((s, ty) => s + ZOMBIES[ty].weight, 0);
         let r = Math.random() * totalW, pick = cands[0];
@@ -652,20 +659,9 @@ class Board {
     for (const type of list) {
       const zd = ZOMBIES[type];
       hp += zd.body + (zd.helm || 0) + (zd.shield || 0);
-      let row;
-      // 传送门战斗: 行权重 (原版 PortalCombatRowSpawnWeight: 近割草机0.01/有门行1.0/其他0.2)
-      if (this.level.portals && this.portals) {
-        const rows = zd.water ? this.waterRows : this.grassRows.filter(r => !this.waterRows.includes(r));
-        const entries = rows.map(r => [r, this.portalRowWeight(r)]);
-        const tot = entries.reduce((s, [, wt]) => s + wt, 0);
-        let rr = Math.random() * tot;
-        row = rows[0];
-        for (const [r0, wt] of entries) { rr -= wt; if (rr <= 0) { row = r0; break; } }
-      } else if (zd.water) row = this.waterRows[Math.floor(Math.random() * this.waterRows.length)];
-      else {
-        const landRows = this.grassRows.filter(r => !this.waterRows.includes(r));
-        row = landRows[Math.floor(Math.random() * landRows.length)];
-      }
+      // 行选择: 原版 PickRowForNewZombie + PvzpPickFromSmoothArray (PvzpCommon.cpp 192-231)
+      //   平滑饿死加权 — 刚选过的行权重骤降 (0.01 下限), 长期未选的行抬升 → 僵尸均匀铺行不扎堆
+      const row = this.pickRowForZombie(type);
       this.spawnZombieForWave(type, row, this.wave - 1);
     }
     this._waveHP = hp;
@@ -678,6 +674,84 @@ class Board {
     if (this.wave === this.totalWaves && !this.level.endless) {
       this.riseFromGraveTimer = 2;
     }
+  }
+
+  // ---------- 行选择 (原版 PickRowForNewZombie + PvzpPickFromSmoothArray) ----------
+  // 原版 ZombieTypeCanGoInPool (Zombie.cpp): 可踏入泳池行的行走僵尸 (生成时套鸭子泳圈)
+  static get CAN_GO_IN_POOL() {
+    return ['NORMAL', 'DUCKY', 'CONE', 'BUCKET', 'FLAG', 'SNORKEL', 'DOLPHIN',
+      'PEA_HEAD', 'WALLNUT_HEAD', 'JALAPENO_HEAD', 'GATLING_HEAD', 'TALLNUT_HEAD'];
+  }
+  // 原版 PvzpCalcSmoothWeight (PvzpCommon.cpp 174-190): 饿死加权 — 距上次被选越久权重越高
+  calcSmoothWeight(w, lastPicked, secondLast) {
+    if (w < 1e-6) return 0;
+    const e1 = 1 / w, e2 = 2 / w;
+    const f1 = 1 + (lastPicked + 1 - e1) / e1 * 2;
+    const f2 = 1 + (secondLast + 1 - e2) / e2 * 2;
+    const ff = Math.min(100, Math.max(0.01, f1 * 0.75 + f2 * 0.25));
+    return w * ff;
+  }
+  rowPickState(r) {
+    if (!this._rowPickSmooth) this._rowPickSmooth = {};
+    return this._rowPickSmooth[r] || (this._rowPickSmooth[r] = { last: 0, secondLast: 0 });
+  }
+  // 原版 RowCanHaveZombieType (Board.cpp 2499-2550) — 行×僵尸类型准入
+  rowCanHaveZombieType(ty, r) {
+    if (this.isWater(r)) {
+      // 泳池行: 需 CanGoInPool 名单 (气球飞行豁免)
+      if (!Board.CAN_GO_IN_POOL.includes(ty) && ty !== 'BALLOON') return false;
+      // 前 5 波 (mCurrentWave<5): 泳池行仅潜水/海豚 (原版 IsZombieTypePoolOnly)
+      if (this.wave - 1 < 5 && ty !== 'SNORKEL' && ty !== 'DOLPHIN') return false;
+    } else {
+      // 陆地行排除 pool-only (SNORKEL/DOLPHIN)
+      if (ty === 'SNORKEL' || ty === 'DOLPHIN') return false;
+    }
+    // 雪橇僵尸需该行有冰道 (原版 mIceTimer[theRow])
+    if (ty === 'BOBSLED' && !(this.iceTimers && this.iceTimers[r] > 0)) return false;
+    // 非生存模式: 第 0 行排除巨人/红眼 (原版 theRow==0 检查)
+    if (r === 0 && !this.level.endless && (ty === 'GARGANTUAR' || ty === 'REDEYE')) return false;
+    // 舞王: 无泳池场景需上下邻行均可刷怪 (召唤伴舞); 泳泳池场景任意行
+    if (ty === 'DANCER' && !this.waterRows.length) {
+      if (!(r > 0 && r < this.rows - 1 && this.grassRows.includes(r - 1) && this.grassRows.includes(r + 1))) return false;
+    }
+    return true;
+  }
+  // 原版 PickRowForNewZombie (Board.cpp 2562-2604): 逐行权重 → 平滑数组抽取
+  pickRowForZombie(ty) {
+    const curWave = this.wave - 1;   // 原版 mCurrentWave (0-based)
+    const entries = [];
+    for (let r = 0; r < this.rows; r++) {
+      // 可用行 = 草地行 ∪ 水行 (原版 RowCanHaveZombies 全 6 行可用)
+      if (!this.grassRows.includes(r) && !this.waterRows.includes(r)) continue;
+      if (!this.rowCanHaveZombieType(ty, r)) continue;
+      let w;
+      if (this.level.portals && this.portals) w = this.portalRowWeight(r);           // 传送门行权重
+      else if (this.level.invisibleZ && curWave <= 3 && r === 5) w = 0;              // 隐形前 4 波排除底行
+      else w = 1.0;
+      if (w > 0) entries.push([r, w]);
+    }
+    if (!entries.length) {
+      // 防御性兑底 (原版断言必有可行行)
+      const rs = this.grassRows.filter(r => this.rowCanHaveZombieType(ty, r) || (!this.isWater(r) && ty !== 'SNORKEL' && ty !== 'DOLPHIN'));
+      if (!rs.length) return this.grassRows[0];
+      return rs[Math.floor(Math.random() * rs.length)];
+    }
+    const total = entries.reduce((s, [, w]) => s + w, 0);
+    const norm = 1 / total;
+    const adj = entries.map(([r, w]) => {
+      const st = this.rowPickState(r);
+      return [r, this.calcSmoothWeight(w * norm, st.last, st.secondLast)];
+    });
+    const totAdj = adj.reduce((s, [, w]) => s + w, 0);
+    let rr = Math.random() * totAdj, pick = adj[adj.length - 1][0];
+    for (const [r, w] of adj) { rr -= w; if (rr <= 0) { pick = r; break; } }
+    // PvzpUpdateSmoothArrayPick: 有权重的行计数 +1; 被选行 lastPicked 归零
+    for (const [r, w] of entries) {
+      if (w > 0) { const st = this.rowPickState(r); st.last += 1; st.secondLast += 1; }
+    }
+    const st = this.rowPickState(pick);
+    st.secondLast = st.last; st.last = 0;
+    return pick;
   }
 
   // 原版 Board::SpawnZombiesFromGraves — 最后一波从墓碑爬出僵尸
@@ -1277,11 +1351,12 @@ class Board {
       this.aqSpawnSnorkle();         // 原版 StartLevel: 开局 2 只
     } else if (this.level.rainingSeeds) {
       // 雨天种子: 种子包从天而降 (原版 It's Raining Seeds)
-      // 原版 InitLevel: mChallengeStateCounter=100 → 首包 1s 后落地
+      // 原版 ChallengeStart: mChallengeStateCounter=100 → 首包 1s 后开始下落
       this.mode = 'raining';
       this.rainCards = [];
       this.rainT = 1;
-      this.heldCards = [];
+      // 原版 Coin.cpp 1246: 点击种子包 → CURSOR_TYPE_PLANT_FROM_USABLE_COIN 直接上光标 (无中间托盘)
+      this.rainCursor = null;
     }
     if (this.level.endless) this.mode = this.mode || 'endless';
   }
@@ -2152,6 +2227,18 @@ class Board {
                   if (boss && boss.phase === PH.BOSS_DROP_RV) w = 500;
                 }
               }
+              // 原版 Challenge.cpp 1646-1655 (Boss 关): 投石车类按空盆数降权
+              //   空花盆 ≤2 → /5, ≤5 → /3 (CountEmptyPotsOrLilies — 花盆上无植物即空盆)
+              if (b.isBoss && (t === 'MELONPULT' || t === 'KERNELPULT' || t === 'CABBAGEPULT')) {
+                let emptyPots = 0;
+                for (let rr = 0; rr < this.rows; rr++) {
+                  for (let cc = 0; cc < this.cols; cc++) {
+                    if (this.gridPot[rr] && this.gridPot[rr][cc] && !this.grid[rr][cc]) emptyPots++;
+                  }
+                }
+                if (emptyPots <= 2) w = Math.max(1, Math.floor(w / 5));
+                else if (emptyPots <= 5) w = Math.max(1, Math.floor(w / 3));
+              }
               return Math.max(0, w);
             });
             let total = weights.reduce((a, c) => a + c, 0);
@@ -2324,23 +2411,28 @@ class Board {
         break;
       }
       case 'raining': {
-        // 种子包掉落 (原版 UpdateRainingSeeds: 500-999tick 随机间隔, x 100-649)
+        // 种子包掉落 (原版 UpdateRainingSeeds Challenge.cpp 1681-1712)
         this.rainT -= dt;
-        if (this.rainT <= 0 && this.heldCards.length < 4) {
-          this.rainT = 5 + Math.random() * 5;
-          // 原版排除表: 升级植物/向日葵/双子/咖啡豆/叶子伞/阳光菇/模仿者 + 墓碑吞噬者(无墓碑不推荐)
-          const excl = new Set(['SUNFLOWER', 'TWINSUNFLOWER', 'COFFEEBEAN', 'UMBRELLALEAF', 'SUNSHROOM', 'IMITATER', 'MARIGOLD', 'GRAVEBUSTER']);
+        if (this.rainT <= 0) {
+          this.rainT = 5 + Math.random() * 5;   // 原版 RandRangeInt(500, 999) tick
+          // 原版卡池: Rand(GetSeedsAvailable)=全植物枚举, 排除:
+          //   SeedNotRecommendedForLevel (雾夜: 呑喍吞喍无墓/花盆无屋顶)
+          //   + IsUpgrade 8 种 + 向日葵/双子/咖啡豆/叶子伞/阳光菇/模仿者
+          const excl = new Set(['SUNFLOWER', 'TWINSUNFLOWER', 'COFFEEBEAN', 'UMBRELLALEAF', 'SUNSHROOM', 'IMITATER',
+            'GRAVEBUSTER', 'FLOWERPOT', 'GATLINGPEA', 'WINTERMELON', 'SPIKEROCK', 'COBCANNON', 'GOLDMAGNET', 'GLOOMSHROOM', 'CATTAIL']);
           const pool = availablePlants(50, this.game && this.game.purchasedSet).filter(t => !excl.has(t));
           let type = pool[Math.floor(Math.random() * pool.length)];
-          // 原版: 睡莲概率 30%→1% (场上睡莲数 0→18 线性) — 泳池浓雾关补给
+          // 原版: 睡莲概率 PvzpAnimateCurve(0,18,count,30,1) 线性 (0 颗 30% → 18 颗 1%) — 泳池浓雾关补给
           const lilyCount = this.plants.filter(p => !p.dead && p.type === 'LILYPAD').length;
           if (Math.random() * 100 < 30 - (30 - 1) * Math.min(18, lilyCount) / 18) type = 'LILYPAD';
-          this.rainCards.push({ type, x: 100 + Math.random() * 550, y: -40, vy: 55, land: 90 + Math.random() * 60, taken: false, life: 11 });
+          // 原版 CoinInitialize COIN_MOTION_FROM_SKY_SLOW (Coin.cpp 321-324):
+          //   velY 0.33px/tick = 33px/s 匀速直落; 起始 y=60; 落地 Rand(250)+300-30 = 270-520
+          this.rainCards.push({ type, x: 100 + Math.random() * 550, y: 60, vy: 33, land: 270 + Math.random() * 250, t: 0, taken: false });
         }
         for (const c of this.rainCards) {
           if (c.taken) continue;
-          if (c.y < c.land) c.y += c.vy * dt;
-          else { c.life -= dt; if (c.life <= 0) c.taken = true; }
+          if (c.y < c.land) c.y = Math.min(c.land, c.y + c.vy * dt);
+          else { c.t += dt; if (c.t >= 7.5) c.taken = true; }   // 原版 GetDisappearTime 750tick
         }
         this.rainCards = this.rainCards.filter(c => !c.taken);
         break;
@@ -2557,6 +2649,14 @@ class Board {
     this.game.audio.play('hugewave');
     // 卡片刷新 (原版 RefreshAllPackets)
     for (const c of this.seedCards) c.cd = 0;
+    // 原版 LastStandCompletedStage (Challenge.cpp 4877): 消化/装填/磁力状态缩短至 ≤200tick (2s)
+    //   STATE_CHOMPER_DIGESTING / STATE_COBCANNON_ARMING / STATE_MAGNETSHROOM_SUCKING|CHARGING
+    for (const p of this.plants) {
+      if (p.dead) continue;
+      if (p.state === 'digesting') p.timer = Math.min(p.timer || 0, 2);
+      if (typeof p.magnetCD === 'number') p.magnetCD = Math.min(p.magnetCD, 2);
+      if (typeof p.cobCD === 'number') p.cobCD = Math.min(p.cobCD, 2);
+    }
     if (flags >= 5) {
       // 5 面旗防守成功 → 奖杯 (原版 SurvivalCompletedStage → 奖励)
       this.triggerWin();
@@ -2737,23 +2837,17 @@ class Board {
         return true;
       }
       case 'raining': {
-        // 点击掉落的种子包 → 拾取
-        for (const c of this.rainCards) {
-          if (c.taken) continue;
-          if (Math.abs(p.x - c.x) < 32 && Math.abs(p.y - c.y) < 34) {
-            c.taken = true;
-            this.heldCards.push({ type: c.type, life: 14 });
-            game.audio.play('seedlift');
-            return true;
-          }
-        }
-        // 点击持有卡 → 选择
-        for (let i = 0; i < this.heldCards.length; i++) {
-          const x = 130 + i * 60;
-          if (p.x > x && p.x < x + 50 && p.y > 6 && p.y < 76) {
-            game.selectedCard = game.selectedCard === i ? -1 : i;
-            game.audio.play('seedlift');
-            return true;
+        // 点击种子包 → 直接上光标 (原版 Coin.cpp 1246 MouseHitTest → CURSOR_TYPE_PLANT_FROM_USABLE_COIN;
+        //   Coin.cpp 1435: 光标已持有植物时不可再拾取)
+        if (!this.rainCursor) {
+          for (const c of this.rainCards) {
+            if (c.taken) continue;
+            if (Math.abs(p.x - c.x) < 32 && Math.abs(p.y - c.y) < 40) {
+              c.taken = true;
+              this.rainCursor = c.type;
+              game.audio.play('seedlift');
+              return true;
+            }
           }
         }
         return false;

@@ -266,6 +266,8 @@ const Renderer = {
     if (board.vaseDave) this.drawVaseDave(ctx, board.vaseDave);
     // ---- 浓雾 (原版 Board::DrawFog: 逐格 8-cel + 呼吸波动) ----
     if (board.scene === 'fog') this.drawFog(ctx, board);
+    // ---- 雨 (原版 Challenge::DrawRain — 雨天种子/暴风雨夜双层斜雨) ----
+    if (board.level.rainingSeeds || board.level.stormy) this.drawRain(ctx, board);
   },
 
   // ---- 罐子关轮间戴夫 + 对话框 (原版 UpdateLevelEndSequence + AdvanceCrazyDaveDialog) ----
@@ -455,6 +457,32 @@ const Renderer = {
         ctx.drawImage(img2, posX, posY, celW, celH);
         if (x === 8) ctx.drawImage(img2, posX + 80, posY, celW, celH);
         ctx.restore();
+      }
+    }
+  },
+
+  // ---- 雨 (原版 Challenge::DrawRain Challenge.cpp 2788-2835 逐句移植) ----
+  // rain.png 100×100 平铺; 远景层 1x (X 100tick 移 -100 / Y 20tick 落 +100)
+  // + 近景层 1.5x (X 161tick / Y 33tick) — 双层视差斜雨
+  drawRain(ctx, board) {
+    const rain = Assets.image('rain.png');
+    if (!rain) return;
+    const t = Math.max(0, board.time) * 100;   // 原版 mEffectCounter (100Hz tick)
+    // 远景: aTimeOffsetXEst = lerp(0,-100, t%100/100); aTimeOffsetYEst = lerp(-100,0, t%20/20)
+    const txd = -100 * ((t % 100) / 100);
+    const tyd = -100 + 100 * ((t % 20) / 20);
+    for (let h = 9; h > 0; h--) {
+      for (let v = 7; v > 0; v--) {
+        ctx.drawImage(rain, txd + 100 * h, tyd + 100 * v);
+      }
+    }
+    // 近景 1.5x: aTimeOffsetXCls = lerp(0,-100, t%161/161); aTimeOffsetYCls = lerp(-100,0, t%33/33)
+    const txn = -100 * ((t % 161) / 161);
+    const tyn = -100 + 100 * ((t % 33) / 33);
+    const S = 1.5;
+    for (let h = 0; h < 9; h++) {
+      for (let v = 0; v < 7; v++) {
+        ctx.drawImage(rain, (h * 100 + txn) * S, (v * 100 + tyn) * S, 100 * S, 100 * S);
       }
     }
   },
