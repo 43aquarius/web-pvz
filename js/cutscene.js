@@ -834,7 +834,7 @@ const Transition = {
 //   Store_SpeechBubble2 @ (285,20), 文本区 Rect(310,26,233,144) 黑字居中,
 //   "click to continue" @ (424,160) FONT_PICO129
 // ============================================================
-function drawDaveDialog(ctx, text, blinkT) {
+function drawDaveDialog(ctx, text, blinkT, opts = {}) {
   const bubble = Assets.image('store_speechbubble2');
   ctx.save();
   if (bubble) {
@@ -867,11 +867,13 @@ function drawDaveDialog(ctx, text, blinkT) {
   const startY = 98 - (shown.length - 1) * lineH / 2;   // 区域 (310..543, 26..170) 垂直居中
   shown.forEach((ln, i) => ctx.fillText(ln, 426, startY + i * lineH));
   // click to continue (闪烁)
-  const a = 0.55 + 0.45 * Math.sin((blinkT || 0) * 6);
-  ctx.globalAlpha = a;
-  ctx.font = '12px "Noto Sans SC", sans-serif';
-  ctx.fillStyle = '#333';
-  ctx.fillText('点击继续', 424, 165);
+  if (!opts.noHint) {
+    const a = 0.55 + 0.45 * Math.sin((blinkT || 0) * 6);
+    ctx.globalAlpha = a;
+    ctx.font = '12px "Noto Sans SC", sans-serif';
+    ctx.fillStyle = '#333';
+    ctx.fillText('点击继续', 424, 165);
+  }
   ctx.restore();
 }
 

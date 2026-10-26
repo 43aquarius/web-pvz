@@ -10,6 +10,8 @@
 
 const { CONST, PLANTS, ZOMBIES, LEVELS, SEED_ORDER, SHOP_ITEMS, availablePlants, awardPlantForLevel, MUSHROOMS, AQUATIC, UPGRADES } = require('./data');
 const RE = require('./reanim');
+const { H_OFFSET } = require('./plants');
+const { drawDaveDialog } = require('./cutscene');
 const __getUI = () => { const m = (window.__mods && window.__mods['ui']) || require('./ui'); return m && m.UI; };
 
 const img = (name) => Assets.image(name);
@@ -1966,8 +1968,16 @@ Screens.zengarden = {
   },
   GARDEN_LABEL: { greenhouse: '禅境花园', mushroomgarden: '蘑菇园', aquarium: '水族馆' },
   BG: { greenhouse: 'background_greenhouse.jpg', mushroomgarden: 'background_mushroomgarden.jpg', aquarium: 'aquarium1.jpg' },
-  COIN_IMG: { silver: 'coin_silver2.png', gold: 'coin_gold2.png', diamond: 'diamond.png' },
   COIN_VAL: { silver: 10, gold: 25, diamond: 100 },
+  // 原版 PlantPottedDrawHeightOffset (ZenGarden.cpp:1190-1267): [高度偏移, 缩放修正]
+  POTTED_DH: {
+    GRAVEBUSTER: [50, 15], PUFFSHROOM: [10, 24], SUNSHROOM: [10, 17], SCAREDYSHROOM: [5, 5],
+    TANGLEKELP: [-18, 20], SEASHROOM: [-20, 15], LILYPAD: [-10, 30],
+    HYPNOSHROOM: [0, 10], MARIGOLD: [0, 10], PEASHOOTER: [0, 10], REPEATER: [0, 10], LEFTPEATER: [0, 10],
+    SNOWPEA: [0, 10], THREEPEATER: [0, 10], SUNFLOWER: [0, 10], STARFRUIT: [10, 24],
+    CABBAGEPULT: [3, 10], MELONPULT: [3, 10], POTATOMINE: [0, 5], TORCHWOOD: [0, 3],
+    SPIKEWEED: [-13, 10], BLOVER: [0, 10], PUMPKIN: [0, 20], PLANTERN: [0, -1],
+  },
 
   // ---- 工具栏常量 (原版 GetZenButtonRect: y=0 起, 每可用工具 +SHOVELBANK 宽) ----
   SLOT_W: 70, SLOT_H: 72, TRAY_Y: 0,
@@ -2011,6 +2021,48 @@ Screens.zengarden = {
     if (game.purchased.mushroomgarden) g.push('mushroomgarden');
     if (game.purchased.aquarium) g.push('aquarium');
     return g;
+  },
+
+  // 原版 PlantPottedDrawHeightOffset: height + (scale*fix − fix)
+  pottedDH(seed, scale) {
+    const e = seed ? this.POTTED_DH[seed] : null;
+    return e ? e[0] + e[1] * (scale - 1) : 0;
+  },
+  // 原版 PlantFlowerPotHeightOffset (Plant.cpp:3485-3535): 盆上植物偏移 (mini 绘制用)
+  flowerPotOff(seed, scale) {
+    let h = -5 * scale, fix = 0;
+    if (seed === 'CHOMPER' || seed === 'PLANTERN') h -= 5;
+    else if (seed === 'SCAREDYSHROOM') { h += 5; fix = -8; }
+    else if (seed === 'SUNSHROOM' || seed === 'PUFFSHROOM' || seed === 'SEASHROOM' || seed === 'POTATOMINE') fix = -4;
+    else if (seed === 'LILYPAD') fix = -16;
+    else if (seed === 'COFFEEBEAN') fix = -20;
+    else if (['HYPNOSHROOM', 'MAGNETSHROOM', 'PEASHOOTER', 'REPEATER', 'LEFTPEATER', 'SNOWPEA', 'THREEPEATER',
+      'SUNFLOWER', 'MARIGOLD', 'CABBAGEPULT', 'MELONPULT', 'TANGLEKELP', 'BLOVER', 'SPIKEWEED'].includes(seed)) fix = -8;
+    return h + (scale * fix - fix);
+  },
+  // 原版 Plant::UpdateReanim 盆栽分支 (Plant.cpp:2798-2849) 精确移植:
+  //   y = 格Y + H_OFFSET[seed] −5(盆上) + 成长插值Y + PottedDH; 面左镜像 x+80−animX, scaleX 取负
+  plantDrawParams(p, garden) {
+    const seed = (p.age > 0 && p.seed) ? p.seed : null;
+    const g = garden || p.garden;
+    const inPot = g === 'greenhouse' || (g === 'mushroomgarden' && seed && AQUATIC.has(seed));
+    // 成长状态 (原版 mStateCountdown=100 帧线性插值)
+    let ax = 0, ay = 0, sc = 1;
+    if (p.age === 1) { ax = 20; ay = 40; sc = 0.5; }
+    else if (p.age === 2) {
+      if (p.growT > 0) { const k = 1 - p.growT / 1.6; ax = 20 - 10 * k; ay = 40 - 20 * k; sc = 0.5 + 0.25 * k; }
+      else { ax = 10; ay = 20; sc = 0.75; }
+    } else if (p.age === 3 && p.growT > 0) {
+      const k = 1 - p.growT / 1.6; ax = 10 - 10 * k; ay = 20 - 20 * k; sc = 0.75 + 0.25 * k;
+    }
+    const isPotato = seed === 'POTATOMINE';
+    if (isPotato) sc *= 0.8;                       // 原版 UpdateReanim 土豆雷特例
+    let dy = (seed ? (H_OFFSET[seed] || 0) : 0) + (inPot ? -5 : 0) + ay + (isPotato ? 12 : 0);
+    let dx = isPotato ? 12 : 0;
+    if (p.facing === 1) dx = 80 + dx - ax - (isPotato ? 6 : 0);   // 面左镜像 (80 锚点 + ZenPlantOffsetX)
+    else dx += ax;
+    dy += this.pottedDH(seed, sc);
+    return { dx, dy, sx: p.facing === 1 ? -sc : sc, sy: sc, sc, inPot };
   },
 
   // ---------- 存档 (PottedPlant 列表, 原版 mPlayerInfo->mPottedPlant) ----------
@@ -2162,6 +2214,7 @@ Screens.zengarden = {
     this._ready = false;
     this.daveAnim = null;
     this.trayIdle = 0; this.trayFade = 0;    // ZEN_FADING: 30s 无操作 → 0.8s 上滑隐藏
+    this.bankT = 0;                          // 金币银行显示计时 (原版 ShowCoinBank 300 帧)
     this.advice = null;
     this.puffs = [];               // 种植尘土粒子
     const game = Screens.game;
@@ -2183,6 +2236,21 @@ Screens.zengarden = {
     }
     // 恢复中断的教程步进 (从商店回来等)
     this.tut = this.data.tutStep ? { step: this.data.tutStep } : null;
+    this._daveIdle = false;
+    // 教程自愈: 中断存档若已满足后续条件直接推进 (防主菜单按钮永久隐藏;
+    //   首次进入的教程对话进行中不兜底 — 2102 句会赠送 2 株金盏花芽)
+    if (this.tut && this.tut.step !== 'done' && !(this.bubble && this.bubble.tutorial)) {
+      const ps = this.data.plants.filter(q => q.garden !== 'wheelbarrow');
+      if (ps.length === 0) {
+        for (let i = 0; i < 2; i++) this.addPottedPlant(this.newPlant('MARIGOLD', { isMarigold: true, feedingsPerGrow: 3 }));
+        this.finishTutorial(game);
+      } else if (ps.every(q => q.age >= 1)) {
+        this.finishTutorial(game);
+      } else if (['water_plant', 'keep_watering'].includes(this.tut.step) && ps.some(q => this.getNeed(q) === 'fertilizer')) {
+        this.tut.step = 'visit_store'; this.data.tutStep = 'visit_store';
+        this.save();
+      }
+    }
   },
   leaveToMenu(game) {
     // 原版 LeaveGarden: 未收金币自动入账 + 工具立即结算
@@ -2194,9 +2262,9 @@ Screens.zengarden = {
     for (const t of this.tools) this.applyToolEffect(t);
     this.tools = [];
     let got = 0;
-    for (const c of this.coins) if (!c.collected) { got += c.value; c.collected = true; }
+    for (const c of this.coins) if (!c.scored) { got += c.value; c.scored = true; }
     if (got > 0 && game) { game.coins += got; game.saveShop(); }
-    this.coins = this.coins.filter(c => !c.collected);
+    this.coins = [];
     if (this.stinky) this.data.stinkyPos = [Math.round(this.stinky.x), Math.round(this.stinky.y)];
     // 教程中断保护: 尚无植物 → 补 2 株金盏花芽并结束教程 (原版 2102 赠礼的兜底)
     if (this.tut && this.tut.step !== 'done' && this.data.plants.length === 0) {
@@ -2271,7 +2339,9 @@ Screens.zengarden = {
   // PlantWatered (ZenGarden.cpp:648-674): 计数+1, 时间戳回拨0-8s, 掉银币; 成熟且无需求 → 随机产生除虫/唱片需求
   plantWatered(p, pos) {
     p.timesFed++;
-    p.lastWatered = this.now() - Math.floor(Math.random() * 9);
+    // 原版: 时间回拨 0-8s; 教程浇水步固定 9s (延迟需求再现)
+    const tutWater = this.tut && (this.tut.step === 'water_plant' || this.tut.step === 'keep_watering');
+    p.lastWatered = this.now() - (tutWater ? 9 : Math.floor(Math.random() * 9));
     const game = Screens.game;
     if (game) game.audio.play('points');   // FOLEY_SPAWN_SUN
     this.dropCoin(pos.x + 40, pos.y, 'silver');
@@ -2305,12 +2375,14 @@ Screens.zengarden = {
       if (p.seed === 'MARIGOLD') this.dropCoin(pos.x + 40, pos.y, 'diamond');
       else { this.dropCoin(pos.x + 10, pos.y, 'diamond'); this.dropCoin(pos.x + 70, pos.y, 'diamond'); }
     }
-    // 教程: 全部脱离芽期 → 完成; 肥料耗尽 → 免费补 5 (原版 DoFeedingTool 教程分支)
+    // 教程: 全部脱离芽期 → 完成; 肥料耗尽 → 免费补 5 (原版 DoFeedingTool 教程分支;
+    //   赠礼同时标记已购 — 原版 purchases[FERTILIZER]=OFFSET+5 使工具栏常驻显示)
     if (this.tut && this.tut.step === 'fertilize') {
       if (this.data.plants.every(q => q.age >= 1)) {
         this.finishTutorial(game);
       } else if ((this.data.fertilizer || 0) <= 0) {
         this.data.fertilizer = 5;
+        if (game) game.purchased.fertilizer = true;
         this.setAdvice('戴夫又给了你一些肥料！');
       }
     }
@@ -2372,8 +2444,12 @@ Screens.zengarden = {
     return (PLANTS[p.seed] && PLANTS[p.seed].cn) || '植物';
   },
   dropCoin(x, y, type) {
-    // 原版 COIN_MOTION_COIN: 上抛落到盆边地面, 停留至点击/蜗牛收取
-    this.coins.push({ x: x + (Math.random() * 14 - 7), y: y - 6, vy: -90 - Math.random() * 60, groundY: y + 46, type, value: this.COIN_VAL[type], t: 0, collected: false, fadeT: 0 });
+    // 原版 COIN_MOTION_COIN (Coin.cpp:334-358): vy −3~−5px/帧, vx ±0.5, 落地点 y+45+rand(20)
+    this.coins.push({
+      x, y, vx: -30 + Math.random() * 60, vy: -180 - Math.random() * 120,
+      groundY: Math.max(80, Math.min(521, y + 45 + Math.random() * 20)),
+      type, value: this.COIN_VAL[type], t: 0, hitGround: false, collected: false, scored: false, anim: null,
+    });
   },
 
   // ---------- 工具动画 (原版 GRIDITEM_ZEN_TOOL: 动画播完 DoFeedingTool 才生效) ----------
@@ -2418,7 +2494,9 @@ Screens.zengarden = {
         if (p.garden !== this.data.garden) continue;
         if (this.getNeed(p) !== 'water') continue;
         const pos = this.cellPos(p.x, p.y);
-        if (Math.abs(pos.x + 40 - t.goldArea.x) <= 85 && Math.abs(pos.y + 42 - t.goldArea.y) <= 95) {
+        // 原版 IsPlantInGoldWateringCanRange: 植物中心 (x+40,y+40) ∈ [mx−70,mx+90)×[my−80,my+80)
+        if (pos.x + 40 >= t.goldArea.x - 70 && pos.x + 40 < t.goldArea.x + 90 &&
+            pos.y + 40 >= t.goldArea.y - 80 && pos.y + 40 < t.goldArea.y + 80) {
           this.plantWatered(p, pos);
         }
       }
@@ -2497,7 +2575,7 @@ Screens.zengarden = {
   stinkyTurn(s, dir) {
     s.dir = dir; s.state = 'turn'; s.turnT = 0;
     s.trail = [];
-    if (s.r) { try { s.r.play('anim_turn', RE.PLAY_ONCE_HOLD, 10, 6); } catch (e) { } }
+    if (s.r) { try { s.r.playReanim('anim_turn', RE.PLAY_ONCE_HOLD, 10, 6); } catch (e) { } }   // 原版: blend 10, rate 6
   },
   wakeStinky(silent) {
     const s = this.stinky;
@@ -2506,7 +2584,7 @@ Screens.zengarden = {
     this.save();
     if (s.state === 'sleep' || s.state === 'falling') {
       s.state = 'waking'; s.wakeT = 0;
-      if (s.r) { try { s.r.play('anim_out', RE.PLAY_ONCE_HOLD, 20, 6); } catch (e) { } }
+      if (s.r) { try { s.r.playReanim('anim_out', RE.PLAY_ONCE_HOLD, 20, 6); } catch (e) { } }
     }
     if (!silent) {
       const game = Screens.game;
@@ -2529,7 +2607,7 @@ Screens.zengarden = {
     if (s.state === 'falling') {
       if (s.r && s.r.loopCount > 0) {
         s.state = 'sleep';
-        if (s.r) { try { s.r.play('anim_out', RE.PLAY_ONCE_HOLD, 0, 0); } catch (e) { } }   // 原版: 冻结帧睡姿
+        if (s.r) { try { s.r.playReanim('anim_out', RE.PLAY_ONCE_HOLD, 0, 0); s.r.animRate = 0; } catch (e) { } }   // 原版: 冻结帧睡姿
       }
       return;
     }
@@ -2540,7 +2618,7 @@ Screens.zengarden = {
     if (s.state === 'waking') {
       if (s.r && s.r.loopCount > 0) {
         s.state = 'walk';
-        if (s.r) { try { s.r.play('anim_crawl', RE.LOOP, 10, high ? 12 : 6); } catch (e) { } }
+        if (s.r) { try { s.r.playReanim('anim_crawl', RE.LOOP, 10, high ? 12 : 6); } catch (e) { } }
         this.stinkyPickGoal(s);
       }
       return;
@@ -2549,7 +2627,7 @@ Screens.zengarden = {
       s.turnT += dt;
       if (s.r && s.r.loopCount > 0) {
         s.state = 'walk';
-        if (s.r) { try { s.r.play('anim_crawl', RE.LOOP, 10, high ? 12 : 6); } catch (e) { } }
+        if (s.r) { try { s.r.playReanim('anim_crawl', RE.LOOP, 10, high ? 12 : 6); } catch (e) { } }
       }
       return;
     }
@@ -2559,7 +2637,7 @@ Screens.zengarden = {
       if (s.y < 461) {
         if (s.goalY !== 461) s.goalY = 471;
       } else {
-        if (s.dir < 0) { s.state = 'falling'; if (s.r) { try { s.r.play('anim_in', RE.PLAY_ONCE_HOLD, 20, 6); } catch (e) { } } }
+        if (s.dir < 0) { s.state = 'falling'; if (s.r) { try { s.r.playReanim('anim_in', RE.PLAY_ONCE_HOLD, 20, 6); } catch (e) { } } }
         else { this.stinkyTurn(s, -1); s.goalX = s.x; s.goalY = s.y; }
         return;
       }
@@ -2568,10 +2646,10 @@ Screens.zengarden = {
     // 持巧克力但未兴奋 → 停下盯住 (原版 anim_idle + 速度 0)
     const frozen = chocCursor && !high;
     if (frozen) {
-      if (s.r && !s.r.isPlaying('anim_idle')) { try { s.r.play('anim_idle', RE.LOOP, 10, 6); } catch (e) { } }
+      if (s.r && !s.r.isPlaying('anim_idle')) { try { s.r.playReanim('anim_idle', RE.LOOP, 10, 6); } catch (e) { } }
       return;
     }
-    if (s.r && !s.r.isPlaying('anim_crawl')) { try { s.r.play('anim_crawl', RE.LOOP, 10, high ? 12 : 6); } catch (e) { } }
+    if (s.r && !s.r.isPlaying('anim_crawl')) { try { s.r.playReanim('anim_crawl', RE.LOOP, 10, high ? 12 : 6); } catch (e) { } }
     if (s.r && s.state === 'walk') s.r.animRate = high ? 12 : 6;   // 原版 StinkyAnimRateUpdate 每帧同步
     // 原版: aSpeedX=轨道速度x15 (≈75px/s), 纵向 0.5px/帧=30px/s × 距离曲线; 巧克力 ×2
     const sp = high ? 150 : 75;
@@ -2592,17 +2670,35 @@ Screens.zengarden = {
   // ---------- 更新 ----------
   update(dt) {
     if (!this.data) return;
-    // 掉落金币物理
+    // 排落金币 (原版 Coin::UpdateFall / UpdateCollected)
     for (const c of this.coins) {
-      if (c.collected) continue;
       c.t += dt;
-      if (c.vy !== 0 || c.y < c.groundY) {
-        c.vy += 420 * dt;
-        c.y = Math.min(c.groundY, c.y + c.vy * dt);
-        if (c.y >= c.groundY) c.vy = 0;
+      if (c.collected) {
+        // 收取: 指数逼近金币银行 (442,558), 每帧 Δ/21
+        const k = Math.min(1, dt * 60);
+        c.x += (442 - c.x) / 21 * k;
+        c.y += (558 - c.y) / 21 * k;
+        if (Math.hypot(442 - c.x, 558 - c.y) < 12) this.scoreCoin(c);
+      } else if (!c.hitGround) {
+        c.vy += 540 * dt;
+        c.y += c.vy * dt;
+        c.x += c.vx * dt;
+        if (c.x < 0) { c.x = 0; c.vx = 24 + Math.random() * 24; }
+        else if (c.x > 757) { c.x = 757; c.vx = -24 - Math.random() * 24; }
+        if (c.y >= c.groundY) { c.y = c.groundY; c.hitGround = true; }
       }
     }
-    this.coins = this.coins.filter(c => !c.collected || c.t < c.fadeT);
+    this.coins = this.coins.filter(c => !c.scored);
+    // 金币银行显示计时 (原版 mCoinBankFadeCount 300 帧, 末 15 帧淡出)
+    if (this.bankT > 0) this.bankT = Math.max(0, this.bankT - dt);
+    // 戴夫动画 (原版 UpdateCrazyDave: 入场完 → 待机)
+    if (this.daveAnim && this.bubble) {
+      this.daveAnim.update(dt);
+      if (this.daveAnim.loopCount > 0 && !this._daveIdle) {
+        this._daveIdle = true;
+        try { this.daveAnim.play(this.bubble.sell ? 'anim_blahblah' : 'anim_idle', RE.LOOP, 12); } catch (e) { }
+      }
+    }
     // 每株植物独立动画推进 + 成长计时 + 产币 (原版 PottedPlantUpdate)
     for (const p of this.data.plants) {
       if (p.garden !== this.data.garden) continue;
@@ -2638,6 +2734,17 @@ Screens.zengarden = {
     }
     this.tools = this.tools.filter(t => !t.done);
     // 蜗牛
+    // reanim 自愈: enter 时分包未就绪 → 就绪后补建 (睡姿冻结/爬行循环)
+    if (this.stinky && !this.stinky.r && RE.hasDef('stinky')) {
+      try {
+        const r = Assets.reanim('Stinky');
+        r.overrideScale(0.8, 0.8);
+        const asleep = this.stinky.state === 'sleep';
+        r.playReanim(asleep ? 'anim_out' : 'anim_crawl', asleep ? RE.PLAY_ONCE_HOLD : RE.LOOP, asleep ? 0 : 10, 6);
+        if (asleep) r.animRate = 0;
+        this.stinky.r = r;
+      } catch (e) { }
+    }
     this.stinkyUpdate(dt);
     // 尘土/星光粒子
     for (const q of this.puffs) {
@@ -2664,41 +2771,67 @@ Screens.zengarden = {
   },
 
   collectCoin(c, byStinky) {
+    if (c.collected || c.scored) return;
     c.collected = true;
-    c.fadeT = c.t + 0.25;
+    c.flyT = 0;
     const game = Screens.game;
-    if (game) { game.coins += c.value; game.saveShop(); game.audio.play('coin'); }
+    if (game) game.audio.play('coin');
+  },
+  // 原版 ScoreCoin: 飞到银行才入账
+  scoreCoin(c) {
+    if (c.scored) return;
+    c.scored = true;
+    const game = Screens.game;
+    if (game) { game.coins += c.value; game.saveShop(); }
+    this.bankT = 5;   // 原版 mCoinBankFadeCount = 300 帧
   },
 
   // ---------- 绘制 ----------
-  // 迷你整株盆栽 (光标/推车格预览; 原版 DrawPottedPlant)
+  // 原版 REANIM_SLEEPING: 小 Z 上升渐隐 (主场景同款 22px, 比例 2:3)
+  drawZzz(ctx, x, y, t, seed) {
+    const zimg = img('zzz');
+    const p = ((t * 0.625) + (seed || 0) * 0.37) % 1;
+    ctx.save();
+    ctx.globalAlpha = (1 - p) * 0.95;
+    if (zimg) {
+      ctx.drawImage(zimg, x + p * 8 - 11, y - 16 - p * 18, 22, 33);
+    } else {
+      ctx.font = 'bold 16px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillStyle = '#fff';
+      ctx.strokeText('Z', x + p * 8, y - p * 18);
+      ctx.fillText('Z', x + p * 8, y - p * 18);
+    }
+    ctx.restore();
+  },
+
+  // 迷你整株盆栽 (原版 DrawPottedPlant: 光标/推车预览; 盆 @ y+26·scale, 植物按原版偏移)
   drawPlantMini(ctx, p, x, y, scale, withPot) {
-    const garden = this.data.garden;
     const aquatic = p.seed && AQUATIC.has(p.seed);
     if (withPot) {
       const pm = this.potModel(false, !!aquatic);
-      if (pm) { ctx.save(); pm.setPosition(x, y); pm.draw(ctx); ctx.restore(); }
+      if (pm) { ctx.save(); pm.setPosition(x, y + 26 * scale); pm.draw(ctx); ctx.restore(); }
     }
-    const flip = p.facing === 1;
-    if (p.age === 0) {
-      const m = this.sproutModel(p.isMarigold);
-      if (m) {
-        ctx.save();
-        if (flip) { ctx.translate(x + 40, 0); ctx.scale(-1, 1); ctx.translate(-(x + 40), 0); }
-        m.setPosition(x, y - 6); m.draw(ctx);
-        ctx.restore();
-      }
-      return;
-    }
-    const r = this.plantModel(p);
+    const seed = (p.age > 0 && p.seed) ? p.seed : null;
+    let r = null;
+    if (p.age === 0) r = this.sproutModel(p.isMarigold);
+    else r = this.plantModel(p);
     if (!r) return;
-    const sc = [0, 0.5, 0.75, 1][p.age] * scale;
-    const off = [0, [20, 40], [10, 20], [0, 0]][p.age];
+    // 原版 DrawPottedPlant: offsetY = H_OFFSET + FlowerPotOffset(scale) + 年龄偏移·scale + PottedDH
+    let ax = 0, ay = 0, asc = 1;
+    if (p.age === 1) { ax = 20; ay = 40; asc = 0.5; }
+    else if (p.age === 2) { ax = 10; ay = 20; asc = 0.75; }
+    const sc = asc * scale;
+    let dy = (seed ? (H_OFFSET[seed] || 0) : 0);
+    if (withPot) dy += this.flowerPotOff(seed, scale);
+    dy += ay * scale + this.pottedDH(seed, sc);
+    const faceLeft = p.facing === 1;
+    const dx = faceLeft ? (80 * scale - ax * scale) : (ax * scale);
     ctx.save();
     if (p.seed === 'MARIGOLD' && p.variation >= 0 && p.variation !== 9) ctx.filter = this.MARIGOLD_FILTERS[p.variation];
-    if (flip) { ctx.translate(x + 40, 0); ctx.scale(-1, 1); ctx.translate(-(x + 40), 0); }
-    r.setPosition(x + off[0] * 0.5, y - 6 + off[1] * 0.5);
-    r.overrideScale(sc, sc);
+    r.setPosition(x + dx, y + dy);
+    r.overrideScale(faceLeft ? -sc : sc, sc);
     r.draw(ctx);
     ctx.restore();
   },
@@ -2713,6 +2846,16 @@ Screens.zengarden = {
     const bg = img(this.BG[garden]);
     if (bg) ctx.drawImage(bg, 0, 0, 800, 600);
     else { ctx.fillStyle = '#2a3a1a'; ctx.fillRect(0, 0, 800, 600); }
+    // 原版: 温室/水族馆全屏光效 (IMAGE_BACKGROUND_GREENHOUSE_OVERLAY, ADDITIVE 叠加 — Board.cpp:7165)
+    if (garden === 'greenhouse' || garden === 'aquarium') {
+      const ov = img('background_greenhouse_overlay.jpg');
+      if (ov) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.drawImage(ov, 0, 0, 800, 600);
+        ctx.restore();
+      }
+    }
     // 水族馆: 持植物时空位阴影 (原版 DrawBackdrop: PLANTSHADOW ×1.7 @ (px-35, py+33))
     if (garden === 'aquarium' && (this.heldPlant || this.tool === 'wheelbarrow')) {
       const sh = img('plantshadow.png');
@@ -2727,130 +2870,91 @@ Screens.zengarden = {
         ctx.restore();
       }
     }
-    // ---- 花盆 + 植物 (按 y 排序保证遮挡) ----
+    // ---- 花盆 + 植物 (按 y 排序保证遮挡; 需求气泡二次 pass — 原版 RENDER_LAYER_PARTICLE) ----
     const entries = this.data.plants.filter(p => p.garden === garden);
     entries.sort((a, b) => (this.cellPos(a.x, a.y).y - this.cellPos(b.x, b.y).y) || a.x - b.x);
+    const overlays = [];
     for (const p of entries) {
       const pos = this.cellPos(p.x, p.y);
       const aquatic = p.seed && AQUATIC.has(p.seed);
       const held = this.heldPlant === p;
-      // 花盆 (蘑菇园非水生/水族馆 不带盆 — 原版 PlacePottedPlant needPot)
-      const needPot = !(garden === 'mushroomgarden' && !aquatic) && garden !== 'aquarium';
       const st = this.plantState(p);
-      if (needPot) {
+      const dp = this.plantDrawParams(p, garden);
+      // 花盆 (原版 PlacePottedPlant: FLOWERPOT Plant @ 格Y+26 — H_OFFSET.FLOWERPOT;
+      //   需求期 Pot_top 换 pot_top_dark 湿土色)
+      if (dp.inPot) {
         const pm = this.potModel(st !== 'notready', !!aquatic);
         if (pm) {
           ctx.save();
           if (held) ctx.globalAlpha = 0.45;
-          pm.setPosition(pos.x, pos.y);
+          pm.setPosition(pos.x, pos.y + 26);
           pm.draw(ctx);
           ctx.restore();
         } else {
           const potTop = img(st !== 'notready' ? 'pot_top_dark.png' : 'pot_top.png');
-          if (potTop) { ctx.save(); if (held) ctx.globalAlpha = 0.45; ctx.drawImage(potTop, pos.x, pos.y + 20); ctx.restore(); }
+          if (potTop) { ctx.save(); if (held) ctx.globalAlpha = 0.45; ctx.drawImage(potTop, pos.x + 7, pos.y + 39, 66, 51); ctx.restore(); }
         }
       }
-      // 植物本体 (原版 DrawPottedPlant/UpdateReanim: 小苗 0.5+20/+40, 中苗 0.75+10/+20, 成熟 1.0;
-      //   施肥后 100 帧线性成长动画; 镜像随机)
-      const flip = p.facing === 1;
+      // 植物本体 (原版 UpdateReanim 精确偏移/缩放/镜像: 小苗 (±20,+40)×0.5 / 中苗 (±10,+20)×0.75 / 成熟 ×1.0)
       const sleeping = this.isSleeping(p);
-      if (p.age === 0) {
-        const m = this.sproutModel(p.isMarigold);
-        if (m) {
-          ctx.save();
-          if (held) ctx.globalAlpha = 0.45;
-          ctx.translate(pos.x + 40, 0);
-          if (flip) ctx.scale(-1, 1);
-          ctx.translate(-(pos.x + 40), 0);
-          m.setPosition(pos.x, pos.y - 6);
-          m.draw(ctx);
-          ctx.restore();
-        } else {
-          const sp = img('anim_sprout.png');
-          if (sp) { ctx.save(); const s2 = 1.6 + Math.sin(t * 3 + p.x) * 0.08; ctx.translate(pos.x + 40, pos.y + 22); ctx.scale(s2, s2); ctx.drawImage(sp, -9, -7); ctx.restore(); }
-        }
-      } else {
-        const m = this.plantModel(p);
-        if (m) {
-          // 成长动画插值 (原版 mStateCountdown=100: MEDIUM 0.5→0.75 / FULL 0.75→1.0)
-          let sc = [0, 0.5, 0.75, 1][p.age] || 1;
-          let ox = [0, 20, 10, 0][p.age] || 0, oy = [0, 40, 20, 0][p.age] || 0;
-          if (p.growT > 0 && p.age >= 2) {
-            const k = 1 - p.growT / 1.6;
-            if (p.age === 2) { sc = 0.5 + 0.25 * k; ox = 20 - 10 * k; oy = 40 - 20 * k; }
-            else { sc = 0.75 + 0.25 * k; ox = 10 - 10 * k; oy = 20 - 20 * k; }
+      let m = p.age === 0 ? this.sproutModel(p.isMarigold) : this.plantModel(p);
+      if (m) {
+        // 水族馆水生植物浮动 (原版 doFloating: sin(row·π+col·0.25π+t)·2)
+        let bobY = 0;
+        if (garden === 'aquarium' && aquatic) bobY = Math.sin(t * 2.5 + p.y * Math.PI + p.x * 0.25 * Math.PI) * 2;
+        // 睡眠层切换 (原版 SetSleeping)
+        if (p.age > 0 && sleeping !== !!p._sleepDrawn) {
+          p._sleepDrawn = sleeping;
+          if (m.animExists && m.animExists('anim_sleep') && m.animExists('anim_idle')) {
+            try { m.play(sleeping ? 'anim_sleep' : 'anim_idle', RE.LOOP, sleeping ? 1 : 10 + Math.random() * 5); } catch (e) { }
           }
-          // 睡眠层切换 (原版 SetSleeping: anim_sleep 存在则切换 + 混合)
-          if (sleeping !== !!p._sleepDrawn) {
-            p._sleepDrawn = sleeping;
-            if (m.animExists('anim_sleep') && m.animExists('anim_idle')) {
-              try { m.play(sleeping ? 'anim_sleep' : 'anim_idle', RE.LOOP, 10, sleeping ? 1 : 10 + Math.random() * 5); } catch (e) { }
-            }
-          }
-          // 巧克力兴奋: 动画 ×2 (原版 SetPlantAnimSpeed ≥25)
-          if (this.highOnChocolate(p) && !sleeping) { m.animRate = 26; p._chocBoost = true; }
-          else if (p._chocBoost) { p._chocBoost = false; if (!sleeping) m.animRate = 10 + Math.random() * 5; }
-          ctx.save();
-          if (held) ctx.globalAlpha = 0.45;
-          else if (sleeping && !m.animExists('anim_sleep')) ctx.globalAlpha = 0.8;
-          if (p.seed === 'MARIGOLD' && p.variation >= 0 && p.variation !== 9) ctx.filter = this.MARIGOLD_FILTERS[p.variation];
-          ctx.translate(pos.x + 40, 0);
-          if (flip) ctx.scale(-1, 1);
-          ctx.translate(-(pos.x + 40), 0);
-          m.setPosition(pos.x + ox * 0.5, pos.y - 6 + oy * 0.5);
-          m.overrideScale(sc, sc);
-          m.draw(ctx);
-          ctx.restore();
         }
-      }
-      // 睡觉的夜习性植物: Zzz 贴图 (原版 REANIM_SLEEPING @ (mX+50, mY+40))
-      if (sleeping) {
-        const zzz = img('zzz.png');
+        // 巧克力兴奋: 动画加速 (原版 SetPlantAnimSpeed ≥25)
+        if (this.highOnChocolate(p) && !sleeping) { m.animRate = 26; p._chocBoost = true; }
+        else if (p._chocBoost) { p._chocBoost = false; if (!sleeping) m.animRate = 10 + Math.random() * 5; }
         ctx.save();
-        const bob = Math.sin(t * 2.2 + p.x) * 4;
-        if (zzz) {
-          const s2 = 0.8 + 0.12 * Math.sin(t * 2.2 + p.x);
-          ctx.globalAlpha = 0.9;
-          ctx.translate(pos.x + 52, pos.y - 4 + bob);
-          ctx.scale(s2, s2);
-          ctx.drawImage(zzz, -zzz.width / 2, -zzz.height / 2);
-        } else {
-          ctx.font = 'bold 17px "Noto Sans SC", sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillStyle = 'rgba(255,255,255,0.85)';
-          ctx.fillText('Z', pos.x + 58, pos.y - 2 + bob);
-          ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
-          ctx.fillText('z', pos.x + 70, pos.y - 14 + bob * 1.3);
-        }
+        if (held) ctx.globalAlpha = 0.45;
+        else if (sleeping && !(m.animExists && m.animExists('anim_sleep'))) ctx.globalAlpha = 0.8;
+        if (p.seed === 'MARIGOLD' && p.variation >= 0 && p.variation !== 9) ctx.filter = this.MARIGOLD_FILTERS[p.variation];
+        m.setPosition(pos.x + dp.dx, pos.y + dp.dy + bobY);
+        m.overrideScale(dp.sx, dp.sy);
+        m.draw(ctx);
         ctx.restore();
+      } else if (p.age === 0) {
+        const sp = img('anim_sprout.png');
+        if (sp) { ctx.save(); const s2 = 1.6 + Math.sin(t * 3 + p.x) * 0.08; ctx.translate(pos.x + 40, pos.y + 30); ctx.scale(s2, s2); ctx.drawImage(sp, -9, -7); ctx.restore(); }
       }
-      // 开心光晕 (原版 PARTICLE_POTTED_PLANT_GLOW)
+      // 睡觉的夜习性植物: Zzz (原版 SetSleeping: 附件 @ (mX+50, mY+40))
+      if (sleeping) this.drawZzz(ctx, pos.x + 50, pos.y + 40, t, p.x);
+      // 开心光晕 (原版 PARTICLE_POTTED_PLANT_GLOW @ (盆X+40, 盆Y+63))
       if (st === 'happy') {
         ctx.save();
         const a = 0.28 + 0.1 * Math.sin(t * 3 + p.x + p.y);
-        const g = ctx.createRadialGradient(pos.x + 40, pos.y + 34, 6, pos.x + 40, pos.y + 34, 46);
+        const gy = dp.inPot ? 63 : 60;
+        const g = ctx.createRadialGradient(pos.x + 40, pos.y + gy, 6, pos.x + 40, pos.y + gy, 46);
         g.addColorStop(0, `rgba(255,244,150,${a + 0.25})`);
         g.addColorStop(1, 'rgba(255,244,150,0)');
         ctx.fillStyle = g;
-        ctx.beginPath(); ctx.ellipse(pos.x + 40, pos.y + 34, 46, 50, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(pos.x + 40, pos.y + gy, 46, 50, 0, 0, Math.PI * 2); ctx.fill();
         ctx.restore();
       }
-      // 需求气泡 (原版 DrawPlantOverlay: 气泡(50,0) 图标(61,7)/(60,7) 水滴(67,9))
+      // 需求气泡 → 延迟二次 pass (原版 RENDER_LAYER_PARTICLE, 不被前排花盆遮挡)
       const need = this.getNeed(p);
-      if (need !== 'none' && !held) {
-        const bub = img('plantspeechbubble.png');
-        const bx = pos.x + 50, by = pos.y + 2;
-        if (bub) ctx.drawImage(bub, bx, by);
-        if (need === 'water') {
-          const wd = img('waterdrop.png');
-          if (wd) ctx.drawImage(wd, bx + 17, by + 11);
-        } else {
-          const ni = img('zen_need_icons.png');
-          if (ni) {
-            const idx = need === 'fertilizer' ? 0 : need === 'bugspray' ? 1 : 2;
-            const cw = ni.width / 3;
-            ctx.drawImage(ni, idx * cw, 0, cw, ni.height, bx + 11, by + 7, cw, ni.height);
-          }
+      if (need !== 'none' && !held) overlays.push({ pos, need });
+    }
+    // 需求气泡 pass (原版 DrawPlantOverlay: 气泡(50,0) 肥料/杀虫图标(61,7) 唱片(60,7) 水滴(67,9))
+    for (const o of overlays) {
+      const bub = img('plantspeechbubble.png');
+      const bx = o.pos.x + 50, by = o.pos.y;
+      if (bub) ctx.drawImage(bub, bx, by);
+      if (o.need === 'water') {
+        const wd = img('waterdrop.png');
+        if (wd) ctx.drawImage(wd, o.pos.x + 67, o.pos.y + 9);
+      } else {
+        const ni = img('zen_need_icons.png');
+        if (ni) {
+          const idx = o.need === 'fertilizer' ? 0 : o.need === 'bugspray' ? 1 : 2;
+          ctx.drawImage(ni, idx * 30, 0, 30, 30, o.pos.x + (o.need === 'phonograph' ? 60 : 61), o.pos.y + 7, 30, 30);
         }
       }
     }
@@ -2872,67 +2976,63 @@ Screens.zengarden = {
     for (const tl of this.tools) {
       if (tl.r) { ctx.save(); tl.r.draw(ctx); ctx.restore(); }
     }
-    // 掉落金币
+    // 掉落金币 (原版 Coin::Draw: 飞行中=静态币面+光晕, 落地=旋转 reanim; 钻石=reanim+拾取光晕)
     for (const c of this.coins) {
-      const im = img(this.COIN_IMG[c.type]);
       ctx.save();
-      ctx.globalAlpha = c.collected ? Math.max(0, 1 - (c.t - c.fadeT) / 0.25) : 1;
-      const sq = Math.abs(Math.cos(c.t * 3.2));
       if (c.type === 'diamond') {
-        ctx.translate(c.x, c.y);
-        ctx.rotate(Math.sin(c.t * 2) * 0.15);
-        if (im) ctx.drawImage(im, -12, -14, 24, 28);
-        else {
-          ctx.fillStyle = '#7ae8e0';
-          ctx.beginPath();
-          ctx.moveTo(0, -14); ctx.lineTo(10, -4); ctx.lineTo(0, 14); ctx.lineTo(-10, -4);
-          ctx.closePath(); ctx.fill();
+        // 原版: IMAGE_AWARDPICKUPGLOW @(x−56,y−66) + 钻石 reanim
+        const gl = img('awardpickupglow.png');
+        if (gl) ctx.drawImage(gl, c.x - 56, c.y - 66);
+        if (!c.anim && RE.hasDef('diamond')) {
+          c.anim = Assets.reanim('diamond');
+          if (c.anim) { c.anim.frameStart = 0; c.anim.frameCount = c.anim.def ? c.anim.def.n : 1; c.anim.animRate = 10; c.anim.loopType = RE.LOOP; }
         }
+        if (c.anim) { c.anim.update(1 / 60); c.anim.setPosition(c.x, c.y); c.anim.draw(ctx); }
+        else {
+          // def 未就绪: 静态钻石图回退
+          const dm = img('diamond.png');
+          if (dm) ctx.drawImage(dm, c.x - dm.width / 2, c.y - dm.height / 2);
+        }
+      } else if (c.hitGround && !c.collected && RE.hasDef(c.type === 'gold' ? 'coin_gold' : 'coin_silver')) {
+        // 落地: 旋转金币 reanim (原版 attachment 显现)
+        if (!c.anim) {
+          c.anim = Assets.reanim(c.type === 'gold' ? 'coin_gold' : 'coin_silver');
+          if (c.anim) { c.anim.frameStart = 0; c.anim.frameCount = c.anim.def ? c.anim.def.n : 1; c.anim.animRate = 10; c.anim.loopType = RE.LOOP; }
+        }
+        if (c.anim) { c.anim.update(1 / 60); c.anim.setPosition(c.x, c.y); c.anim.draw(ctx); }
       } else {
-        ctx.translate(c.x, c.y);
-        ctx.scale(Math.max(0.18, sq), 1);
-        if (im) ctx.drawImage(im, -14, -16, 28, 32);
+        // 飞行/收取中/def 未就绪: 静态币面 + 光晕 (原版 DOLLAR @(+8,+10) / COINGLOW @(−14,−12), 中心缩放)
+        const sc = c.collected ? Math.max(0.5, Math.min(1, Math.hypot(442 - c.x, 558 - c.y) * 0.05)) : 1;
+        const gl = img('coinglow.png');
+        if (gl) ctx.drawImage(gl, c.x - 14 - gl.width * sc / 2, c.y - 12 - gl.height * sc / 2, gl.width * sc, gl.height * sc);
+        const im = img(c.type === 'gold' ? 'coin_gold_dollar.png' : 'coin_silver_dollar.png');
+        if (im) ctx.drawImage(im, c.x + 8 - im.width * sc / 2, c.y + 10 - im.height * sc / 2, im.width * sc, im.height * sc);
         else {
           ctx.fillStyle = c.type === 'gold' ? '#ffd34d' : '#cfd6dd';
-          ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(c.x + 8, c.y + 10, 11 * sc, 0, Math.PI * 2); ctx.fill();
         }
       }
       ctx.restore();
     }
-    // 蜗牛 + 残影 (原版 STINKY: 巧克力高速时 UpdateStinkyMotionTrail)
+    // 蜗牛 + 残影 (原版 StinkyUpdate: 面左=原生 +0.8 @(x,y); 面右=镜像 −0.8 @(x+69,y))
     if (this.stinky && this.stinky.r) {
       const s = this.stinky;
+      const stDraw = (sx, sy) => {
+        const faceRight = s.dir > 0;
+        s.r.setPosition(faceRight ? sx + 69 : sx, sy);
+        s.r.overrideScale(faceRight ? -0.8 : 0.8, 0.8);
+        s.r.draw(ctx);
+      };
       ctx.save();
       for (let i = s.trail.length - 1; i >= 1; i--) {
         ctx.globalAlpha = 0.13 * (1 - i / s.trail.length);
-        s.r.setPosition(s.trail[i].x, s.trail[i].y);
-        s.r.overrideScale(0.8 * s.dir, 0.8);
-        s.r.draw(ctx);
+        stDraw(s.trail[i].x, s.trail[i].y);
       }
       ctx.restore();
       ctx.save();
-      s.r.setPosition(s.x, s.y);
-      s.r.overrideScale(0.8 * s.dir, 0.8);
-      s.r.draw(ctx);
-      // 睡眠 Zzz (持巧克力光标时隐藏 — 原版 AssignRenderGroupToPrefix("z", HIDDEN))
-      if (s.state === 'sleep' && this.tool !== 'chocolate') {
-        const zzz = img('zzz.png');
-        ctx.globalAlpha = 0.9;
-        const bob = Math.sin(t * 2) * 3;
-        if (zzz) {
-          const s3 = 0.75 + 0.1 * Math.sin(t * 2);
-          ctx.translate(s.x + 30, s.y - 20 + bob);
-          ctx.scale(s3, s3);
-          ctx.drawImage(zzz, -zzz.width / 2, -zzz.height / 2);
-        } else {
-          ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillStyle = 'rgba(255,255,255,0.85)';
-          ctx.fillText('Z', s.x + 26, s.y - 12 + bob);
-          ctx.font = 'bold 11px "Noto Sans SC", sans-serif';
-          ctx.fillText('z', s.x + 36, s.y - 24 + bob * 1.3);
-        }
-      }
+      stDraw(s.x, s.y);
+      // 睡眠 Zzz (原版挂 shell 轨道 (34,39)×0.8; 持巧克力光标时隐藏)
+      if (s.state === 'sleep' && this.tool !== 'chocolate') this.drawZzz(ctx, s.x + 27, s.y + 31, t, 3);
       ctx.restore();
     }
     // 工具栏 + 顶栏按钮
@@ -2947,40 +3047,24 @@ Screens.zengarden = {
     }
     // 对话气泡 (教程 / 卖花)
     if (this.bubble) this.drawBubble(ctx, game, t);
-    // 底部建议 (原版 DisplayAdvice)
+    // 建议条 (原版 MESSAGE_STYLE_ZEN_GARDEN_LONG: 全宽半透明黑带 @ y=514 h=55, 色彩脉动)
     if (this.advice) {
       const a = this.advice.t > this.advice.life - 0.8 ? Math.max(0, (this.advice.life - this.advice.t) / 0.8) : 1;
+      const pulse = 0.75 + 0.25 * Math.sin(t * 15.7);   // 原版 alpha 192↔255 (BOUNCE_SLOW_MIDDLE 75帧)
       ctx.save();
-      ctx.globalAlpha = a * 0.92;
-      ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
-      const w = ctx.measureText(this.advice.txt).width + 36;
-      const x = 400 - w / 2, y = 552;
-      ctx.fillStyle = 'rgba(20,24,14,0.82)';
-      ctx.strokeStyle = 'rgba(214,190,120,0.9)'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.roundRect(x, y, w, 32, 8); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#f4e8b8';
+      ctx.globalAlpha = a;
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(0, 514, 800, 55);
+      ctx.globalAlpha = a * pulse;
+      ctx.font = 'bold 21px "Noto Sans SC", sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(this.advice.txt, 400, y + 17);
+      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineJoin = 'round';
+      ctx.strokeText(this.advice.txt, 400, 542);
+      ctx.fillStyle = '#fdf5ad';
+      ctx.fillText(this.advice.txt, 400, 542);
       ctx.textBaseline = 'alphabetic';
       ctx.restore();
     }
-  },
-
-  drawMenuButton(ctx) {
-    if (!this.menuVisible()) return;
-    ctx.save();
-    const x = 686, y = 8, w = 104, h = 40;
-    const grad = ctx.createLinearGradient(0, y, 0, y + h);
-    grad.addColorStop(0, '#d9c088'); grad.addColorStop(1, '#a8834a');
-    ctx.fillStyle = grad;
-    ctx.strokeStyle = '#5c4020'; ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.roundRect(x, y, w, h, 8); ctx.fill(); ctx.stroke();
-    ctx.font = 'bold 17px "Noto Sans SC", sans-serif';
-    ctx.fillStyle = '#40280c'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('菜 单', x + w / 2, y + h / 2 + 1);
-    ctx.textBaseline = 'alphabetic';
-    ctx.restore();
-    this._menu = { x: 686, y: 8, w: 104, h: 40 };
   },
 
   // ---- 顶部工具栏 (原版 Board::DrawZenButtons + GetZenButtonRect) ----
@@ -2999,16 +3083,49 @@ Screens.zengarden = {
     return T;
   },
   drawToolBar(ctx, game, t, mouse) {
-    // 菜单 + 金币 + 商店
-    this.drawMenuButton(ctx);
+    const UI = __getUI();
     const tools = this.trayTools(game);
-    // ZEN_FADING: 上滑 72px 隐藏
+    // ZEN_FADING: 50 帧上滑 72px (原版 CURVE_EASE_IN_OUT)
     const ease = this.trayFade * this.trayFade * (3 - 2 * this.trayFade);
     const offY = -72 * ease;
+    // ---- 商店按钮 (原版 mStoreButton @ (678,33) — 在菜单按钮下方; 先画使其被菜单钮压住) ----
+    this._store = null;
+    if (this.storeVisible()) {
+      const sImg = img('zenshopbutton.png');
+      if (sImg) {
+        ctx.drawImage(sImg, 678, 33);
+        this._store = { x: 678, y: 33, w: sImg.width, h: sImg.height };
+      } else if (UI && UI.drawStoneButton) {
+        UI.drawStoneButton(ctx, 678, 36, 104, 40, '商 店', 17);
+        this._store = { x: 678, y: 36, w: 104, h: 40 };
+      } else {
+        ctx.fillStyle = '#a8834a'; ctx.strokeStyle = '#5c4020'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.roundRect(678, 36, 104, 40, 8); ctx.fill(); ctx.stroke();
+        this._store = { x: 678, y: 36, w: 104, h: 40 };
+      }
+    }
+    // ---- 主菜单按钮 (原版 mMenuButton: 石质 [MAIN_MENU_BUTTON] @(628,-10,163,46),
+    //      ZEN_FADING 时滑至 -50; 教程期间隐藏, 完成后出现) ----
+    this._menu = null;
+    if (this.menuVisible()) {
+      const mbY = -10 - 40 * ease;
+      if (UI && UI.drawStoneButton) UI.drawStoneButton(ctx, 628, mbY, 163, 46, '主菜单', 19);
+      else {
+        ctx.fillStyle = '#a8834a'; ctx.strokeStyle = '#5c4020'; ctx.lineWidth = 2;
+        ctx.fillRect(628, mbY, 163, 46);
+      }
+      // 命中区 = 屏内可见部分
+      const visTop = Math.max(0, mbY);
+      if (mbY + 46 > 0) this._menu = { x: 628, y: visTop, w: 163, h: mbY + 46 - visTop };
+    }
+    // ---- 工具槽 (原版 GetZenButtonRect: 非全部工具可用时起始 x=30, 每槽 +70) ----
+    const ZEN_ORDER = ['water', 'fertilizer', 'bugspray', 'phonograph', 'chocolate', 'glove', 'sell', 'wheelbarrow'];
+    const allUsable = ZEN_ORDER.every(k => k === 'water' || tools.some(tl => tl.k === k));
+    const x0 = allUsable ? 0 : 30;
     const bank = img('shovelbank.png');
     this._tools = [];
     tools.forEach((tl, i) => {
-      const x = i * this.SLOT_W, y = this.TRAY_Y;
+      const x = x0 + i * this.SLOT_W, y = this.TRAY_Y;
       this._tools.push({ ...tl, x, y, w: this.SLOT_W, h: this.SLOT_H });
       ctx.save();
       // 槽底 (原版 IMAGE_SHOVELBANK)
@@ -3021,12 +3138,19 @@ Screens.zengarden = {
       // 持有中的工具不在槽内绘制 (原版 skip drawing a tool currently held)
       if (this.tool === tl.k && tl.k !== 'wheelbarrow') { ctx.restore(); return; }
       const [icn, ix, iy] = this.TOOL_ICON[tl.k];
+      // 推车: 满车图标 +4 / 空车 −3 (原版 DrawZenWheelBarrowButton)
+      const byOff = tl.k === 'wheelbarrow' && this.barrowPlant() ? 4 : iy;
       const tim = (tl.k === 'water' && game.purchased.goldwatering) ? img('wateringcangold.png') : img(icn);
       if (tim) {
         ctx.save();
         // 空库存灰化 (原版 SetColorizeImages gray)
         if (tl.count !== undefined && tl.count <= 0) ctx.filter = 'grayscale(1) brightness(0.55)';
-        ctx.drawImage(tim, x + ix, y + offY + iy);
+        // 教程施肥步: 肥料闪烁 (原版 GetFlashingColor(mMainCounter, 75))
+        else if (tl.k === 'fertilizer' && this.tut && this.tut.step === 'fertilize') {
+          const f = 0.5 + 0.5 * Math.sin(t * 8.3);
+          ctx.filter = `brightness(${(1 + f * 0.7).toFixed(2)})`;
+        }
+        ctx.drawImage(tim, x + ix, y + offY + byOff);
         ctx.restore();
       }
       // 数量角标 (原版 "x{N}" 白字 @ (+64,+65) 右对齐)
@@ -3038,7 +3162,7 @@ Screens.zengarden = {
         ctx.strokeText('x' + tl.count, x + 64, y + offY + 65);
         ctx.fillText('x' + tl.count, x + 64, y + offY + 65);
       }
-      // 推车格: 车内植物预览 (原版 DrawZenWheelBarrowButton)
+      // 推车格: 车内植物预览 (原版 DrawZenWheelBarrowButton: (23,-8,0.6)/(28,2,0.5)/(34,12,0.4))
       if (tl.k === 'wheelbarrow') {
         const bp = this.barrowPlant();
         if (bp) {
@@ -3050,13 +3174,13 @@ Screens.zengarden = {
       }
       ctx.restore();
     });
-    // ---- 下一花园按钮 (原版 IMAGE_ZEN_NEXTGARDEN @ x=564) ----
+    // ---- 下一花园按钮 (原版 IMAGE_ZEN_NEXTGARDEN @ x=566, 随 fading 同步滑动; 菜单可见时才画) ----
     this._nextGarden = null;
     const gardens = this.ownedGardens(game);
     if (gardens.length > 1 && this.menuVisible()) {
       const ng = img('zen_nextgarden.png');
-      const nx = 564, ny = Math.round(offY * 0.4);
-      this._nextGarden = { x: nx, y: 0, w: 60, h: 60 };
+      const nx = 566, ny = Math.round(offY);
+      this._nextGarden = { x: 566, y: 0, w: 60, h: 60 };
       if (ng) ctx.drawImage(ng, nx, ny, 60, 60);
       else {
         ctx.save();
@@ -3078,43 +3202,34 @@ Screens.zengarden = {
         ctx.restore();
       }
     }
-    // ---- 商店按钮 (教程 visit_store 步解锁 — 原版 mStoreButton 门控) ----
-    this._store = null;
-    if (this.storeVisible()) {
+    // ---- 金币银行 (原版 DrawUICoinBank: coinbank @(450,568), 绿字右对齐 +116, 收币淡入 5s) ----
+    if (this.bankT > 0) {
+      const cb = img('coinbank.png');
+      const cbH = cb ? cb.height : 31;
+      const a = Math.min(1, this.bankT / 0.25);
       ctx.save();
-      const sx = 700, sy = 530, sw = 84, sh = 46;
-      const grad2 = ctx.createLinearGradient(0, sy, 0, sy + sh);
-      grad2.addColorStop(0, '#d9c088'); grad2.addColorStop(1, '#a8834a');
-      ctx.fillStyle = grad2;
-      ctx.strokeStyle = '#5c4020'; ctx.lineWidth = 2.5;
-      ctx.beginPath(); ctx.roundRect(sx, sy, sw, sh, 8); ctx.fill(); ctx.stroke();
-      ctx.font = 'bold 16px "Noto Sans SC", sans-serif';
-      ctx.fillStyle = '#40280c'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('商 店', sx + sw / 2, sy + sh / 2 + 1);
-      ctx.textBaseline = 'alphabetic';
-      ctx.restore();
-      this._store = { x: 700, y: 530, w: 84, h: 46 };
-      // 金币数
-      ctx.save();
-      const coinI = img('coin_gold2.png');
-      if (coinI) ctx.drawImage(coinI, 586, 540, 26, 30);
-      pvzText(ctx, String(game.coins || 0), 640, 560, 16, '#ffe9a8');
+      ctx.globalAlpha = a;
+      if (cb) ctx.drawImage(cb, 450, 599 - cbH);
+      ctx.font = 'bold 17px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#b4ff5a';
+      ctx.fillText(String(game.coins || 0), 450 + 116, 599 - cbH + 24);
       ctx.restore();
     }
-    // ---- 教程箭头 (原版 ShowTutorialArrowOnWateringCan: downarrow 指向水壶槽上方) ----
+    // ---- 教程箭头 (原版 ShowTutorialArrowOnWateringCan: 粒子 @ 槽位 (+10,+10) 弹跳) ----
     if (this.tut && this.tut.step === 'pickup_water' && this._tools.length) {
       const wt = this._tools[0];
       ctx.save();
       this.arrowT += 1 / 60;
-      const bob = Math.sin(this.arrowT * 5) * 5;
+      const bob = Math.abs(Math.sin(this.arrowT * 4.2)) * 8;
       const da = img('downarrow.png');
-      if (da) ctx.drawImage(da, wt.x + 35 - 16, wt.y - 30 + bob);
+      if (da) ctx.drawImage(da, wt.x + 10, wt.y + 10 + bob - 26);
       else {
         ctx.fillStyle = '#ffe14d'; ctx.strokeStyle = '#7a5a00'; ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(wt.x + 35, wt.y - 4 + bob);
-        ctx.lineTo(wt.x + 21, wt.y - 26 + bob);
-        ctx.lineTo(wt.x + 49, wt.y - 26 + bob);
+        ctx.moveTo(wt.x + 26, wt.y + 26 + bob);
+        ctx.lineTo(wt.x + 12, wt.y + 4 + bob);
+        ctx.lineTo(wt.x + 40, wt.y + 4 + bob);
         ctx.closePath(); ctx.fill(); ctx.stroke();
       }
       ctx.restore();
@@ -3156,62 +3271,46 @@ Screens.zengarden = {
 
   drawBubble(ctx, game, t) {
     const b = this.bubble;
-    // 原版 CrazyDaveEnter: 戴夫本人入场站在花园左侧 (教程 2100-2104 / 卖花 1700 期间)
+    const UI = __getUI();
+    // 原版 CrazyDaveEnter (LawnApp.cpp:2455): AddReanimation(0,0) 全尺寸入场
+    //   (模型 353x853, 头 y≈106, 下半身在屏外, 占屏幕左侧 — 与主场景过场完全一致)
     if (!this.daveAnim) {
       try {
         if (RE.hasDef('CrazyDave')) {
           const d = Assets.reanim('CrazyDave');
-          d.play('anim_idle', RE.LOOP, 18);
+          d.x = 0; d.y = 0;
+          d.play('anim_enter', RE.PLAY_ONCE_HOLD, 24);
           this.daveAnim = d;
         }
       } catch (e) { this.daveAnim = null; }
     }
     if (this.daveAnim) {
       ctx.save();
-      ctx.translate(88, 150);
-      ctx.scale(0.72, 0.72);
       this.daveAnim.setPosition(0, 0);
       this.daveAnim.draw(ctx);
       ctx.restore();
-      if (this.daveAnim.update) this.daveAnim.update(1 / 60);
     }
-    ctx.save();
-    const bx = 220, by = 120, bw = 370, bh = 100;
-    ctx.fillStyle = 'rgba(248,244,224,0.96)';
-    ctx.strokeStyle = '#8a8a7a'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#3a3222';
-    ctx.font = '15px "Noto Sans SC", sans-serif';
-    ctx.textAlign = 'left';
-    const txt = b.lines[b.line] || '';
-    let line = '', yy = by + 30;
-    for (const ch of txt) {
-      if (ctx.measureText(line + ch).width > bw - 40) { ctx.fillText(line, bx + 20, yy); line = ch; yy += 20; }
-      else line += ch;
-    }
-    if (line) ctx.fillText(line, bx + 20, yy);
+    // 对话框 (原版 DrawCrazyDave: Store_SpeechBubble2 @(285,20), 文本区 (310,26,233,144) 黑字居中)
+    drawDaveDialog(ctx, b.lines[b.line] || '', t, { noHint: !!b.sell });
     if (b.sell) {
-      // 卖花确认按钮 (原版 DIALOG_ZEN_SELL BUTTONS_YES_NO)
-      const yes = { x: bx + 60, y: by + bh - 34, w: 90, h: 26 };
-      const no = { x: bx + 210, y: by + bh - 34, w: 90, h: 26 };
+      // 卖花确认 (原版 DIALOG_ZEN_SELL: BUTTONS_YES_NO, 对话框 +120,+60)
+      const yes = { x: 330, y: 218, w: 104, h: 40 };
+      const no = { x: 452, y: 218, w: 104, h: 40 };
       this._sellBtns = { yes, no };
-      for (const [r2, label] of [[yes, '卖！'], [no, '先不卖']]) {
-        ctx.fillStyle = label === '卖！' ? '#c8e8a0' : '#e8d8b0';
-        ctx.strokeStyle = '#6a5a3a'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.roundRect(r2.x, r2.y, r2.w, r2.h, 6); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = '#3a2a10'; ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(label, r2.x + r2.w / 2, r2.y + 18);
+      if (UI && UI.drawStoneButton) {
+        UI.drawStoneButton(ctx, yes.x, yes.y, yes.w, yes.h, '卖！', 17);
+        UI.drawStoneButton(ctx, no.x, no.y, no.w, no.h, '先不卖', 17);
+      } else {
+        for (const [r2, label] of [[yes, '卖！'], [no, '先不卖']]) {
+          ctx.fillStyle = label === '卖！' ? '#c8e8a0' : '#e8d8b0';
+          ctx.strokeStyle = '#6a5a3a'; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.roundRect(r2.x, r2.y, r2.w, r2.h, 6); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = '#3a2a10'; ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(label, r2.x + r2.w / 2, r2.y + 26);
+        }
       }
-    } else {
-      const a = 0.5 + 0.5 * Math.sin(t * 4);
-      ctx.globalAlpha = a;
-      ctx.font = 'bold 12px "Noto Sans SC", sans-serif';
-      ctx.fillStyle = '#8a7a3a';
-      ctx.fillText('点击继续', bx + bw - 80, by + bh - 12);
-      ctx.globalAlpha = 1;
     }
-    ctx.restore();
   },
 
   // ---------- 交互 ----------
@@ -3270,9 +3369,11 @@ Screens.zengarden = {
       game.audio.play('tap');
       return;
     }
-    // 菜单/返回
-    if (this._menu && this.menuVisible() && inRect(p, this._menu.x, this._menu.y, this._menu.w, this._menu.h)) {
+    // 主菜单 (原版: 石质 MAIN_MENU_BUTTON, 普通光标才可点 — CanInteractWithBoardButtons,
+    //   点击直接回主菜单 DoBackToMain; 教程完成态点击同时结束教程)
+    if (this._menu && !this.tool && !this.heldPlant && inRect(p, this._menu.x, this._menu.y, this._menu.w, this._menu.h)) {
       game.audio.play('gravebutton');
+      if (this.tut && this.tut.step !== 'done') this.finishTutorial(game);
       this.leaveToMenu(game);
       game.state = 'menu';
       return;
@@ -3288,8 +3389,8 @@ Screens.zengarden = {
       game.audio.play('gravebutton');
       return;
     }
-    // 商店 (原版 OpenStore 先 LeaveGarden + STORE_PAGE_ZEN1 + 教程期送 5 袋肥料)
-    if (this._store && inRect(p, this._store.x, this._store.y, this._store.w, this._store.h)) {
+    // 商店 (原版 mStoreButton @(678,33): OpenStore 先 LeaveGarden + STORE_PAGE_ZEN1 + 教程期送 5 袋肥料)
+    if (this._store && !this.tool && !this.heldPlant && inRect(p, this._store.x, this._store.y, this._store.w, this._store.h)) {
       this.settleAndLeave(game);
       game.audio.play('buttonclick');
       const shop = Screens.shop;
@@ -3297,9 +3398,9 @@ Screens.zengarden = {
       game.state = 'shop';
       shop.enter();
       shop.page = 2;   // 原版 STORE_PAGE_ZEN1 (园艺工具页)
-      // 教程: 从商店回来 → 施肥步 (原版 OpenStore 返回后 FERTILIZE_PLANTS)
+      // 教程: 从商店回来 → 施肥步 (原版 OpenStore 返回后 FERTILIZE_PLANTS + 送 5 袋肥料)
       if (this.tut && this.tut.step === 'visit_store') {
-        if ((this.data.fertilizer || 0) <= 0) this.data.fertilizer = 5;
+        if ((this.data.fertilizer || 0) <= 0) { this.data.fertilizer = 5; game.purchased.fertilizer = true; }
         this.tut.step = 'fertilize'; this.data.tutStep = 'fertilize';
         this.save();
       }
@@ -3339,8 +3440,8 @@ Screens.zengarden = {
         return;
       }
     }
-    // 蜗牛: 普通光标点击唤醒 / 巧克力喂食 (原版 MouseDownZenGarden STINKY 命中)
-    if (this.stinky && Math.hypot(p.x - this.stinky.x, p.y - this.stinky.y) < 45) {
+    // 蜗牛: 普通光标点击唤醒 / 巧克力喂食 (原版 MouseDownZenGarden STINKY 命中; 视觉体 [x, x+69]×[y, y+50])
+    if (this.stinky && p.x >= this.stinky.x && p.x <= this.stinky.x + 69 && p.y >= this.stinky.y && p.y <= this.stinky.y + 50) {
       if (this.tool === 'chocolate') {
         if ((this.data.chocolate || 0) > 0) {
           this.data.chocolate--;
@@ -3353,9 +3454,9 @@ Screens.zengarden = {
       }
       return;
     }
-    // 金币收集
+    // 金币收集 (原版 ToolHitTest 金币命中优先于格子)
     for (const c of this.coins) {
-      if (!c.collected && Math.abs(p.x - c.x) < 26 && Math.abs(p.y - c.y) < 26) {
+      if (!c.collected && !c.scored && Math.abs(p.x - (c.x + 8)) < 26 && Math.abs(p.y - (c.y + 6)) < 28) {
         this.collectCoin(c, false);
         return;
       }
@@ -3421,7 +3522,7 @@ Screens.zengarden = {
       this.tool = null;
       return;
     }
-    // 出售 (原版 MouseDownWithMoneySign: 戴夫报价 + 确认)
+    // 出售 (原版 MouseDownWithMoneySign: CrazyDaveEnter 重新入场 + 报价 + DIALOG_ZEN_SELL 确认)
     if (tool === 'sell') {
       const price = this.sellPrice(plant);
       this.bubble = {
@@ -3429,6 +3530,8 @@ Screens.zengarden = {
         line: 0, sell: { plant, price },
       };
       this._sellBtns = null;
+      this.daveAnim = null;      // 原版 CrazyDaveEnter: 重新入场动画
+      this._daveIdle = false;
       game.audio.play('gravebutton');
       return;
     }
@@ -3493,12 +3596,15 @@ Screens.zengarden = {
     game.audio.play('points');
   },
 
-  // 新植物入花园 (原版 AddPottedPlant: FindOpenZenGardenSpot 随机空位)
+  // 新植物入花园 (原版 AddPottedPlant: FindOpenZenGardenSpot 随机空位;
+  //   戴夫对话期间跳过其遮挡区 x<2 / y<1 — ZenGarden.cpp:357)
   addPottedPlant(p) {
     const cells = this.gridOf('greenhouse');
     const open = [];
+    const daveTalking = !!(this.bubble && this.bubble.tutorial);
     for (let i = 0; i < cells.length; i++) {
       const x = i % 8, y = Math.floor(i / 8);
+      if (daveTalking && (x < 2 || y < 1)) continue;
       if (!this.data.plants.some(q => q.garden === 'greenhouse' && q.x === x && q.y === y)) open.push([x, y]);
     }
     if (!open.length) return;
