@@ -192,6 +192,16 @@ const Renderer = {
     }
     for (const z of board.zombies) {
       if (z.dead || z.row === -1) continue;
+      // #5 僵王博士分层渲染 (原版 Board::AddBossRenderItem): 4 部位独立渲染序,
+      //   僵尸自然穿插在机器腿前后 (旧实现整机单一 renderOrder 盖在所有僵尸之上)
+      if (z.type === 'BOSS' && z.bossRenderOrders) {
+        const ro = z.bossRenderOrders();
+        list.push({ o: ro.backLeg, d: () => z.drawBossPart(ctx, 'backleg') });
+        list.push({ o: ro.frontLeg, d: () => z.drawBossPart(ctx, 'frontleg') });
+        list.push({ o: ro.main, d: () => z.drawBossPart(ctx, 'main') });
+        list.push({ o: ro.backArm, d: () => z.drawBossPart(ctx, 'backarm') });
+        continue;
+      }
       list.push({ o: z.renderOrder || (z.row * 10000 + RENDER_LAYER.ZOMBIE), d: () => { z.drawShadow(ctx); z.draw(ctx); } });
     }
     // ---- 蹦极僵尸目标十字标志 (原版 Board.cpp 6138-6145: RENDER_ITEM_ZOMBIE_BUNGEE_TARGET,
@@ -454,6 +464,19 @@ const Renderer = {
     // #修复(小推车显示不全): 原版 mPosX=-21 时整机内容左缘 (mPosX+4) 在屏幕外 —
     //   此处右移使整机完整可见: 内容左缘 ≈ 2px (割草机内容 track x -2..68 / 清洁车 3.5..64)
     const baseY = board.getPosYBasedOnRow(m.x + 40, m.row) + 23;
+    // ---- #6 地面阴影 (原版 LawnMower::Draw 285-318: IMAGE_PLANTSHADOW @ (mPosX-7, mPosY+47),
+    //      夜间换 PLANTSHADOW2; 泳池车偏移 (-17,-8); 屋顶车 (-9,-36, scaleY 1.2)) ----
+    // web 系换算: mPosX ≡ m.x+18 (rx = m.x+24 ≡ 原版 mPosX+6) → mPosX-7 ≡ m.x+11
+    const night = board.scene === 'night' || board.scene === 'fog';
+    const shadow = Assets.image(night ? 'plantshadow2' : 'plantshadow');
+    if (shadow) {
+      let shx = m.x + 11, shy = baseY + 47, shsy = 1;
+      if (m.type === 'pool') { shx -= 17; shy -= 8; }
+      else if (m.type === 'roof') { shx -= 9; shy -= 36; shsy = 1.2; }
+      ctx.save();
+      ctx.drawImage(shadow, shx, shy, shadow.width, shadow.height * shsy);
+      ctx.restore();
+    }
     let ry;
     if (m.type === 'pool') {
       ry = baseY + 11;                       // 原版: gridY+34

@@ -3078,10 +3078,11 @@ class Zombie {
     this.reanimShowPrefix('Zombie_outerarm_hand', RG.HIDDEN);
     if (!(flags & DMG.DOESNT_LEAVE_BODY)) {
       // 掉臂粒子从外臂下臂轨道实际位置 (原版 GetTrackPosition("Zombie_outerarm_lower"))
+      // #7 掉落点居中: 补半图偏移 (轨道变换点 = 图像左上角)
       let px = this.x + 50, py = this.y + 40;
       if (r && r.trackExists('Zombie_outerarm_lower')) {
-        const tp = this.getTrackPosition('Zombie_outerarm_lower');
-        if (tp) [px, py] = tp;
+        const tc = this.getTrackCenter('Zombie_outerarm_lower', 'zombie_outerarm_lower');
+        if (tc) [px, py] = tc;
       }
       // 掉落贴图: 原版 PARTICLE_ZOMBIE_ARM OverrideImage 表 (#3 — 旧实现误用 84x125 的
       // 打僵尸手骨图 zombie_hand_arm, 比原版手图大 3 倍)
@@ -3120,15 +3121,16 @@ class Zombie {
     }
     if (!(flags & DMG.DOESNT_LEAVE_BODY)) {
       // 原版 Zombie::DropHead (Zombie.cpp:3537): GetTrackPosition("anim_head1") 头部轨道实际位置
-      //   (旧实现用固定 (x+50,y) 偏移, 头掉落位置与头部脱节) (#4)
+      // #7 掉落点居中: 轨道变换点 = 图像左上角 (实测验证 trackPos==bbox左上) →
+      //   补半图偏移到头部中心, 掉落组合贴图才能对齐僵尸头部 (旧实现整体偏左上 ~21x26px)
       let px = this.x + 50, py = this.y;
       const r = this.bodyReanim;
       if (r) {
         const track = r.trackExists('anim_head1') ? 'anim_head1'
           : r.trackExists('Zombie_head') ? 'Zombie_head' : null;
         if (track) {
-          const tp = this.getTrackPosition(track);
-          if (tp) [px, py] = tp;
+          const tc = this.getTrackCenter(track, 'zombie_head');
+          if (tc) [px, py] = tc;
         }
       }
       this.board.addLimbParticle('head', px, py, null, this.row);
@@ -3142,18 +3144,19 @@ class Zombie {
     let px = this.posX + drawPos.imageOffsetX + drawPos.headX + 14;
     let py = this.posY + drawPos.imageOffsetY + drawPos.headY + drawPos.bodyY + 18;
     let kind = 'helm';   // 掉落贴图分类 (render.js drawLimb 按类选原版独立贴图)
+    let track = null, centerImg = null;   // #7 掉落点居中: 轨道 + 主贴图
     if (this.helmType === 'cone') {
-      [px, py] = this.getTrackPosition('anim_cone') || [px, py];
+      track = 'anim_cone'; centerImg = 'zombie_cone1';
       this.reanimShowPrefix('anim_cone', RG.HIDDEN);
       this.reanimShowPrefix('anim_hair', RG.NORMAL);
       kind = 'cone';
     } else if (this.helmType === 'bucket') {
-      [px, py] = this.getTrackPosition('anim_bucket') || [px, py];
+      track = 'anim_bucket'; centerImg = 'zombie_bucket1';
       this.reanimShowPrefix('anim_bucket', RG.HIDDEN);
       this.reanimShowPrefix('anim_hair', RG.NORMAL);
       kind = 'bucket';
     } else if (this.helmType === 'football') {
-      [px, py] = this.getTrackPosition('zombie_football_helmet') || [px, py];
+      track = 'zombie_football_helmet'; centerImg = 'zombie_football_helmet';
       this.reanimShowPrefix('zombie_football_helmet', RG.HIDDEN);
       this.reanimShowPrefix('anim_hair', RG.NORMAL);
       kind = 'helm';
@@ -3161,8 +3164,15 @@ class Zombie {
       this.reanimShowTrack('Zombie_digger_hardhat', RG.HIDDEN);
       kind = 'helm';
     } else if (this.helmType === 'bobsled') {
+      track = 'anim_bucket'; centerImg = 'zombie_bucket1';
       this.reanimShowPrefix('anim_bucket', RG.HIDDEN);
       kind = 'bucket';
+    }
+    // #7 防具掉落点居中: 轨道变换点 = 图像左上角 → 补半图偏移到防具中心
+    //   (旧实现掉落贴图整体偏左上 半图尺寸, 路障偏 ~30x28px / 铁桶 ~31x34px)
+    if (track) {
+      const tc = this.getTrackCenter(track, centerImg);
+      if (tc) [px, py] = tc;
     }
     this.helmType = null;
     this.helmHealth = 0;
@@ -3305,6 +3315,24 @@ class Zombie {
       const tp = this.bodyReanim.getTrackPosition(name);
       return tp ? [this.x + tp[0], this.y + tp[1]] : null;
     } catch (e) { return null; }
+  }
+
+  // #7 掉落点居中: 轨道变换点 = 图像左上角 (实测: trackPos 与绘制 bbox 左上重合) →
+  //   返回轨道图像「中心」的战场绝对坐标 (半图尺寸 × 轨道当前缩放), 供掉落粒子对齐
+  getTrackCenter(name, imgKey) {
+    const tp = this.getTrackPosition(name);
+    if (!tp) return null;
+    const im = Assets.image(imgKey);
+    if (!im) return tp;
+    let sx = 1, sy = 1;
+    try {
+      const r = this.bodyReanim;
+      if (r && r.trackExists(name)) {
+        const t = r.curTransform(r.trackIndex(name));
+        if (t) { sx = t.sx || 1; sy = t.sy || 1; }
+      }
+    } catch (e) { }
+    return [tp[0] + (im.width || 0) * sx / 2, tp[1] + (im.height || 0) * sy / 2];
   }
 
   dropLoot() {
@@ -3628,6 +3656,11 @@ class Zombie {
 
   mowDown() {
     if (this.isDeadOrDying) return;
+    // 原版 Zombie::MowDown (Zombie.cpp 8618-8636): 被割草机压过瞬间防具/盾牌先被击飞
+    //   (#7 割草机击飞防具 — 旧实现防具直接随压扁动画消失); 报纸/气球/跳跳僵尸额外掉头
+    if (this.shieldType) this.dropShield(0);
+    if (this.helmType) this.dropHelm(0);
+    if (this.type === 'NEWSPAPER' || this.type === 'BALLOON' || this.type === 'POGO') this.dropHead(0);
     this.playZombieReanim('anim_mowed', RE.PLAY_ONCE_HOLD, 0, 30);
     this.board.game.audio.play('mowed');
     this.zombieFade = 100;
@@ -3878,11 +3911,12 @@ class Zombie {
 
     // 绘制主体 (普通组)
     if (this.type === 'BOSS') {
-      // #1 僵王分层绘制 (原版 DrawBossPart): 后腿 → 后臂(带目标偏移) → 主体+驾驶员 → 前腿
-      r.drawRenderGroup(ctx, RG.BOSS_BACK_LEG);
-      this.drawBossBackArm(ctx);
-      r.drawRenderGroup(ctx, RG.NORMAL);
-      r.drawRenderGroup(ctx, RG.BOSS_FRONT_LEG);
+      // #5 僵王分层绘制: 正式渲染走 render.js 四部位独立渲染序 (bossRenderOrders);
+      //   此处仅作兼容兑底 (直接调用 draw() 时按 后腿→后臂→主体→前腿 顺序)
+      this.drawBossPartInner(ctx, 'backleg');
+      this.drawBossPartInner(ctx, 'backarm');
+      this.drawBossPartInner(ctx, 'main');
+      this.drawBossPartInner(ctx, 'frontleg');
     } else if (this.type === 'BOBSLED') {
       // 雪橇前后件
       this.drawBobsledReanim(ctx, dp, true);
@@ -3968,6 +4002,70 @@ class Zombie {
       r.drawRenderGroup(ctx, RG.BOSS_BACK_ARM);
     }
   }
+
+  // ---------------- #5 僵王博士分层渲染 (原版 Board::AddBossRenderItem, Board.cpp 5936-5992) ----------------
+  // 渲染序 = row*10000 + RENDER_LAYER_BOSS(304000) + offset; 4 部位按"行"穿插:
+  //   后腿 row1 / 前腿 row3 / 主体 row4 / 后臂 row4+1 (死亡时后臂降到 row1)
+  //   踩踏中 (animTime 0.25-0.75): 踩第1行后腿升 row2 / 踩第3行前腿降 row4
+  // → 普通僵尸 (303000+row*10000) 自然穿插在机器腿前后 (旧实现整机 400000 盖在所有僵尸之上)
+  bossRenderOrders() {
+    let aBackLegRow = 1, aFrontLegRow = 3, aBackArmRow = 4;
+    const at = this.bodyReanim ? this.bodyReanim.animTime : 0;
+    if (this.isDeadOrDying) {
+      aBackArmRow = 1;
+    } else if (this.phase === PH.BOSS_STOMPING && at > 0.25 && at < 0.75) {
+      if (this.bossTargetRow === 1) aBackLegRow = 2;
+      else if (this.bossTargetRow === 3) aFrontLegRow = 4;
+    }
+    return {
+      backLeg: aBackLegRow * 10000 + 304002,
+      frontLeg: aFrontLegRow * 10000 + 304002,
+      main: 344002,
+      backArm: aBackArmRow * 10000 + 304003,
+    };
+  }
+
+  // 单部位绘制入口 (render.js 四部位独立渲染序调用): 自带平移/颜色状态
+  drawBossPart(ctx, part) {
+    if (this.dead) return;
+    const r = this.bodyReanim;
+    if (!r) return;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    this.drawBossPartInner(ctx, part);
+    ctx.restore();
+  }
+
+  // 单部位绘制 (调用方已完成 ctx.translate(this.x, this.y)) — 颜色状态与 draw() 一致
+  drawBossPartInner(ctx, part) {
+    const r = this.bodyReanim;
+    if (!r) return;
+    let fadeAlpha = 255;
+    if (this.zombieFade >= 0) fadeAlpha = clamp(255 * this.zombieFade / 10, 0, 255);
+    let colorOverride = [255, 255, 255, fadeAlpha];
+    if (this.phase === PH.BURNED) {
+      colorOverride = this._charredReanim ? [255, 255, 255, fadeAlpha] : [0, 0, 0, fadeAlpha];
+    } else if (this.phase !== PH.DYING && this.bodyHealth < this.bodyMaxHealth / 10) {
+      // 原版 Zombie.cpp 5683: 血量 < 1/10 → 灰白呼吸闪烁 (CURVE_BOUNCE 0-39帧 155↔255)
+      const mc = (this.board.mainCounter != null ? this.board.mainCounter : Date.now() / 10) % 40;
+      const t = mc / 39;
+      const gray = Math.round(155 + 100 * (1 - Math.abs(2 * t - 1)));
+      if (this.chilledCounter > 0 || this.iceTrapCounter > 0) {
+        const cold = Math.round(65 + 10 * (1 - Math.abs(2 * t - 1)));
+        colorOverride = [cold, cold, gray, fadeAlpha];
+      } else {
+        colorOverride = [gray, gray, gray, fadeAlpha];
+      }
+    }
+    r.colorOverride = colorOverride;
+    r.extraAdditiveColor = [0, 0, 0, 0];
+    r.enableExtraAdditiveDraw = false;
+    if (part === 'backleg') r.drawRenderGroup(ctx, RG.BOSS_BACK_LEG);
+    else if (part === 'frontleg') r.drawRenderGroup(ctx, RG.BOSS_FRONT_LEG);
+    else if (part === 'backarm') this.drawBossBackArm(ctx);
+    else r.drawRenderGroup(ctx, RG.NORMAL);   // main: 躯干+头+驾驶员(附件随 Boss_head2 轨道)
+  }
+
 
   // 原版 Zombie::DrawIceTrap (Zombie.cpp 6198-6237): 冰冻冰晶前后两层
   //   icetrap2(后层, 主体之前绘) / icetrap(前层冰晶) @ 僵尸局部 (46, bodyY+92)

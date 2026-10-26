@@ -113,9 +113,12 @@ Screens.title = {
 Screens.menu = {
   inst: null, leafInst: null, clouds: [], flowers: [],
   buttons: [],
-  state: 'open',       // open(滑入) → sign(木牌) → idle
+  state: 'open',       // open(滑入) → newuser(姓名输入 #2) → sign(木牌) → idle
   hover: null,
   lockMsg: null,       // 模式锁定消息框 (原版 MODE_LOCKED LawnMessageBox) (#6)
+  starting: null,      // #1 冒险开场僵尸大手过场 (原版 mStartingGame)
+  newUser: null,       // #2 NewUserDialog 姓名输入对话框
+  _nameAsked: false,   // 本次会话是否已询问过姓名 (取消后不重复弹)
 
   // 原版 GameSelector::ButtonDepress: 锁定时弹 [MODE_LOCKED] 消息框 (#6)
   showLockMsg(game, name) {
@@ -178,14 +181,253 @@ Screens.menu = {
     this.state = 'open';
   },
 
+  // 木牌落下 (原版 SELECTOR_NEW_USER 关闭后 → anim_sign)
+  playSign() {
+    if (!this.inst) { this.state = 'idle'; return; }
+    this.inst.play('anim_sign', RE.PLAY_ONCE_HOLD, 30);
+    this.state = 'sign';
+  },
+
+  // ================================================================
+  // #2 NewUserDialog (原版 NewUserDialog.cpp 28-121 + LawnDialog 纸质拼图)
+  //   标题「新用户」+「请输入你的名字:」+ 12字符输入框 + 确定/取消
+  // ================================================================
+  showNewUser() {
+    this.newUser = { text: '', err: '', t: 0 };
+    try {
+      const game = Screens.game;
+      const canvas = game && game.canvas;
+      if (canvas) {
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.maxLength = 12;
+        inp.autocomplete = 'off';
+        inp.placeholder = '输入名字…';
+        inp.style.cssText = 'position:fixed;z-index:50;background:transparent;border:none;outline:none;text-align:center;font:bold 20px \'Noto Sans SC\',sans-serif;color:#3a2410;caret-color:#3a2410;pointer-events:auto;';
+        document.body.appendChild(inp);
+        this._nameInput = inp;
+        this._layoutNameInput();
+        inp.addEventListener('input', () => {
+          // 原版 AllowChar: 字母数字+空格 (web 放宽中文); 折叠连续空格 (原版 GetName)
+          let v = inp.value.replace(/\s+/g, ' ');
+          if (v.length > 12) v = v.slice(0, 12);
+          inp.value = v;
+          this.newUser.text = v;
+          this.newUser.err = '';
+        });
+        inp.addEventListener('keydown', (e) => {
+          e.stopPropagation();                     // 不透传到游戏快捷键
+          if (e.key === 'Enter') this.confirmNewUser();
+          if (e.key === 'Escape') this.cancelNewUser();
+        });
+        setTimeout(() => { try { inp.focus(); } catch (e) { } }, 60);
+      }
+    } catch (e) { }
+  },
+  // 输入框页面坐标 (canvas 800x600 逻辑坐标 → 页面坐标; 每帧重算适配缩放/旋转)
+  _layoutNameInput() {
+    const inp = this._nameInput;
+    if (!inp) return;
+    const game = Screens.game;
+    const canvas = game && game.canvas;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    // 对话框输入区 (canvas 逻辑坐标): (280,278)-(520,318)
+    const ax = rect.left + 280 / 800 * rect.width, ay = rect.top + 278 / 600 * rect.height;
+    const bx = rect.left + 520 / 800 * rect.width, by = rect.top + 318 / 600 * rect.height;
+    inp.style.left = ax + 'px'; inp.style.top = ay + 'px';
+    inp.style.width = (bx - ax) + 'px'; inp.style.height = (by - ay) + 'px';
+  },
+  confirmNewUser() {
+    const game = Screens.game;
+    const name = (this.newUser && this.newUser.text || '').trim();
+    if (!name) {
+      // 原版空名错误 [USER_ERROR_MESSAGE]
+      this.newUser.err = '请输入你的名字！';
+      game.audio.play('buzzer');
+      if (this._nameInput) { try { this._nameInput.focus(); } catch (e) { } }
+      return;
+    }
+    game.playerName = name;
+    try { localStorage.setItem('webpvz_player', name); } catch (e) { }
+    game.audio.play('buttonclick');
+    this.closeNewUser();
+    this.playSign();
+  },
+  cancelNewUser() {
+    const game = Screens.game;
+    game.audio.play('buttonclick');
+    this.closeNewUser();
+    this.playSign();   // 未命名继续 (木牌显示「玩家」; 下次启动再询问)
+  },
+  closeNewUser() {
+    this.newUser = null;
+    if (this._nameInput) { try { this._nameInput.remove(); } catch (e) { } this._nameInput = null; }
+  },
+  // 绘制姓名输入对话框 (纸质 9-patch + 标题牌 + 输入区背景 + 按钮)
+  drawNewUser(ctx) {
+    const d = this.newUser;
+    if (!d) return;
+    this._layoutNameInput();   // 每帧同步 HTML 输入框位置 (窗口缩放跟随)
+    const X = 190, Y = 150, W = 420, H = 250;
+    ctx.save();
+    // 模态遮罩
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0, 0, 800, 600);
+    // ---- 纸质 9-patch (原版 LawnDialog: dialog_top*/center*/bottom* 系列) ----
+    const P = {
+      tl: img('dialog_topleft'), tm: img('dialog_topmiddle'), tr: img('dialog_topright'),
+      cl: img('dialog_centerleft'), cm: img('dialog_centermiddle'), cr: img('dialog_centerright'),
+      bl: img('dialog_bottomleft'), bm: img('dialog_bottommiddle'), br: img('dialog_bottomright'),
+    };
+    if (P.tl && P.cm) {
+      const cw = P.tl.width, chh = P.tl.height;
+      const topH = P.tm.height || chh, botH = P.bm.height || chh;
+      for (let x = X + cw; x < X + W - cw; x += P.tm.width) ctx.drawImage(P.tm, x, Y, Math.min(P.tm.width, X + W - cw - x), topH);
+      for (let x = X + cw; x < X + W - cw; x += P.bm.width) ctx.drawImage(P.bm, x, Y + H - botH, Math.min(P.bm.width, X + W - cw - x), botH);
+      for (let y = Y + chh; y < Y + H - chh; y += P.cl.height) {
+        ctx.drawImage(P.cl, X, y, P.cl.width, Math.min(P.cl.height, Y + H - chh - y));
+        ctx.drawImage(P.cr, X + W - P.cr.width, y, P.cr.width, Math.min(P.cr.height, Y + H - chh - y));
+      }
+      for (let y = Y + topH; y < Y + H - botH; y += P.cm.height) {
+        for (let x = X + cw; x < X + W - P.cr.width; x += P.cm.width) {
+          ctx.drawImage(P.cm, x, y, Math.min(P.cm.width, X + W - P.cr.width - x), Math.min(P.cm.height, Y + H - botH - y));
+        }
+      }
+      ctx.drawImage(P.tl, X, Y);
+      ctx.drawImage(P.tr, X + W - P.tr.width, Y);
+      ctx.drawImage(P.bl, X, Y + H - P.bl.height);
+      ctx.drawImage(P.br, X + W - P.br.width, Y + H - P.br.height);
+    } else {
+      // 兑底: 羊皮纸圆角框
+      const g = ctx.createLinearGradient(0, Y, 0, Y + H);
+      g.addColorStop(0, '#f5e7c0'); g.addColorStop(1, '#e0c48a');
+      ctx.fillStyle = g; ctx.strokeStyle = '#7a5222'; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.roundRect(X, Y, W, H, 16); ctx.fill(); ctx.stroke();
+    }
+    // 标题牌 (dialog_header 居中于顶部)
+    const header = img('dialog_header');
+    if (header) ctx.drawImage(header, X + W / 2 - header.width / 2, Y - 26);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 22px "Noto Sans SC", sans-serif';
+    ctx.fillStyle = '#5c3a10';
+    ctx.fillText('新用户', X + W / 2, Y + 12);
+    // 正文 (原版 PLEASE_ENTER_NAME)
+    ctx.font = '17px "Noto Sans SC", sans-serif';
+    ctx.fillStyle = '#7a5222';
+    ctx.fillText('请输入你的名字：', X + W / 2, Y + 58);
+    // 输入区背景 (HTML input 覆盖其上)
+    ctx.fillStyle = 'rgba(58,40,20,0.92)';
+    ctx.strokeStyle = '#8a6434'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.roundRect(276, 274, 248, 48, 8); ctx.fill(); ctx.stroke();
+    // 错误提示 (原版 USER_ERROR_MESSAGE)
+    if (d.err) {
+      ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#b03020';
+      ctx.fillText(d.err, X + W / 2, Y + 156);
+    }
+    // 按钮: 确定 / 取消 (悬停高亮)
+    const hover = Screens.hover;
+    const btn = (bx, by, bw, bh, label, key) => {
+      const h = hover === key;
+      ctx.fillStyle = h ? '#9a7a3a' : '#8a6434';
+      ctx.strokeStyle = '#5c3f1c'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 10); ctx.fill(); ctx.stroke();
+      ctx.font = 'bold 18px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = h ? '#fff6d8' : '#f0e0b0';
+      ctx.fillText(label, bx + bw / 2, by + bh / 2 + 7);
+    };
+    btn(258, 340, 120, 42, '确　定', '_nu_ok');
+    btn(422, 340, 120, 42, '取　消', '_nu_cancel');
+    ctx.restore();
+  },
+
+  // ================================================================
+  // #1 冒险开场僵尸大手 (原版 GameSelector::ClickedAdventure, GameSelector.cpp 1126-1169)
+  //   点击「冒险」→ 停BGM + losemusic + dirt_rise + Zombie_hand 破土 (-70,10)
+  //   → 1.25s 僵尸狂笑 (mStartingGameCounter==125) → 4.5s 后进关 (450帧)
+  // ================================================================
+  async beginStartGame(game) {
+    if (this.starting) return;
+    this.starting = { t: 0, hand: null, laughed: false };
+    game.audio.stopBGM();
+    game.audio.play('losemusic');      // 原版 mMusic->StopAllMusic + SOUND_LOSEMUSIC
+    game.audio.play('dirt_rise');      // 原版 FOLEY_DIRT_RISE (泥土声)
+    // Zombie_hand reanim 在 zombie_core 分包 → 预载后播放
+    try { await Assets.ensurePacks(['zombie_core']); } catch (e) { }
+    if (!this.starting) return;       // 期间被取消
+    if (RE.hasDef('Zombie_hand')) {
+      const hand = Assets.reanim('Zombie_hand');
+      hand.x = -70; hand.y = 10;      // 原版 AddReanimation(-70, 10)
+      hand.frameStart = 0;
+      hand.frameCount = hand.def ? hand.def.n : 20;
+      hand.animRate = hand.def ? hand.def.fps : 30;   // 文件自带 30fps, 单次播完保持
+      hand.loopType = RE.PLAY_ONCE_HOLD;
+      hand.animTime = 0;
+      // 原版: "rock" 前缀轨道 (飞石) mIgnoreClipRect = true → 独立分组在裁剪外绘制
+      try {
+        for (let i = 0; i < hand.tracks.length; i++) {
+          if (hand.def.tracks[i].name.toLowerCase().startsWith('rock')) hand.tracks[i].renderGroup = 8;
+        }
+      } catch (e) { }
+      this.starting.hand = hand;
+    }
+  },
+  updateStarting(dt) {
+    const s = this.starting;
+    if (!s) return;
+    s.t += dt;
+    const game = Screens.game;
+    // 原版 mStartingGameCounter==125 (1.25s): SOUND_EVILLAUGH 僵尸狂笑
+    if (!s.laughed && s.t >= 1.25) { s.laughed = true; if (game) game.audio.play('evil_laugh'); }
+    if (s.hand) s.hand.update(dt);
+    // 原版 450 帧 (4.5s) 后 KillGameSelector → 进关
+    if (s.t >= 4.5) {
+      this.starting = null;
+      if (game) game.startAdventure();
+    }
+  },
+  drawStarting(ctx) {
+    const s = this.starting;
+    if (!s) return;
+    const hand = s.hand;
+    if (hand) {
+      // 原版: 裁剪矩形 (0,0,800,560) — 手从画面底部遮罩后钻出
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, 0, 800, 560); ctx.clip();
+      hand.drawRenderGroup(ctx, 0);
+      ctx.restore();
+      hand.drawRenderGroup(ctx, 8);   // 飞石轨道不受裁剪 (原版 mIgnoreClipRect)
+    }
+    // 按钮闪烁 (原版 SetBkgColor: counter%20<10 → 灰 80,80,80)
+    if ((s.t * 100) % 20 < 10) {
+      const adv = (this.buttons || []).find(b => b.k === 'adventure');
+      if (adv) {
+        ctx.save();
+        ctx.globalAlpha = 0.28;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(adv.x, adv.y, adv.w, adv.h);
+        ctx.restore();
+      }
+    }
+  },
+
   // ---- 每帧更新 ----
   update2(dt) {
+    // #1 僵尸大手过场推进 (fallback 素材缺失模式同样推进 — 置于 inst 检查之前)
+    if (this.starting) this.updateStarting(dt);
     if (!this.inst) return;
     this.inst.update(dt);
-    // anim_open 完成 → anim_sign (木牌落下)
+    // anim_open 完成 → 无玩家档案先弹 NewUserDialog (#2 原版 GameSelector SELECTOR_NEW_USER),
+    //   否则 anim_sign (木牌落下)
     if (this.state === 'open' && this.inst.loopCount > 0) {
-      this.inst.play('anim_sign', RE.PLAY_ONCE_HOLD, 30);
-      this.state = 'sign';
+      if (!this._nameAsked && Screens.game && !Screens.game.playerName) {
+        this._nameAsked = true;
+        this.state = 'newuser';
+        this.showNewUser();
+      } else {
+        this.playSign();
+      }
     } else if (this.state === 'sign' && this.inst.loopCount > 0) {
       this.state = 'idle';
     }
@@ -309,12 +551,15 @@ Screens.menu = {
   },
 
   draw(ctx) {
+    // 每帧推进 (置顶: fallback 素材缺失模式同样推进状态机/过场)
+    this.update2(1 / 60);
     // 素材缺失兜底: reanim 或关键背景图缺失 → 简化菜单 (仍可点击进入游戏)
     if (!this.inst || !img('selectorscreen_bg.jpg')) {
       this.drawFallback(ctx);
+      this.drawStarting(ctx);   // #1 大手过场叠加
+      this.drawNewUser(ctx);    // #2 姓名输入对话框叠加
       return;
     }
-    this.update2(1 / 60);
     const inst = this.inst;
     // ---- 1. 天空 (仅 BG 轨道: 快照分组 → 全隐藏 → 只显天空 → 绘制 → 还原) ----
     ctx.save();
@@ -422,10 +667,11 @@ Screens.menu = {
       const bimg = img(isH ? b.img2 : b.img);
       if (bimg) ctx.drawImage(bimg, b.x, b.y);
     }
-    // ---- 7. 玩家名 (原版: woodsign1 轨道 + (170.5-w/2, 102.5)) ----
+    // ---- 7. 玩家名 (原版 GameSelector.cpp 580-594: woodsign1 轨道 + (170.5-w/2, 102.5),
+    //      名字+'!'; 仅 sign/idle 状态绘制 — 原版非 OPEN/NEW_USER 状态才画) (#2) ----
     const game = Screens.game;
-    if (game) {
-      const name = '玩家';
+    if (game && (this.state === 'sign' || this.state === 'idle')) {
+      const name = game.playerName || '玩家';
       ctx.save();
       ctx.font = 'bold 16px "Noto Sans SC", sans-serif';
       const w = ctx.measureText(name + '!').width;
@@ -503,9 +749,23 @@ Screens.menu = {
       }
       ctx.restore();
     }
+    // ---- #2 姓名输入对话框 (模态叠加) ----
+    this.drawNewUser(ctx);
+    // ---- #1 僵尸大手开场过场 (叠加于菜单之上) ----
+    this.drawStarting(ctx);
   },
 
   click(p, game) {
+    // #2 NewUserDialog 模态: 仅响应对话框按钮/输入区 (原版对话框独占输入)
+    if (this.newUser) {
+      const hitBtn = (bx, by, bw, bh) => p.x >= bx && p.x <= bx + bw && p.y >= by && p.y <= by + bh;
+      if (hitBtn(258, 340, 120, 42)) this.confirmNewUser();
+      else if (hitBtn(422, 340, 120, 42)) this.cancelNewUser();
+      else if (hitBtn(276, 274, 248, 48) && this._nameInput) { try { this._nameInput.focus(); } catch (e) { } }
+      return;
+    }
+    // #1 僵尸大手过场中: 按钮全部禁用 (原版 mStartingGame 所有按钮 SetDisabled)
+    if (this.starting) return;
     // 锁定消息框打开时: 点击任意处关闭 (原版 DIALOG_BUTTON_OK) (#6)
     if (this.lockMsg) {
       if (Date.now() - this.lockMsg.t0 > 250) { this.lockMsg = null; game.audio.play('buttonclick'); }
@@ -516,11 +776,11 @@ Screens.menu = {
       if (b.disabled) { game.audio.play('buzzer'); return; }
       if (b.k === 'adventure') {
         game.audio.play('gravebutton');
-        // #fix(boss-audio): 原版 GameSelector.cpp 795-796 — 点击"冒险"按钮启动游戏时
-        //   (mStartingGameCounter==125) 播 SOUND_EVILLAUGH (evillaugh.ogg)
-        game.audio.play('evil_laugh');
         this.inst && this.inst.setImageOverride('SelectorScreen_StartAdventure_button', null);
-        game.startAdventure();
+        // #1 僵尸大手开场 (原版 GameSelector::ClickedAdventure 1126-1169):
+        //   停BGM + losemusic + dirt_rise + Zombie_hand 破土 + 1.25s 狂笑 + 4.5s 后进关
+        //   (evil_laugh 移至 1.25s 时机 = 原版 mStartingGameCounter==125)
+        this.beginStartGame(game);
       } else if (b.k === 'minigames') {
         // 玩玩小游戏 (原版: 通关冒险模式解锁; 锁定时弹 MODE_LOCKED 消息框) (#6)
         if (!game.modeUnlocked('minigames')) { this.showLockMsg(game, '玩玩小游戏'); return; }

@@ -36,6 +36,7 @@ const Game = {
   coins: 0,                 // 金币 (戴夫商店货币, 原版 $)
   purchased: {},            // 商店已购物 { key: true }
   shopTab: 'items',         // 商店页签
+  playerName: null,         // #2 玩家姓名 (原版 mPlayerInfo->mName; NewUserDialog 创建)
 
   async boot() {
     if (this._booted) return; this._booted = true;
@@ -112,6 +113,8 @@ const Game = {
       if (save.purchased) this.purchased = save.purchased;
       this.daveSeen = JSON.parse(localStorage.getItem('webpvz_dave') || '{}');
     } catch (e) { }
+    // #2 玩家姓名 (原版 Profile: 主菜单首次进入弹 NewUserDialog 创建; localStorage 持久化)
+    try { this.playerName = localStorage.getItem('webpvz_player') || null; } catch (e) { }
     this.daveSeen = this.daveSeen || {};
     this.purchasedSet = new Set(Object.keys(this.purchased));
     // 输入

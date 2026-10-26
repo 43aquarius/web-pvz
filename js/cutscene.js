@@ -92,9 +92,10 @@ const Cutscene = {
     this._bossSpawned = false;   // #1 5-10 僵王过场入场只触发一次
     // 过场期间僵尸更新标志 (原版: BOSS 在 LEVEL_INTRO 期间入场行走 — zombie.js 833)
     if (board.game) board.game.cutsceneRunning = true;
-    // 房子文案 (原版 [PLAYERS_HOUSE])
-    this.houseMsg = level.scene === 'day' || level.scene === 'night' ? '玩家之家'
-      : level.scene === 'pool' || level.scene === 'fog' ? '玩家的后院' : '玩家的屋顶';
+    // 房子文案 (原版 [PLAYERS_HOUSE] — 含玩家名 #2)
+    const pn = board.game && board.game.playerName;
+    this.houseMsg = level.scene === 'day' || level.scene === 'night' ? (pn ? pn + '之家' : '玩家之家')
+      : level.scene === 'pool' || level.scene === 'fog' ? (pn ? pn + '的后院' : '玩家的后院') : (pn ? pn + '的屋顶' : '玩家的屋顶');
     // 割草机出现时间 (原版: 行5最先)
     this.mowTime = {};
     for (let r = 0; r < board.rows; r++) {
@@ -217,9 +218,19 @@ const Cutscene = {
     else if (t <= bankOn + 250) this.seedBankY = calcPos(bankOn, bankOn + 250, -87, 0, t);
     else this.seedBankY = 0;
 
-    // ---- 割草机出现 (逐行) ----
+    // ---- 割草机滚入 (#6 — 原版 CutScene.cpp 1249-1265: 每台从屏幕外 -80→-21 滑入 250ms,
+    //      CURVE_EASE_IN_OUT; 底行先出向上每行错后 50ms; web 坐标系: -90 → -20) ----
     for (const m of board.mowers) {
-      if (m.hidden && t >= this.mowTime[m.row] * 1000) m.hidden = false;
+      if (m.hidden && t >= this.mowTime[m.row] * 1000) {
+        m.hidden = false;
+        m.x = -90;                    // 屏幕外 (整机内容左缘 -88px)
+        m._rollStart = t;
+      }
+      if (!m.hidden && m._rollStart !== undefined) {
+        const p = clamp01((t - m._rollStart) / T.MOWER_DURATION);
+        m.x = -90 + 70 * easeIO(p);   // -90 → -20 (待机位)
+        if (p >= 1) { m.x = -20; delete m._rollStart; }
+      }
     }
 
     // ---- 草皮卷 (原版 6000-8000, 滚筒 reanim + 泥土粒子 + digger音效) ----
@@ -364,8 +375,9 @@ const Cutscene = {
     const dialogs = Assets.data('dave_dialogs');
     let t = dialogs['CRAZY_DAVE_' + id] || '';
     // 占位符替换 (原版 {PLAYER_NAME}/{MONEY}/{UPGRADE_COST})
+    // #2 玩家姓名: NewUserDialog 创建的名字同步到戴夫对话 (原版 LawnApp.cpp 2374-2382)
     const game = this.board.game;
-    t = t.replace('{PLAYER_NAME}', '邻居')
+    t = t.replace('{PLAYER_NAME}', (game.playerName || '邻居'))
       .replace('{MONEY}', String(game.coins || 0))
       .replace('{UPGRADE_COST}', '$7500')
       .replace(/\{[A-Z_0-9]+\}/g, '');   // 剩余表情标记清除
@@ -487,11 +499,13 @@ const Cutscene = {
     } else if (this.davePhase === 'leave') {
       this.daveT += dt;
       if (this.daveAnim) this.daveAnim.update(dt);
-      // 被飞贼抓走: 戴夫快速上升消失 (原版 CutScene.cpp 1562-1572)
-      if (this.daveGrab && this.daveAnim) {
-        this.daveAnim.y -= dt * 220;
-      }
-      if (this.daveT >= (this.daveGrab ? 1.2 : 0.62)) {
+      // #3 修复(5-10 蹦极时序): anim_grab 动画自带完整时序 — 蹦极僵尸先落下 (~0.6s)
+      //   → 抓住戴夫 → ~2.0s 起一起升空 (Dave_head 帧 190-198: y 129→-880 内置于动画数据);
+      //   移除旧的手动上升 (开局即 y-=220/s 导致"蹦极还没下来戴夫就升起")
+      const grabDone = this.daveGrab
+        ? (!this.daveAnim || this.daveAnim.loopCount > 0 || this.daveT >= 4.5)   // 动画播完/安全超时
+        : this.daveT >= 0.62;
+      if (grabDone) {
         // 离场完成 → 恢复主时间轴 + 标记已看过
         this.davePhase = null;
         this.daveAnim = null;
@@ -523,14 +537,15 @@ const Cutscene = {
         return true;
       }
       if (this.daveLine >= lines.length) {
-        // 无赠礼: 离场 (5-10 僵王关: 被飞贼抓走 — 原版 anim_grab + BUNGEE_SCREAM)
+        // 无赠礼: 离场 (5-10 僵王关: 被飞贼抓走 — 原版 CutScene.cpp 1558-1572)
+        // #3: CrazyDave.reanim 的 anim_grab (帧 154-209, 56 帧) 自带蹦极僵尸下落→抓取→
+        //   双双升空的完整演出, 原版速率 18fps (总长 ~3.1s), 播完自动清理
         if (this.daveDialog && this.daveDialog.boss && this.daveAnim && this.daveAnim.animExists && this.daveAnim.animExists('anim_grab')) {
-          this.daveAnim.play('anim_grab', RE.PLAY_ONCE_HOLD, 24);
+          this.daveAnim.play('anim_grab', RE.PLAY_ONCE_HOLD, 18);
           this.davePhase = 'leave';
           this.daveT = 0;
-          this.daveGrab = true;   // 抓走后快速上升消失
-          game.audio.play('bungee_scream');
-          game.audio.play('dave_scream');
+          this.daveGrab = true;   // 等待动画自然播完 (不再手动上升)
+          game.audio.play('bungee_scream');   // 原版 1571: 仅 SOUND_BUNGEE_SCREAM
         } else {
           if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
           this.davePhase = 'leave';

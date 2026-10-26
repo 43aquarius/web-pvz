@@ -1981,6 +1981,12 @@ class LimbParticle {
       this.vx = -70 + Math.random() * 140;
       this.vy = -(100 + Math.random() * 100);
       this.vr = this.vx / 50;
+    } else if (kind === 'cone' || kind === 'bucket' || kind === 'helm') {
+      // #4 防具上抛旋转抛物线 (原版 ZombieTrafficCone/Pail/Helmet 粒子 — XML 资产失传,
+      //   数值参照原版视觉: 防具被打飞弹起 + 翻滚旋转 + 落地弹跳; 旧实现 vy=0 直坠滑落)
+      this.vx = -40 + Math.random() * 80;                   // 双向随机
+      this.vy = -(150 + Math.random() * 100);               // 上抛 150~250 px/s
+      this.vr = (Math.random() < 0.5 ? -1 : 1) * (3 + Math.random() * 3);  // 翻滚 ±3~6 rad/s
     } else {
       this.vx = -15 + Math.random() * 30;
       this.vy = 0;
