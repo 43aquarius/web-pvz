@@ -222,7 +222,10 @@ const Assets = (function () {
 
   async function ensureGarden() {
     if (state.embedMode) return;
-    const packs = ['garden', 'fx', 'ui'];
+    // #fix(禅园贴图缺失): 工具图标 (fertilizer/phonograph/chocolate/glove/$/wheelbarrow)、
+    //   需求气泡 (plantspeechbubble/zen_need_icons)、下一花园按钮、金壶准星均在 misc 包 —
+    //   旧清单缺 misc → 首次进园整排槽位空白, 靠自愈补载有明显延迟
+    const packs = ['garden', 'fx', 'ui', 'misc'];
     for (const t of Object.keys(require('./data').PLANTS)) packs.push('plant_' + t);
     await ensurePacks(packs);
   }

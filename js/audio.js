@@ -112,6 +112,8 @@ const Audio2 = (function () {
     zen_phonograph: 'SFX/garden/phonograph.ogg',
     zen_prize: 'SFX/garden/prize.ogg',
     wakeup: 'SFX/garden/wakeup.ogg',
+    // 原版 FOLEY_MONEYFALLS — 金币落地音 (Coin::PlayGroundSound: 仅金币)
+    moneyfalls: 'sounds/moneyfalls.ogg',
     groan_spawn: 'SFX/zombie/groan/groan3.ogg',
     vase_breaking: 'sounds/vase_breaking.ogg',
     // 疯狂戴夫语音 (SFX/carzy/ 目录)

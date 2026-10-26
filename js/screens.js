@@ -1981,12 +1981,20 @@ Screens.zengarden = {
 
   // ---- 工具栏常量 (原版 GetZenButtonRect: y=0 起, 每可用工具 +SHOVELBANK 宽) ----
   SLOT_W: 70, SLOT_H: 72, TRAY_Y: 0,
-  // 工具图标相对槽位偏移 (原版 Board::DrawZenButtons 各 case 偏移)
+  // 工具图标相对槽位偏移 (原版 Board::DrawZenButtons 各 case 偏移;
+  //   杀虫剂 = IMAGE_BUG_SPRAY (bug_spray.png, misc 包) — 非花园动画用的长瓶贴图)
   TOOL_ICON: {
     water: ['wateringcan.png', -2, -6], fertilizer: ['fertilizer.png', -6, -7],
-    bugspray: ['zengarden_bugspray_bottle.png', 0, -1], phonograph: ['phonograph.png', 2, 2],
+    bugspray: ['bug_spray.png', 0, -1], phonograph: ['phonograph.png', 2, 2],
     chocolate: ['chocolate.png', 6, 4], glove: ['zen_gardenglove.png', -6, -4],
     sell: ['zen_moneysign.png', -5, -4], wheelbarrow: ['zen_wheelbarrow.png', -7, -3],
+  },
+  // 工具悬停提示 (原版 Board::UpdateToolTip 各 [*_TOOLTIP], 显示于槽位下方居中)
+  TOOL_TIP: {
+    water: '水壶 - 给需要水的植物浇水', fertilizer: '肥料 - 帮助植物生长',
+    bugspray: '杀虫剂 - 驱赶植物身上的虫子', phonograph: '留声机 - 播放植物爱听的音乐',
+    chocolate: '巧克力 - 给植物或蜗牛吃', glove: '园艺手套 - 搬动植物',
+    sell: '出售 - 把植物卖给疯狂戴夫', wheelbarrow: '手推车 - 在花园间搬运植物',
   },
   // 持工具光标偏移 (原版 CursorObject::Draw 各 case)
   CURSOR_OFF: {
@@ -2212,16 +2220,20 @@ Screens.zengarden = {
     this.bubble = null; this.sellAsk = null;
     this.arrowT = 0;
     this._ready = false;
+    this._readyT = 0;              // 加载屏计时 (渐入用)
     this.daveAnim = null;
     this.trayIdle = 0; this.trayFade = 0;    // ZEN_FADING: 30s 无操作 → 0.8s 上滑隐藏
     this.bankT = 0;                          // 金币银行显示计时 (原版 ShowCoinBank 300 帧)
     this.advice = null;
     this.puffs = [];               // 种植尘土粒子
     const game = Screens.game;
-    // 按需加载花园素材 (garden/fx/ui + 全部植物包) 后再建模型
+    // 按需加载花园素材 (garden/fx/ui/misc + 全部植物包; misc 3.2MB 含工具图标/需求气泡)
+    //   完成前显示加载屏 — 对齐原版关卡加载行为, 避免图标/气泡逐个闪现;
+    //   20s 超时兜底放行 (离线/弱网时至少能进残缺画面而非永久卡加载屏)
     Promise.resolve(Assets.ensureGarden ? Assets.ensureGarden() : null)
       .catch(() => { })
       .then(() => { this._ready = true; });
+    setTimeout(() => { this._ready = true; }, 20000);
     // BGM: 原版 MUSIC_TUNE_ZEN_GARDEN
     if (game) game.audio.playBGM('garden');
     // 蜗牛 (原版 AddStinky: 已购买 + 主花园; 位置从存档恢复)
@@ -2237,7 +2249,7 @@ Screens.zengarden = {
     // 恢复中断的教程步进 (从商店回来等)
     this.tut = this.data.tutStep ? { step: this.data.tutStep } : null;
     this._daveIdle = false;
-    // 教程自愈: 中断存档若已满足后续条件直接推进 (防主菜单按钮永久隐藏;
+    // 教程自愈: 中断存档若已满足后续条件直接推进 (防教程永久卡住;
     //   首次进入的教程对话进行中不兜底 — 2102 句会赠送 2 株金盏花芽)
     if (this.tut && this.tut.step !== 'done' && !(this.bubble && this.bubble.tutorial)) {
       const ps = this.data.plants.filter(q => q.garden !== 'wheelbarrow');
@@ -2245,7 +2257,9 @@ Screens.zengarden = {
         for (let i = 0; i < 2; i++) this.addPottedPlant(this.newPlant('MARIGOLD', { isMarigold: true, feedingsPerGrow: 3 }));
         this.finishTutorial(game);
       } else if (ps.every(q => q.age >= 1)) {
-        this.finishTutorial(game);
+        // 原版: 全部施肥完成 → TUTORIAL_ZEN_GARDEN_COMPLETED (菜单钮闪烁等点击)
+        this.tut.step = 'completed'; this.data.tutStep = 'completed';
+        this.save();
       } else if (['water_plant', 'keep_watering'].includes(this.tut.step) && ps.some(q => this.getNeed(q) === 'fertilizer')) {
         this.tut.step = 'visit_store'; this.data.tutStep = 'visit_store';
         this.save();
@@ -2282,8 +2296,14 @@ Screens.zengarden = {
     this.setAdvice('教程完成！ 好好照料你的花园吧！', true);
     this.save();
   },
-  menuVisible() { return !this.tut || this.tut.step === 'done'; },
-  storeVisible() { return !this.tut || ['visit_store', 'fertilize', 'done'].includes(this.tut.step); },
+  // #fix(退出按钮): 原版菜单钮在 SetupForZenTutorial 隐藏、TUTORIAL_COMPLETED 恢复;
+  //   web 版教程可能因存档中断永久卡住 → 按钮改为常显 (戴夫对话气泡期间被其遮挡/点击被气泡拦截,
+  //   行为与原版一致), 教程完成前点击 = 结束教程并回主菜单 (原版 DoBackToMain)
+  menuVisible() { return true; },
+  // 原版 TUTORIAL_ZEN_GARDEN_COMPLETED: 全部植物脱离芽期 → 菜单钮闪烁, 点击才真正结束教程
+  //   (DoFeedingTool→AllPlantsHaveBeenFertilized→FinishZenGardenToturial)
+  menuFlashing() { return !!(this.tut && this.tut.step === 'completed'); },
+  storeVisible() { return !this.tut || ['visit_store', 'fertilize', 'completed', 'done'].includes(this.tut.step); },
 
   // ---------- 模型 ----------
   // 每株植物独立 reanim 实例 (巧克力变速/睡眠层/水族馆层 均为植株级状态)
@@ -2375,11 +2395,13 @@ Screens.zengarden = {
       if (p.seed === 'MARIGOLD') this.dropCoin(pos.x + 40, pos.y, 'diamond');
       else { this.dropCoin(pos.x + 10, pos.y, 'diamond'); this.dropCoin(pos.x + 70, pos.y, 'diamond'); }
     }
-    // 教程: 全部脱离芽期 → 完成; 肥料耗尽 → 免费补 5 (原版 DoFeedingTool 教程分支;
+    // 教程: 全部脱离芽期 → TUTORIAL_COMPLETED (菜单钮闪烁, 点击才结束);
+    // 肥料耗尽 → 免费补 5 (原版 DoFeedingTool 教程分支;
     //   赠礼同时标记已购 — 原版 purchases[FERTILIZER]=OFFSET+5 使工具栏常驻显示)
     if (this.tut && this.tut.step === 'fertilize') {
       if (this.data.plants.every(q => q.age >= 1)) {
-        this.finishTutorial(game);
+        this.tut.step = 'completed'; this.data.tutStep = 'completed';
+        this.setAdvice('全部植物都长大了！ 点击右上角按钮结束教程！', true);
       } else if ((this.data.fertilizer || 0) <= 0) {
         this.data.fertilizer = 5;
         if (game) game.purchased.fertilizer = true;
@@ -2444,9 +2466,11 @@ Screens.zengarden = {
     return (PLANTS[p.seed] && PLANTS[p.seed].cn) || '植物';
   },
   dropCoin(x, y, type) {
-    // 原版 COIN_MOTION_COIN (Coin.cpp:334-358): vy −3~−5px/帧, vx ±0.5, 落地点 y+45+rand(20)
+    // 原版 COIN_MOTION_COIN (Coin.cpp:334-358, 100Hz 像素/帧 → px/s):
+    //   vy −3~−5px/帧 = −300~−500px/s; vx −0.5~+0.5px/帧 = ±50px/s;
+    //   落地点 y+45+rand(20) 夹在 [80,521]; 重力 +0.15px/帧² = 1500px/s² (弹出抛物线)
     this.coins.push({
-      x, y, vx: -30 + Math.random() * 60, vy: -180 - Math.random() * 120,
+      x, y, vx: -50 + Math.random() * 100, vy: -300 - Math.random() * 200,
       groundY: Math.max(80, Math.min(521, y + 45 + Math.random() * 20)),
       type, value: this.COIN_VAL[type], t: 0, hitGround: false, collected: false, scored: false, anim: null,
     });
@@ -2599,10 +2623,10 @@ Screens.zengarden = {
     const awake = this.stinkyAwake();
     const high = this.stinkyHigh();
     const chocCursor = this.tool === 'chocolate';
-    // 残影 (原版 UpdateStinkyMotionTrail: 巧克力高速行走时记录轨迹帧)
+    // 残影 (原版 UpdateStinkyMotionTrail: 巧克力高速行走时记录轨迹帧, 12 帧缓冲)
     if (high && (s.state === 'walk' || s.state === 'turn')) {
       s.trail.unshift({ x: s.x, y: s.y });
-      if (s.trail.length > 8) s.trail.length = 8;
+      if (s.trail.length > 12) s.trail.length = 12;
     } else s.trail = [];
     if (s.state === 'falling') {
       if (s.r && s.r.loopCount > 0) {
@@ -2668,24 +2692,51 @@ Screens.zengarden = {
   },
 
   // ---------- 更新 ----------
+  // 落地旋转 reanim (原版 Coin 构造: 附件 reanim 随币创建, 飞行期透明;
+  //   rate = def.fps×rand(0.6~1) 随机化, animTime 随机起点; 钻石 rate 50-80 快转)
+  coinAttach(c) {
+    if (c.anim || c.scored) return;
+    const name = c.type === 'diamond' ? 'diamond' : c.type === 'gold' ? 'coin_gold' : 'coin_silver';
+    if (!RE.hasDef(name)) return;
+    try {
+      const r = Assets.reanim(name);
+      r.frameStart = 0; r.frameCount = r.def ? r.def.n : 1;
+      r.animRate = c.type === 'diamond' ? 50 + Math.random() * 30
+        : (r.def && r.def.fps ? r.def.fps : 30) * (0.6 + Math.random() * 0.4);
+      r.loopType = RE.LOOP;
+      r.animTime = Math.random() * 0.99;   // 原版 RandRangeFloat(0, 0.99) 随机相位
+      r.setPosition(c.x, c.y);
+      c.anim = r;
+    } catch (e) { c.anim = null; }
+  },
   update(dt) {
     if (!this.data) return;
-    // 排落金币 (原版 Coin::UpdateFall / UpdateCollected)
+    // 掉落金币 (原版 Coin::UpdateFall / UpdateCollected, 100Hz 帧步)
+    const game0 = Screens.game;
     for (const c of this.coins) {
       c.t += dt;
+      if (c.anim && c.anim.update) c.anim.update(dt);
       if (c.collected) {
-        // 收取: 指数逼近金币银行 (442,558), 每帧 Δ/21
-        const k = Math.min(1, dt * 60);
+        // 收取: 指数逼近金币银行 (442,558), 每帧 Δ/21 (原版 100Hz 帧步)
+        const k = Math.min(1, dt * 100);
         c.x += (442 - c.x) / 21 * k;
         c.y += (558 - c.y) / 21 * k;
         if (Math.hypot(442 - c.x, 558 - c.y) < 12) this.scoreCoin(c);
       } else if (!c.hitGround) {
-        c.vy += 540 * dt;
-        c.y += c.vy * dt;
-        c.x += c.vx * dt;
-        if (c.x < 0) { c.x = 0; c.vx = 24 + Math.random() * 24; }
-        else if (c.x > 757) { c.x = 757; c.vx = -24 - Math.random() * 24; }
-        if (c.y >= c.groundY) { c.y = c.groundY; c.hitGround = true; }
+        // 原版: if (mPosY + mVelY < mGroundY) 继续落; 重力 0.15px/帧² = 1500px/s²
+        if (c.y + c.vy * dt < c.groundY) {
+          c.vy += 1500 * dt;
+          c.y += c.vy * dt;
+          c.x += c.vx * dt;
+          if (c.x < 0) { c.x = 0; c.vx = 40 + Math.random() * 40; }
+          else if (c.x > 757) { c.x = 757; c.vx = -40 - Math.random() * 40; }
+        } else {
+          // 落地 (原版: mHitGround=true + PlayGroundSound + mPosX取整; 仅金币有声)
+          c.y = c.groundY; c.hitGround = true;
+          c.x = Math.round(c.x);
+          this.coinAttach(c);
+          if (c.type === 'gold' && game0) game0.audio.play('moneyfalls');
+        }
       }
     }
     this.coins = this.coins.filter(c => !c.scored);
@@ -2707,7 +2758,7 @@ Screens.zengarden = {
       // 成熟 + 当日满足 → 定期产币 (原版 PlantUpdateProduction)
       const sleeping = this.isSleeping(p);
       if (!sleeping && p.age === 3 && this.fulfilledToday(p)) {
-        const mins = Math.floor((this.now() - p.lastNeedFulfilled) / 60);
+        const mins = this.highOnChocolate(p) ? 0 : Math.floor((this.now() - p.lastNeedFulfilled) / 60);   // 原版: 兴奋期 minutes=0
         if (!p.launchCounter || p.launchCounter <= 0) {
           // 原版 PlantSetLaunchCounter: RandRangeInt(1800, curve(5→3000, 30→15000))
           const maxSec = 30 + (150 - 30) * Math.max(0, Math.min(1, (mins - 5) / 25));
@@ -2839,6 +2890,26 @@ Screens.zengarden = {
   draw(ctx) {
     if (!this.data) this.load();
     const game = Screens.game;
+    // 加载屏: 分包就绪前不渲染花园 (对齐原版关卡加载; 已缓存时几乎瞬间通过)
+    if (!this._ready) {
+      this._readyT += 1 / 60;
+      ctx.fillStyle = '#1c2410';
+      ctx.fillRect(0, 0, 800, 600);
+      const barW = 360, bx = (800 - barW) / 2, by = 320;
+      ctx.fillStyle = '#3a4a20';
+      ctx.fillRect(bx - 4, by - 4, barW + 8, 28);
+      ctx.fillStyle = '#222';
+      ctx.fillRect(bx, by, barW, 20);
+      // 不定进度条往复动画 (无法获知 fetch 细粒度进度)
+      const k = (Math.sin(this._readyT * 2.4) + 1) / 2;
+      ctx.fillStyle = '#8fc42a';
+      ctx.fillRect(bx + 4, by + 4, (barW - 8) * k, 12);
+      ctx.font = 'bold 22px "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#e8f4c8';
+      ctx.fillText('正在准备花园…', 400, 290);
+      return;
+    }
     const t = Screens.t;
     const mouse = Screens.mouse || { x: -1, y: -1 };
     const garden = this.data.garden;
@@ -2874,12 +2945,36 @@ Screens.zengarden = {
     const entries = this.data.plants.filter(p => p.garden === garden);
     entries.sort((a, b) => (this.cellPos(a.x, a.y).y - this.cellPos(b.x, b.y).y) || a.x - b.x);
     const overlays = [];
+    // 悬停高亮目标 (原版 UpdateMousePosition: 持水壶/肥料/杀虫/唱片/巧克力/手套/$/空推车
+    //   时光标下植物+花盆加白色叠加; 金水壶 → 范围内全部植物)
+    let hlCell = null;
+    const hlTool = this.tool && (['water', 'fertilizer', 'bugspray', 'phonograph', 'chocolate', 'glove', 'sell'].includes(this.tool)
+      || (this.tool === 'wheelbarrow' && !this.barrowPlant())) ? this.tool : null;
+    if (hlTool && !(hlTool === 'water' && game.purchased.goldwatering)) hlCell = this.cellAt(mouse.x, mouse.y);
+    const inGoldRange = (pos) => hlTool === 'water' && game.purchased.goldwatering &&
+      pos.x + 40 >= mouse.x - 70 && pos.x + 40 < mouse.x + 90 &&
+      pos.y + 40 >= mouse.y - 80 && pos.y + 40 < mouse.y + 80;
+    const plantHighlighted = (p, pos) => {
+      if (!hlTool) return false;
+      if (hlTool === 'water' && game.purchased.goldwatering) return inGoldRange(pos);
+      return !!(hlCell && hlCell[0] === p.x && hlCell[1] === p.y);
+    };
     for (const p of entries) {
       const pos = this.cellPos(p.x, p.y);
       const aquatic = p.seed && AQUATIC.has(p.seed);
       const held = this.heldPlant === p;
       const st = this.plantState(p);
       const dp = this.plantDrawParams(p, garden);
+      const hl = !held && plantHighlighted(p, pos);
+      // 原版高亮绘制: 同一 reanim 以 DRAWMODE_ADDITIVE + 白色 (255,255,255,196) 再画一遍
+      const drawAdditive = (r) => {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = 0.55;
+        ctx.filter = 'brightness(2.6) saturate(0.25)';
+        r.draw(ctx);
+        ctx.restore();
+      };
       // 花盆 (原版 PlacePottedPlant: FLOWERPOT Plant @ 格Y+26 — H_OFFSET.FLOWERPOT;
       //   需求期 Pot_top 换 pot_top_dark 湿土色)
       if (dp.inPot) {
@@ -2890,6 +2985,7 @@ Screens.zengarden = {
           pm.setPosition(pos.x, pos.y + 26);
           pm.draw(ctx);
           ctx.restore();
+          if (hl) drawAdditive(pm);
         } else {
           const potTop = img(st !== 'notready' ? 'pot_top_dark.png' : 'pot_top.png');
           if (potTop) { ctx.save(); if (held) ctx.globalAlpha = 0.45; ctx.drawImage(potTop, pos.x + 7, pos.y + 39, 66, 51); ctx.restore(); }
@@ -2909,9 +3005,12 @@ Screens.zengarden = {
             try { m.play(sleeping ? 'anim_sleep' : 'anim_idle', RE.LOOP, sleeping ? 1 : 10 + Math.random() * 5); } catch (e) { }
           }
         }
-        // 巧克力兴奋: 动画加速 (原版 SetPlantAnimSpeed ≥25)
-        if (this.highOnChocolate(p) && !sleeping) { m.animRate = 26; p._chocBoost = true; }
-        else if (p._chocBoost) { p._chocBoost = false; if (!sleeping) m.animRate = 10 + Math.random() * 5; }
+        // 巧克力兴奋: 动画加速 (原版 SetPlantAnimSpeed: 豌豆系基准 15-20 / 土豆雷 12 /
+        //   其余 10-15; 兴奋 ×2 且 ≥25)
+        const baseRate = (p.seed && ['PEASHOOTER', 'SNOWPEA', 'REPEATER', 'LEFTPEATER', 'GATLINGPEA', 'SPLITPEA', 'THREEPEATER', 'MARIGOLD'].includes(p.seed)) ? 15 + Math.random() * 5
+          : (p.seed === 'POTATOMINE' ? 12 : 10 + Math.random() * 5);
+        if (this.highOnChocolate(p) && !sleeping) { m.animRate = Math.max(25, baseRate * 2); p._chocBoost = true; }
+        else if (p._chocBoost) { p._chocBoost = false; if (!sleeping) m.animRate = baseRate; }
         ctx.save();
         if (held) ctx.globalAlpha = 0.45;
         else if (sleeping && !(m.animExists && m.animExists('anim_sleep'))) ctx.globalAlpha = 0.8;
@@ -2920,6 +3019,7 @@ Screens.zengarden = {
         m.overrideScale(dp.sx, dp.sy);
         m.draw(ctx);
         ctx.restore();
+        if (hl) drawAdditive(m);
       } else if (p.age === 0) {
         const sp = img('anim_sprout.png');
         if (sp) { ctx.save(); const s2 = 1.6 + Math.sin(t * 3 + p.x) * 0.08; ctx.translate(pos.x + 40, pos.y + 30); ctx.scale(s2, s2); ctx.drawImage(sp, -9, -7); ctx.restore(); }
@@ -2976,45 +3076,48 @@ Screens.zengarden = {
     for (const tl of this.tools) {
       if (tl.r) { ctx.save(); tl.r.draw(ctx); ctx.restore(); }
     }
-    // 掉落金币 (原版 Coin::Draw: 飞行中=静态币面+光晕, 落地=旋转 reanim; 钻石=reanim+拾取光晕)
+    // 掉落金币 (原版 Coin::Draw: 飞行中=静态币面+光晕, 落地=仅旋转 reanim 附件;
+    //   收取中=静态币面 (不缩成点); 钻石=旋转 reanim + 拾取光晕)
     for (const c of this.coins) {
       ctx.save();
       if (c.type === 'diamond') {
-        // 原版: IMAGE_AWARDPICKUPGLOW @(x−56,y−66) + 钻石 reanim
+        // 原版: IMAGE_AWARDPICKUPGLOW @(x−56,y−66) + 钻石 reanim 附件 (动画在 update 推进)
         const gl = img('awardpickupglow.png');
         if (gl) ctx.drawImage(gl, c.x - 56, c.y - 66);
-        if (!c.anim && RE.hasDef('diamond')) {
-          c.anim = Assets.reanim('diamond');
-          if (c.anim) { c.anim.frameStart = 0; c.anim.frameCount = c.anim.def ? c.anim.def.n : 1; c.anim.animRate = 10; c.anim.loopType = RE.LOOP; }
-        }
-        if (c.anim) { c.anim.update(1 / 60); c.anim.setPosition(c.x, c.y); c.anim.draw(ctx); }
+        this.coinAttach(c);
+        if (c.anim) { c.anim.setPosition(c.x, c.y); c.anim.draw(ctx); }
         else {
           // def 未就绪: 静态钻石图回退
           const dm = img('diamond.png');
           if (dm) ctx.drawImage(dm, c.x - dm.width / 2, c.y - dm.height / 2);
         }
-      } else if (c.hitGround && !c.collected && RE.hasDef(c.type === 'gold' ? 'coin_gold' : 'coin_silver')) {
-        // 落地: 旋转金币 reanim (原版 attachment 显现)
-        if (!c.anim) {
-          c.anim = Assets.reanim(c.type === 'gold' ? 'coin_gold' : 'coin_silver');
-          if (c.anim) { c.anim.frameStart = 0; c.anim.frameCount = c.anim.def ? c.anim.def.n : 1; c.anim.animRate = 10; c.anim.loopType = RE.LOOP; }
+      } else if (c.hitGround && !c.collected) {
+        // 落地: 仅旋转金币 reanim (原版 UpdateFall 落地后隐藏静态币面)
+        this.coinAttach(c);
+        if (c.anim) { c.anim.setPosition(c.x, c.y); c.anim.draw(ctx); }
+        else {
+          const im = img(c.type === 'gold' ? 'coin_gold_dollar.png' : 'coin_silver_dollar.png');
+          if (im) ctx.drawImage(im, c.x + 8 - im.width / 2, c.y + 10 - im.height / 2);
+          else {
+            ctx.fillStyle = c.type === 'gold' ? '#ffd34d' : '#cfd6dd';
+            ctx.beginPath(); ctx.arc(c.x + 8, c.y + 10, 11, 0, Math.PI * 2); ctx.fill();
+          }
         }
-        if (c.anim) { c.anim.update(1 / 60); c.anim.setPosition(c.x, c.y); c.anim.draw(ctx); }
       } else {
-        // 飞行/收取中/def 未就绪: 静态币面 + 光晕 (原版 DOLLAR @(+8,+10) / COINGLOW @(−14,−12), 中心缩放)
-        const sc = c.collected ? Math.max(0.5, Math.min(1, Math.hypot(442 - c.x, 558 - c.y) * 0.05)) : 1;
+        // 飞行/收取中: 静态币面 + 光晕 (原版 COINGLOW @(−14,−12) / DOLLAR @(+8,+10) 中心对齐, 原尺寸)
         const gl = img('coinglow.png');
-        if (gl) ctx.drawImage(gl, c.x - 14 - gl.width * sc / 2, c.y - 12 - gl.height * sc / 2, gl.width * sc, gl.height * sc);
+        if (gl) ctx.drawImage(gl, c.x - 14 - gl.width / 2, c.y - 12 - gl.height / 2);
         const im = img(c.type === 'gold' ? 'coin_gold_dollar.png' : 'coin_silver_dollar.png');
-        if (im) ctx.drawImage(im, c.x + 8 - im.width * sc / 2, c.y + 10 - im.height * sc / 2, im.width * sc, im.height * sc);
+        if (im) ctx.drawImage(im, c.x + 8 - im.width / 2, c.y + 10 - im.height / 2);
         else {
           ctx.fillStyle = c.type === 'gold' ? '#ffd34d' : '#cfd6dd';
-          ctx.beginPath(); ctx.arc(c.x + 8, c.y + 10, 11 * sc, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(c.x + 8, c.y + 10, 11, 0, Math.PI * 2); ctx.fill();
         }
       }
       ctx.restore();
     }
-    // 蜗牛 + 残影 (原版 StinkyUpdate: 面左=原生 +0.8 @(x,y); 面右=镜像 −0.8 @(x+69,y))
+    // 蜗牛 + 残影 (原版 GridItem::DrawStinky: 面左=原生 +0.8 @(x,y); 面右=镜像 −0.8 @(x+69,y);
+    //   残影仅画奇数帧 i%2, alpha=PvzpAnimateCurve(0,11,i,64,16)/255 递减)
     if (this.stinky && this.stinky.r) {
       const s = this.stinky;
       const stDraw = (sx, sy) => {
@@ -3024,13 +3127,24 @@ Screens.zengarden = {
         s.r.draw(ctx);
       };
       ctx.save();
-      for (let i = s.trail.length - 1; i >= 1; i--) {
-        ctx.globalAlpha = 0.13 * (1 - i / s.trail.length);
+      for (let i = s.trail.length - 1; i >= 0; i--) {
+        if (i % 2) continue;   // 原版: if (i % 2) 才绘制
+        const a = (64 - (i * 48 / 11)) / 255;
+        ctx.globalAlpha = Math.max(0.03, a);
         stDraw(s.trail[i].x, s.trail[i].y);
       }
       ctx.restore();
       ctx.save();
       stDraw(s.x, s.y);
+      // 持巧克力悬停蜗牛: 白色叠加高亮 (原版 aStinky->mHighlighted)
+      if (this.tool === 'chocolate' && mouse.x >= s.x && mouse.x <= s.x + 69 && mouse.y >= s.y && mouse.y <= s.y + 50) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = 0.55;
+        ctx.filter = 'brightness(2.6) saturate(0.25)';
+        stDraw(s.x, s.y);
+        ctx.restore();
+      }
       // 睡眠 Zzz (原版挂 shell 轨道 (34,39)×0.8; 持巧克力光标时隐藏)
       if (s.state === 'sleep' && this.tool !== 'chocolate') this.drawZzz(ctx, s.x + 27, s.y + 31, t, 3);
       ctx.restore();
@@ -3105,15 +3219,22 @@ Screens.zengarden = {
       }
     }
     // ---- 主菜单按钮 (原版 mMenuButton: 石质 [MAIN_MENU_BUTTON] @(628,-10,163,46),
-    //      ZEN_FADING 时滑至 -50; 教程期间隐藏, 完成后出现) ----
+    //      ZEN_FADING 时滑至 -50; 常显 — 见 menuVisible 注释; 教程完成时闪烁) ----
     this._menu = null;
     if (this.menuVisible()) {
       const mbY = -10 - 40 * ease;
+      ctx.save();
+      if (this.menuFlashing()) {
+        // 原版 GetFlashingColor(mMainCounter, 75): 75 帧周期色彩脉动
+        const f = 0.5 + 0.5 * Math.sin(t * 8.3);
+        ctx.filter = `brightness(${(1 + f * 0.8).toFixed(2)}) saturate(${(1 + f * 0.4).toFixed(2)})`;
+      }
       if (UI && UI.drawStoneButton) UI.drawStoneButton(ctx, 628, mbY, 163, 46, '主菜单', 19);
       else {
         ctx.fillStyle = '#a8834a'; ctx.strokeStyle = '#5c4020'; ctx.lineWidth = 2;
         ctx.fillRect(628, mbY, 163, 46);
       }
+      ctx.restore();
       // 命中区 = 屏内可见部分
       const visTop = Math.max(0, mbY);
       if (mbY + 46 > 0) this._menu = { x: 628, y: visTop, w: 163, h: mbY + 46 - visTop };
@@ -3174,13 +3295,28 @@ Screens.zengarden = {
       }
       ctx.restore();
     });
-    // ---- 下一花园按钮 (原版 IMAGE_ZEN_NEXTGARDEN @ x=566, 随 fading 同步滑动; 菜单可见时才画) ----
+    // ---- 工具悬停提示 (原版 UpdateToolTip: 槽位下方居中 (x+35, y+72); 持工具/栏隐藏时不显示) ----
+    if (!this.tool && !this.heldPlant && this.trayFade < 0.5 && mouse.y < this.SLOT_H) {
+      const hovTool = (this._tools || []).find(tl => mouse.x >= tl.x && mouse.x < tl.x + tl.w && mouse.y >= tl.y && mouse.y < tl.y + tl.h);
+      if (hovTool && this.TOOL_TIP[hovTool.k]) {
+        ctx.save();
+        ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = 3;
+        ctx.strokeText(this.TOOL_TIP[hovTool.k], hovTool.x + 35, this.SLOT_H + 14);
+        ctx.fillText(this.TOOL_TIP[hovTool.k], hovTool.x + 35, this.SLOT_H + 14);
+        ctx.restore();
+      }
+    }
+    // ---- 下一花园按钮 (原版 IMAGE_ZEN_NEXTGARDEN 绘制 @ x=566; 命中区 GetZenButtonRect+564
+    //      = (564, 0, 70, 72) 随 fading 同步滑动; 菜单可见时才画) ----
     this._nextGarden = null;
     const gardens = this.ownedGardens(game);
     if (gardens.length > 1 && this.menuVisible()) {
       const ng = img('zen_nextgarden.png');
       const nx = 566, ny = Math.round(offY);
-      this._nextGarden = { x: 566, y: 0, w: 60, h: 60 };
+      this._nextGarden = { x: 564, y: 0, w: 70, h: 72 };
       if (ng) ctx.drawImage(ng, nx, ny, 60, 60);
       else {
         ctx.save();
@@ -3192,13 +3328,14 @@ Screens.zengarden = {
       }
       const gi = gardens.indexOf(this.data.garden);
       const nxt = gardens[(gi + 1) % gardens.length];
-      if (mouse.x > nx && mouse.x < nx + 60 && mouse.y < 60) {
+      // 悬停提示 (原版 [NEXT_GARDEN_TOOLTIP] @ (599, y+52) 居中)
+      if (this.trayFade < 0.5 && mouse.x >= this._nextGarden.x && mouse.x < this._nextGarden.x + this._nextGarden.w && mouse.y < this.SLOT_H) {
         ctx.save();
         ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
         ctx.textAlign = 'center'; ctx.fillStyle = '#ffe9a8';
         ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 3;
-        const label = '前往' + (this.GARDEN_LABEL[nxt] || '');
-        ctx.strokeText(label, nx + 30, 76); ctx.fillText(label, nx + 30, 76);
+        const label = '前往' + (this.GARDEN_LABEL[nxt] || '下一座花园');
+        ctx.strokeText(label, 599, this.SLOT_H + 14); ctx.fillText(label, 599, this.SLOT_H + 14);
         ctx.restore();
       }
     }
@@ -3216,8 +3353,10 @@ Screens.zengarden = {
       ctx.fillText(String(game.coins || 0), 450 + 116, 599 - cbH + 24);
       ctx.restore();
     }
-    // ---- 教程箭头 (原版 ShowTutorialArrowOnWateringCan: 粒子 @ 槽位 (+10,+10) 弹跳) ----
-    if (this.tut && this.tut.step === 'pickup_water' && this._tools.length) {
+    // ---- 教程箭头 (原版 ShowTutorialArrowOnWateringCan: 2104 句点掉时才出现 —
+    //      AdvanceCrazyDaveDialog 在显示到 2104 并再次点击时挂出箭头; 戴夫未退场前不显示) ----
+    const arrowOK = !this.bubble || (this.bubble.tutorial && this.bubble.line >= this.bubble.lines.length - 1);
+    if (this.tut && this.tut.step === 'pickup_water' && arrowOK && this._tools.length) {
       const wt = this._tools[0];
       ctx.save();
       this.arrowT += 1 / 60;
@@ -3347,6 +3486,8 @@ Screens.zengarden = {
   click(p, game) {
     // 任意点击 → 工具栏复位 (原版 MouseDownZenGarden: ZEN_FADING → NORMAL + counter=3000)
     this.trayIdle = 0;
+    // 加载屏期间不响应
+    if (!this._ready) return;
     // 对话气泡优先
     if (this.bubble) {
       if (this.bubble.sell && this._sellBtns) {
@@ -3370,12 +3511,14 @@ Screens.zengarden = {
       return;
     }
     // 主菜单 (原版: 石质 MAIN_MENU_BUTTON, 普通光标才可点 — CanInteractWithBoardButtons,
-    //   点击直接回主菜单 DoBackToMain; 教程完成态点击同时结束教程)
+    //   点击直接回主菜单 DoBackToMain; TUTORIAL_ZEN_GARDEN_COMPLETED 状态下点击
+    //   = FinishZenGardenToturial 结束教程)
     if (this._menu && !this.tool && !this.heldPlant && inRect(p, this._menu.x, this._menu.y, this._menu.w, this._menu.h)) {
       game.audio.play('gravebutton');
       if (this.tut && this.tut.step !== 'done') this.finishTutorial(game);
       this.leaveToMenu(game);
       game.state = 'menu';
+      Screens.menu.enter();   // 与其他屏返回一致: 重放菜单滑入动画
       return;
     }
     // 切换花园 (原版 GotoNextGarden 先 LeaveGarden: 结算进行中工具 + 收币)
@@ -3440,7 +3583,9 @@ Screens.zengarden = {
         return;
       }
     }
-    // 蜗牛: 普通光标点击唤醒 / 巧克力喂食 (原版 MouseDownZenGarden STINKY 命中; 视觉体 [x, x+69]×[y, y+50])
+    // 蜗牛: 普通光标点击唤醒 / 巧克力喂食 (原版 MouseDownZenGarden STINKY 命中只对
+    //   NORMAL 光标唤醒、巧克力在喂食逻辑里单独处理 — 其余光标穿过去继续用工具,
+    //   不挡住蜗牛身后植物的浇灌; 视觉体 [x, x+69]×[y, y+50])
     if (this.stinky && p.x >= this.stinky.x && p.x <= this.stinky.x + 69 && p.y >= this.stinky.y && p.y <= this.stinky.y + 50) {
       if (this.tool === 'chocolate') {
         if ((this.data.chocolate || 0) > 0) {
@@ -3449,10 +3594,12 @@ Screens.zengarden = {
           game.audio.play('wakeup');
           this.tool = null;
         } else game.audio.play('buzzer');
+        return;
       } else if (!this.tool) {
         this.wakeStinky(false);
+        return;
       }
-      return;
+      // 持其他工具: 落到格子/工具逻辑 (不 return)
     }
     // 金币收集 (原版 ToolHitTest 金币命中优先于格子)
     for (const c of this.coins) {
