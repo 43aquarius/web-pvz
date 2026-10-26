@@ -33,7 +33,11 @@ const Game = {
   selectedZombieCard: -1,   // 我不是僵尸: 选中的僵尸卡
   littleTrouble: false,     // 小僵尸关 (原版 IsLittleTroubleLevel: 冒险3-5 + 小游戏"小僵尸大麻烦")
   menuDialog: null,         // 游戏内菜单对话框 (#14: 菜单按钮 → 菜单页而非直接回主菜单)
-  coins: 0,                 // 金币 (戴夫商店货币, 原版 $)
+  // 金币 (戴夫商店货币, 原版 $) — 调试模式 (解锁全部内容) 下无限: 恒 99999
+  //   真实值存 _coins; 解锁前快照存 _dbgSnap, 重锁时还原 (见 screens.js 选项屏)
+  get coins() { return this.debugUnlocked ? 99999 : (this._coins || 0); },
+  set coins(v) { this._coins = this.debugUnlocked ? 99999 : Math.max(0, v); },
+  _coins: 0,
   purchased: {},            // 商店已购物 { key: true }
   shopTab: 'items',         // 商店页签
   playerName: null,         // #2 玩家姓名 (原版 mPlayerInfo->mName; NewUserDialog 创建)
@@ -112,6 +116,7 @@ const Game = {
       if (save.debugUnlocked) this.debugUnlocked = true;
       if (save.coins) this.coins = save.coins;
       if (save.purchased) this.purchased = save.purchased;
+      if (save.dbgSnap) this._dbgSnap = save.dbgSnap;   // 调试解锁前的金币/已购快照
       this.daveSeen = JSON.parse(localStorage.getItem('webpvz_dave') || '{}');
     } catch (e) { }
     // #2 玩家姓名 (原版 Profile: 主菜单首次进入弹 NewUserDialog 创建; localStorage 持久化)
@@ -819,7 +824,8 @@ const Game = {
   },
 
   saveShop() {
-    try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked, debugUnlocked: this.debugUnlocked || undefined, coins: this.coins, purchased: this.purchased })); } catch (e) { }
+    // 存真实金币 (_coins — 调试模式下 get 恒 99999, 不落盘); 快照一并持久化
+    try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: this.progress.unlocked, debugUnlocked: this.debugUnlocked || undefined, coins: this._coins || 0, purchased: this.purchased, dbgSnap: this._dbgSnap || undefined })); } catch (e) { }
   },
 
   // ---------- 戴夫商店 (#11: 通关 3-4 解锁) ----------
@@ -851,7 +857,9 @@ const Game = {
       this.audio.play('points');
       return true;
     }
-    if (this.purchased[key]) return false;
+    // 消耗品 (肥料/杀虫剂) 不占"已购"位 — 可反复购买补库存
+    //   (教程赠礼/调试赠送只标记 purchased[key] 使工具栏常驻, 不得阻断补货 — 原版 purchases 表同语义)
+    if (!it.consumable && this.purchased[key]) return false;
     if (this.coins < it.cost) { this.audio.play('buzzer'); return false; }
     // 种子槽须按顺序购买
     if (key === 'slot9' && !this.purchased['slot8']) return false;

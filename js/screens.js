@@ -556,6 +556,8 @@ Screens.menu = {
     // 每帧推进 (置顶: fallback 素材缺失模式同样推进状态机/过场)
     this.update2(1 / 60);
     // 素材缺失兜底: reanim 或关键背景图缺失 → 简化菜单 (仍可点击进入游戏)
+    //   弱网自愈: 进菜单时 def 未加载 → enter() 静默返回; 每帧重试, 加载完成即切正式菜单
+    if (!this.inst && RE.hasDef('SelectorScreen')) this.enter();
     if (!this.inst || !img('selectorscreen_bg.jpg')) {
       this.drawFallback(ctx);
       this.drawStarting(ctx);   // #1 大手过场叠加
@@ -877,12 +879,13 @@ Screens.options = {
       pvzText(ctx, i === 0 ? '音效' : '全屏', sx + 36, cy + 18, 16, '#4a2f10', { align: 'left' });
       this.rects[`cb${i}`] = { x: sx, y: cy, w: 120, h: 26 };
     }
-    // ---- 调试: 一键解锁全部关卡/小游戏 (方便查看所有内容) ----
+    // ---- 调试: 解锁全部内容 (关卡/小游戏) + 金币无限 + 禅园工具全套赠送 ----
     const ubY = cbY + 108;
     const uRect = { x: dx + 80, y: ubY, w: dw - 160, h: 46 };
     this.rects.unlock = uRect;
     ctx.save();
-    const allOpen = game.progress.unlocked > 50;
+    // 状态看 debugUnlocked 而非 unlocked>50 (正常通关 5-5 也到 51, 不得误显示"已解锁")
+    const allOpen = !!game.debugUnlocked;
     const hov = Screens.hover === 'unlock';
     // 按钮底色
     const g2 = ctx.createLinearGradient(0, ubY, 0, ubY + 46);
@@ -902,13 +905,13 @@ Screens.options = {
     ctx.font = 'bold 18px "Noto Sans SC", "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
     ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineJoin = 'round';
-    const uLabel = allOpen ? '已解锁全部内容 ✓ (再次点击重新锁定)'
-      : '解锁全部关卡与小游戏 (调试)';
+    const uLabel = allOpen ? '已开启: 全关卡 + 金币无限 ✓ (再次点击还原)'
+      : '解锁全部内容 + 金币无限 (调试)';
     ctx.strokeText(uLabel, 400, ubY + 29);
     ctx.fillStyle = '#fff4d0';
     ctx.fillText(uLabel, 400, ubY + 29);
     ctx.restore();
-    pvzText(ctx, '解锁后点主菜单"冒险模式"可选择任意关卡', 400, ubY + 74, 13, '#6a4a20');
+    pvzText(ctx, '含禅园全套工具赠送 · 解锁后主菜单"冒险模式"可选任意关卡', 400, ubY + 74, 13, '#6a4a20');
     pvzText(ctx, '点击此处返回', 400, dy + dh - 40, 20, '#6b1c04');
     this.rects.back = { x: dx + 120, y: dy + dh - 70, w: 260, h: 50 };
   },
@@ -929,17 +932,41 @@ Screens.options = {
       else if (document.exitFullscreen) document.exitFullscreen();
       return;
     }
-    // 一键解锁/重锁定
+    // 一键解锁/还原 (金币无限 + 禅园工具赠送; 重锁恢复快照)
     if (r.unlock && inRect(p, r.unlock.x, r.unlock.y, r.unlock.w, r.unlock.h)) {
-      if (game.progress.unlocked > 50) {
+      if (game.debugUnlocked) {
+        // ---- 还原: 关卡回 1, 金币/已购恢复解锁前快照 ----
         game.progress.unlocked = 1;
         game.debugUnlocked = false;
-        try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: 1 })); } catch (e) { }
+        const snap = game._dbgSnap;
+        if (snap) {
+          game.coins = snap.coins || 0;
+          game.purchased = snap.purchased || {};
+          game.purchasedSet = new Set(Object.keys(game.purchased));
+        }
+        game._dbgSnap = null;
+        game.saveShop();
         game.audio.play('buzzer');
       } else {
+        // ---- 解锁: 全关卡 + 金币无限 (恒 99999) + 禅园工具全套赠送 ----
+        game._dbgSnap = { coins: game._coins || 0, purchased: JSON.parse(JSON.stringify(game.purchased)) };
         game.progress.unlocked = 51;
         game.debugUnlocked = true;
-        try { localStorage.setItem('webpvz_save', JSON.stringify({ unlocked: 51, debugUnlocked: true })); } catch (e) { }
+        game.coins = 99999;
+        // 花园工具/场景/蜗牛一次性赠送 (肥料/杀虫剂仅标记槽位常驻 — 商店可继续补货)
+        const GARDEN_GRANTS = ['goldwatering', 'phonograph', 'glove', 'mushroomgarden', 'aquarium', 'wheelbarrow', 'stinky', 'fertilizer', 'bugspray'];
+        for (const k of GARDEN_GRANTS) game.purchased[k] = true;
+        game.purchasedSet = new Set(Object.keys(game.purchased));
+        // 消耗品库存兜底 (巧克力无商店来源 — 原版仅僵尸掉落)
+        const zeng = Screens.zengarden;
+        try {
+          if (!zeng.data) zeng.load();
+          zeng.data.fertilizer = Math.max(zeng.data.fertilizer || 0, 10);
+          zeng.data.bugspray = Math.max(zeng.data.bugspray || 0, 10);
+          zeng.data.chocolate = Math.max(zeng.data.chocolate || 0, 5);
+          zeng.save();
+        } catch (e) { }
+        game.saveShop();
         game.audio.play('points');
         this.unlockFlash = 1.2;
       }
@@ -1633,7 +1660,8 @@ Screens.shop = {
       const pos = this.itemPos(i);
       // 金盏花: 每日限购 — 原版 purchases[marigoldN]=daysSince2000 日期判定
       const marigoldSold = it.key.startsWith('marigold') && game && game.purchased[it.key + '_day'] === new Date().toDateString();
-      const bought = marigoldSold || (game && game.purchased[it.key]);
+      // 消耗品 (肥料/杀虫剂) 永可复购补货 — 不因工具栏常驻标记而"已售出"
+      const bought = marigoldSold || (game && game.purchased[it.key] && !it.consumable);
       const hov = this.hoverItem === i && !bought;
       const can = game && game.coins >= it.cost;
       const pop = bought ? 0 : (hov ? Math.sin(t * 6) * 2 : 0);
