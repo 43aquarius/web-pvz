@@ -383,6 +383,54 @@ const Cutscene = {
       .replace(/\{[A-Z_0-9]+\}/g, '');   // 剩余表情标记清除
     return t.trim();
   },
+  // 原始文本 (保留 {SCREAM}/{SHAKE} 等控制标记 — 原版 CrazyDaveTalkMessage 靠它们选语音)
+  daveRaw(id) {
+    const dialogs = Assets.data('dave_dialogs');
+    let t = dialogs['CRAZY_DAVE_' + id] || '';
+    const game = this.board.game;
+    t = t.replace('{PLAYER_NAME}', (game.playerName || '邻居'))
+      .replace('{MONEY}', String(game.coins || 0))
+      .replace('{UPGRADE_COST}', '$7500');
+    return t;
+  },
+  // #fix(戴夫语音乱/快): 原版 LawnApp::CrazyDaveTalkMessage (LawnApp.cpp 2539-2780) —
+  //   每条台词只播一次语音: 标记优先 ({NO_SOUND}/{SHORT_SOUND}/{SCREAM2}/{SCREAM}/{SHAKE}),
+  //   否则按非标记字节数分档 <23 SHORT / <52 LONG / ≥52 EXTRA_LONG;
+  //   说话动画同步选定 PLAY_ONCE_AND_HOLD @12fps (旧实现每 1.6s 随机重播 → 又乱又快)
+  daveVoiceFor(raw) {
+    if (!raw) return null;
+    if (raw.indexOf('{NO_SOUND}') >= 0) return null;
+    const pick3 = (base) => {
+      const v = 1 + Math.floor(Math.random() * 3);
+      return v === 1 ? base : base + v;
+    };
+    if (raw.indexOf('{SHORT_SOUND}') >= 0) return { voice: pick3('dave_short'), anim: 'anim_smalltalk' };
+    if (raw.indexOf('{SCREAM2}') >= 0) return { voice: 'dave_scream2', anim: 'anim_mediumtalk' };
+    if (raw.indexOf('{SCREAM}') >= 0) return { voice: 'dave_scream', anim: 'anim_smalltalk' };
+    if (raw.indexOf('{SHAKE}') >= 0) return { voice: 'dave_crazy', anim: 'anim_crazy' };
+    // 字节数 (原版注释: byte count tracks CJK talk duration better than code points)
+    let bytes = 0, inCtl = false;
+    for (const ch of raw) {
+      if (ch === '{') inCtl = true;
+      else if (ch === '}') inCtl = false;
+      else if (!inCtl) bytes += ch.charCodeAt(0) > 255 ? 3 : 1;
+    }
+    if (bytes < 23) return { voice: pick3('dave_short'), anim: 'anim_smalltalk' };
+    if (bytes < 52) return { voice: pick3('dave_medium'), anim: 'anim_mediumtalk' };
+    return { voice: pick3('dave_extralong'), anim: 'anim_blahblah' };
+  },
+  // 播报一条台词 (原版 CrazyDaveTalkIndex: 停旧语音 → 说话动画 → 单次语音)
+  daveSpeak(raw) {
+    const game = this.board.game;
+    game.audio.stopVoice && game.audio.stopVoice();      // CrazyDaveStopSound
+    const v = this.daveVoiceFor(raw);
+    this._daveIdled = false;
+    if (!v) return;                                      // {NO_SOUND}
+    if (this.daveAnim && this.daveAnim.animExists && this.daveAnim.animExists(v.anim)) {
+      this.daveAnim.play(v.anim, RE.PLAY_ONCE_HOLD, 12); // PLAY_ONCE_AND_HOLD @12fps
+    }
+    if (v.voice) game.audio.playVoice(v.voice);
+  },
   daveIdsFor(level, firstTime) {
     const lv = level.id;
     // [原版 CutScene::StartLevel 场景→ID映射表]
@@ -415,10 +463,13 @@ const Cutscene = {
   daveDialogFor(level, firstTime) {
     const spec = this.daveIdsFor(level, firstTime);
     if (!spec || !spec.ids.length) return null;
-    const lines = spec.ids.map(id => this.daveText(id)).filter(t => t);
-    if (!lines.length) return null;
+    // 台词与原始文本 (含控制标记) 成对保留 — 标记决定语音/说话动画
+    const pairs = spec.ids.map(id => [this.daveText(id), this.daveRaw(id)]).filter(p => p[0]);
+    if (!pairs.length) return null;
+    const lines = pairs.map(p => p[0]);
     return {
       lines,
+      raws: pairs.map(p => p[1]),
       gift: spec.giftAt ? lines.slice(lines.length - (spec.ids.length - spec.ids.indexOf(spec.giftAt))) : null,
       boss: !!spec.boss,
       dig: !!spec.dig,                                          // #7 1-5 铲子挖掘教学
@@ -448,7 +499,7 @@ const Cutscene = {
       this.daveT = 0;
       this.t = 1.5;              // 冻结在镜头房子视图 (cam=-220)
       if (this.daveAnim) this.daveAnim.play('anim_enter', RE.PLAY_ONCE_HOLD, 24);
-      game.audio.play('dave_short');
+      // 原版 CrazyDaveEnter (LawnApp.cpp 2455): 入场无语音 — 第一句台词在入场结束时播
     }
     if (this.davePhase === 'enter') {
       this.daveT += dt;
@@ -457,19 +508,18 @@ const Cutscene = {
         this.davePhase = 'talk';
         this.daveLine = 0;
         this.daveTalkT = 0;
-        if (this.daveAnim) this.daveAnim.play('anim_mediumtalk', RE.LOOP, 18);
-        game.audio.play('dave_medium');
+        // 原版 CutScene 1120: 入场结束即播第一条 (CrazyDaveTalkIndex(mCrazyDaveDialogStart))
+        this.daveSpeak(this.daveDialog && this.daveDialog.raws ? this.daveDialog.raws[0] : null);
       }
     } else if (this.davePhase === 'talk') {
       this.daveTalkT += dt;
       if (this.daveAnim) {
         this.daveAnim.update(dt);
-        // 说话动画循环切换
-        if (this.daveTalkT > 1.6) {
-          this.daveTalkT = 0;
-          const next = ['anim_smalltalk', 'anim_mediumtalk', 'anim_blahblah'][Math.floor(Math.random() * 3)];
-          this.daveAnim.play(next, RE.LOOP, 16 + Math.random() * 8);
-          game.audio.play(Math.random() < 0.5 ? 'dave_short' : 'dave_medium');
+        // 原版 UpdateCrazyDave (LawnApp.cpp 2818-2824): 说话动画播完 (loopCount>0) →
+        //   anim_idle 循环等待点击 (不再随机重播语音/动画 — 旧实现 1.6s 随机重播又乱又快)
+        if (this.daveAnim.loopCount > 0 && !this._daveIdled) {
+          this._daveIdled = true;
+          this.daveAnim.play('anim_idle', RE.LOOP, 12);
         }
       }
     } else if (this.davePhase === 'gift') {
@@ -487,14 +537,15 @@ const Cutscene = {
         this._digAnnounced = true;
         // 惊喜对话 2410-2415 (含 SHOW_WALLNUT 坚果展示)
         const ids = range(2410, 2415);
-        const lines = ids.map(id => this.daveText(id)).filter(tx => tx);
-        this.daveDialog = { lines, gift: null, boss: false, dig: false, walnutLine: ids.indexOf(2412) };
+        const pairs = ids.map(id => [this.daveText(id), this.daveRaw(id)]).filter(p => p[0]);
+        this.daveDialog = {
+          lines: pairs.map(p => p[0]), raws: pairs.map(p => p[1]),
+          gift: null, boss: false, dig: false, walnutLine: ids.indexOf(2412),
+        };
         this.daveLine = 0;
         this.daveTalkT = 0;
         this.davePhase = 'talk';
-        if (this.daveAnim) this.daveAnim.play('anim_mediumtalk', RE.LOOP, 18);
-        game.audio.play('dave_medium');
-        game.audio.play('dave_crazy');
+        this.daveSpeak(this.daveDialog.raws[0]);
       }
     } else if (this.davePhase === 'leave') {
       this.daveT += dt;
@@ -530,7 +581,8 @@ const Cutscene = {
       if (giftLines && this.daveLine >= lines.length - giftLines) {
         // 进入赠送阶段 (原版 2406: "拿起铲子开始挖吧" — 仅 1-5 首次)
         game.shovelUnlocked = true;
-        game.audio.play('dave_crazy');
+        game.audio.stopVoice && game.audio.stopVoice();
+        game.audio.playVoice('dave_crazy');
         if (this.daveAnim) this.daveAnim.play('anim_crazy', RE.PLAY_ONCE_HOLD, 20);
         this.davePhase = 'gift';
         this.daveT = 0;
@@ -545,16 +597,18 @@ const Cutscene = {
           this.davePhase = 'leave';
           this.daveT = 0;
           this.daveGrab = true;   // 等待动画自然播完 (不再手动上升)
+          game.audio.stopVoice && game.audio.stopVoice();   // 原版 CrazyDaveLeave → StopSound
           game.audio.play('bungee_scream');   // 原版 1571: 仅 SOUND_BUNGEE_SCREAM
         } else {
           if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
           this.davePhase = 'leave';
           this.daveT = 0;
-          game.audio.play('dave_short');
+          game.audio.stopVoice && game.audio.stopVoice();   // 原版 CrazyDaveLeave → StopSound
         }
         return true;
       }
-      game.audio.play(Math.random() < 0.5 ? 'dave_short' : 'dave_medium');
+      // 播报新台词 (原版 AdvanceCrazyDaveText → CrazyDaveTalkIndex: 单次语音)
+      this.daveSpeak(this.daveDialog && this.daveDialog.raws ? this.daveDialog.raws[this.daveLine] : null);
       return true;
     }
     if (this.davePhase === 'gift') {
@@ -567,15 +621,18 @@ const Cutscene = {
           this.davePhase = 'waitdig';
           this.daveT = 0;
           this.daveTalkT = 0;
-          if (this.daveAnim) this.daveAnim.play('anim_smalltalk', RE.LOOP, 10);
-          game.audio.play('dave_short');
+          if (this.daveAnim) this.daveAnim.play('anim_idle', RE.LOOP, 10);
+          game.audio.stopVoice && game.audio.stopVoice();
         } else {
           if (this.daveAnim) this.daveAnim.play('anim_leave', RE.PLAY_ONCE_HOLD, 22);
           this.davePhase = 'leave';
           this.daveT = 0;
+          game.audio.stopVoice && game.audio.stopVoice();   // 原版 CrazyDaveLeave → StopSound
         }
+      } else {
+        // 赠礼台词逐句播报
+        this.daveSpeak(this.daveDialog && this.daveDialog.raws ? this.daveDialog.raws[this.daveLine] : null);
       }
-      game.audio.play('dave_short');
       return true;
     }
     return false;

@@ -846,6 +846,9 @@ class Zombie {
     if (this.board.state === 'playing' || !this.isOnBoard || this.fromWave === WAVE_WINNER) doUpdate = true;
     if (this.board.game.cutsceneRunning && this.type === 'BOSS') doUpdate = true;
     else if (this.board.game.cutsceneRunning) doUpdate = false;
+    // #fix(僵王白旗): 奖励掉落阶段仅僵王继续更新 — 原版奖励期僵尸不冻结,
+    //   白旗 flag_loop 持续挥舞至玩家领奖 (board.update awarddrop 分支同步 tick)
+    if (this.board.state === 'awarddrop' && this.type === 'BOSS') doUpdate = true;
     if (!doUpdate) return;
 
     if (this.phase === PH.BURNED) {
@@ -2280,15 +2283,22 @@ class Zombie {
     this.dropLoot();
   }
 
-  // 原版 BossStartDeath: 头缩回 + 大爆炸 + BossDie(全屏僵尸清场 + 音乐淡出)
+  // 原版 BossStartDeath + PlayDeathAnim(BOSS) 合并: 机器散架 + 驾驶员颠簸 + BossDie(清场+音乐淡出)
   bossStartDeath() {
     if (this.isDeadOrDying) return;
     this.phase = PH.DYING;
     this.velX = 0;
-    this.playZombieReanim('anim_death', RE.PLAY_ONCE_HOLD, 0, 12);
+    // 原版 PlayDeathAnim (Zombie.cpp 8996-9003): 僵王死亡动画 18fps
+    this.playZombieReanim('anim_death', RE.PLAY_ONCE_HOLD, 0, 18);
+    // 原版: 驾驶员同步播自己的 anim_death @18fps (PlayDeathAnim 9001-9002) —
+    //   旧实现缺失 → 博士在机器散架时仍在傻笑/开船
+    if (this.bossDriver) {
+      try { this.bossDriver.playReanim('anim_death', RE.PLAY_ONCE_HOLD, 20, 18); } catch (e) { }
+    }
     this.board.game.audio.play('bossdie');
     this.board.game.audio.stopBGM && this.board.game.audio.stopBGM();
-    this.board.addEffect('bossexplosion', 400, 300);
+    // 原版 BossStartDeath 10213: 大爆炸粒子 @ (700, 150) (旧实现 (400,300) 偏左下)
+    this.board.addEffect('bossexplosion', 700, 150);
     // 原版 BossDie: 其余僵尸全部消亡
     for (const z of this.board.zombies) {
       if (z.dead || z === this || z.fromWave === -2) continue;
@@ -3145,6 +3155,10 @@ class Zombie {
     let py = this.posY + drawPos.imageOffsetY + drawPos.headY + drawPos.bodyY + 18;
     let kind = 'helm';   // 掉落贴图分类 (render.js drawLimb 按类选原版独立贴图)
     let track = null, centerImg = null;   // #7 掉落点居中: 轨道 + 主贴图
+    // #fix(防具掉落贴图恢复全新): 掉落瞬间保持当前受损阶段贴图 —
+    //   原版掉落粒子用僵尸当前损伤图 (godot zombie_003 Node2D_Arm1_Drop 贴图 = Zombie_cone3;
+    //   血量打空时 getHelmDamageIndex()=2 → cone3/bucket3 最受损图, 旧实现恒用 1 号新图)
+    const dmgIdx = this.getHelmDamageIndex();
     if (this.helmType === 'cone') {
       track = 'anim_cone'; centerImg = 'zombie_cone1';
       this.reanimShowPrefix('anim_cone', RG.HIDDEN);
@@ -3174,19 +3188,26 @@ class Zombie {
       const tc = this.getTrackCenter(track, centerImg);
       if (tc) [px, py] = tc;
     }
+    // 掉落粒子携带受损阶段贴图 (cone1/2/3 · bucket1/2/3 · football_helmet1/2/3)
+    const dmgImg =
+      kind === 'cone' ? 'zombie_cone' + (1 + dmgIdx) :
+      kind === 'bucket' ? 'zombie_bucket' + (1 + dmgIdx) :
+      this.helmType === 'football' ? 'zombie_football_helmet' + (1 + dmgIdx) : null;
     this.helmType = null;
     this.helmHealth = 0;
     if (!(flags & DMG.DOESNT_LEAVE_BODY)) {
-      this.board.addLimbParticle(kind, px, py, null, this.row);
+      this.board.addLimbParticle(kind, px, py, dmgImg, this.row);
     }
     this.updateDamageStates(flags);
   }
 
   dropShield(flags) {
     if (!this.shieldType) return;
+    // #fix(防具掉落贴图恢复全新): 盾类掉落同样携带受损阶段贴图 (door1/2/3 · paper1/2/3)
+    const sIdx = this.getShieldDamageIndex();
     if (this.shieldType === 'door') {
       this.showDoorArms(false);
-      if (!(flags & DMG.DOESNT_LEAVE_BODY)) this.board.addLimbParticle('door', this.x + 20, this.y + 40, null, this.row);
+      if (!(flags & DMG.DOESNT_LEAVE_BODY)) this.board.addLimbParticle('door', this.x + 20, this.y + 40, 'zombie_screendoor' + (1 + sIdx), this.row);
     } else if (this.shieldType === 'newspaper') {
       this.reanimShowPrefix('Zombie_paper_paper', RG.HIDDEN);
       // 报纸僵尸暴怒
@@ -3194,7 +3215,7 @@ class Zombie {
         this.phase = PH.NEWSPAPER_MADDENING;
         this.playZombieReanim('anim_maddening', RE.PLAY_ONCE_HOLD, 0, 24);
       }
-      if (!(flags & DMG.DOESNT_LEAVE_BODY)) this.board.addLimbParticle('newspaper', this.x + 30, this.y + 50, null, this.row);
+      if (!(flags & DMG.DOESNT_LEAVE_BODY)) this.board.addLimbParticle('newspaper', this.x + 30, this.y + 50, 'zombie_paper_paper' + (1 + sIdx), this.row);
     } else if (this.shieldType === 'ladder') {
       this.detachShield();
     }
@@ -3553,12 +3574,14 @@ class Zombie {
       else if (r.shouldTrigger(0.98)) this.board.shakeBoard(0, 1);
     }
     // #1 僵王死亡序列 (原版 Zombie.cpp 9204-9251):
-    //   13 个时间点随机爆炸 + 0.93 震屏 + 0.99 驾驶员举白旗投降 → 播完掉奖杯 → 胜利
+    //   13 个时间点随机爆炸 + 0.93 震屏 + 0.99 驾驶员举白旗投降 → 播完掉奖杯;
+    //   掉奖后白旗持续挥舞 (flag_loop) 直到玩家领奖 — 原版僵尸在奖励阶段不冻结
     if (this.type === 'BOSS') {
       if (this.bossDriver) { try { this.bossDriver.updateTicks(1); } catch (e) { } }
       const EXPL = [0.1, 0.12, 0.15, 0.19, 0.2, 0.26, 0.3, 0.4, 0.42, 0.5, 0.58, 0.61, 0.71];
       for (const t of EXPL) {
         if (r.shouldTrigger(t)) {
+          // 原版 9221-9223: (600-750, 50-300) 随机爆炸
           this.board.addEffect('bossexplosion', 600 + Math.random() * 150, 50 + Math.random() * 250);
           this.board.game.audio.play('boom');
         }
@@ -3575,10 +3598,13 @@ class Zombie {
       }
       if (r.loopCount > 0 && !this._bossAwardDropped) {
         this._bossAwardDropped = true;
-        // 原版 DropLoot → 关卡奖励 (5-10 = 金灿灿的奖杯) → 点击领取 → 通关
-        this.board.lastKill = this;
+        // 原版 DropLoot → 关卡奖励 (5-10 = 金灿灿的奖杯) → 点击领取 → 通关;
+        //   奖励从僵王机器中心掉落 (原版 DropLoot 取僵尸位; 僵王固定 (0,0) 绘制、
+        //   机器实体在屏幕右侧 → 给 triggerWin 一个机器中心坐标的轻量 lastKill)
+        this.board.lastKill = { x: 620, y: 260 };
         this.board.triggerWin();
-        this.zombieFade = 100;   // 渐隐消亡 (不弹尸体)
+        // 原版: 无 fade — 白旗持续挥舞至领奖 (旧实现 zombieFade=100 一秒后遇尸,
+        //   且 awarddrop 状态冻结驱动更新 → 白旗卡在展开中途)
       }
       return;
     }

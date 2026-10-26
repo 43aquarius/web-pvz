@@ -69,6 +69,8 @@ const Assets = (function () {
       }
     };
     await Promise.all(Array.from({ length: 8 }, worker));
+    // jpg+mask 成对合成 (同包内配对完成)
+    composeAlphaMasks();
     // reanim 定义
     for (const [name, ent] of Object.entries(idx.reanim || {})) {
       try {
@@ -318,6 +320,8 @@ const Assets = (function () {
       }
     };
     await Promise.all(Array.from({ length: 16 }, worker));
+    // jpg+mask 成对合成 (全量逐文件路径)
+    composeAlphaMasks();
   }
 
   // ---------- 查询 (自愈) ----------
@@ -330,6 +334,44 @@ const Assets = (function () {
 
   function packLoaded(pack) { return state.packLoaded.has(pack); }
   function hasLazy() { return !!state.lazyIdx; }
+
+  // #fix(僵王黑框/背景黑块): 原版 ImageLib::GetImage (ImageLib.cpp 1254-1311) 的
+  //   jpg+mask 机制 — PopCap 资源成对存放 `name.jpg` (RGB, 黑底) + `name_.png` (白形mask);
+  //   加载时 ComposeAlpha: alpha = mask 蓝通道 (白=不透明, 黑=透明)。
+  //   旧实现直接用黑底 jpg → 僵王躯干/脖子/丧尸胜利图/墓碑等大面积黑框。
+  //   (成对文件必同包 — lazy.json 已验证 23 对全部同包)
+  const composedKeys = new Set();
+  function composeAlphaMasks() {
+    for (const k of Array.from(state.images.keys())) {
+      if (!k.endsWith('.jpg') || composedKeys.has(k)) continue;
+      const maskKey = k.slice(0, -4) + '_.png';
+      const jpg = state.images.get(k);
+      const mask = state.images.get(maskKey);
+      if (!mask) continue;   // 无成对 mask 的 jpg 保持原样 (全屏背景类)
+      const w = jpg.naturalWidth || jpg.width, h = jpg.naturalHeight || jpg.height;
+      const mw = mask.naturalWidth || mask.width, mh = mask.naturalHeight || mask.height;
+      if (!w || !h || w !== mw || h !== mh) continue;   // 原版 ComposeAlpha 要求尺寸一致
+      try {
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        const cx = cv.getContext('2d', { willReadFrequently: true });
+        cx.drawImage(jpg, 0, 0);
+        const mc = document.createElement('canvas');
+        mc.width = w; mc.height = h;
+        const mx = mc.getContext('2d', { willReadFrequently: true });
+        mx.drawImage(mask, 0, 0);
+        const dst = cx.getImageData(0, 0, w, h);
+        const src = mx.getImageData(0, 0, w, h).data;
+        const d = dst.data;
+        for (let i = 0; i < d.length; i += 4) {
+          d[i + 3] = src[i + 2];   // 原版: (aSrcBits[i] & 0xFF) << 24 — mask 蓝通道作 alpha
+        }
+        cx.putImageData(dst, 0, 0);
+        state.images.set(k, cv);
+        composedKeys.add(k);
+      } catch (e) { console.warn('mask 合成失败', k); }
+    }
+  }
 
   // 扩展名容错查找: 'pea' → 'pea.png'/'pea.jpg'; '.jpg' 优先回退同名 .png (原版jpg透明度被拍平)
   function image(key) {

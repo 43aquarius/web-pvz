@@ -406,7 +406,23 @@ class Board {
   update(dt) {
     if (this.state === 'win' || this.state === 'lose') { this.updateVisuals(dt); return; }
     // 奖励掉落阶段 (原版 TrySpawnLevelAward → 点击 → COIN_MOTION_LEVEL_TARGET 飞向屏幕中央)
-    if (this.state === 'awarddrop') { this.updateLevelAward(dt); this.updateVisuals(dt); return; }
+    if (this.state === 'awarddrop') {
+      this.updateLevelAward(dt); this.updateVisuals(dt);
+      // #fix(僵王白旗): 原版奖励掉落期僵尸更新不冻结 — 僵王的死亡序列/白旗挥舞
+      //   (flag_loop) 在玩家领奖前持续推进 (旧实现 awarddrop 直接 return → 驱动卡死)
+      this._awardTickAcc = (this._awardTickAcc || 0) + dt * 100;
+      let at = Math.floor(this._awardTickAcc);
+      this._awardTickAcc -= at;
+      if (at > 50) { at = 50; this._awardTickAcc = 0; }
+      for (let i = 0; i < at; i++) {
+        for (const z of this.zombies) {
+          if (z.dead || z.type !== 'BOSS') continue;
+          if (z.bodyReanim && !z.bodyReanim.dead) z.bodyReanim.updateTicks(1);
+          z.update();
+        }
+      }
+      return;
+    }
     this.time += dt;
     // 注: dt 已是乘过 speed 的秒数 (main.js: sdt = dt * board.speed), 此处不再二次乘速
     // 固定步长累积器 (原版 100Hz): round→floor+余数进位, 高刷新率 (144/240Hz) 下

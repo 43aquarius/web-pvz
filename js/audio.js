@@ -9,6 +9,9 @@ const Audio2 = (function () {
   let musicOn = true, sfxOn = true;
   const lastPlay = new Map();
   const urlCache = new Map();
+  // #fix(戴夫语音): 专属语音通道 — 原版 CrazyDaveStopSound + foley ONE_AT_A_TIME:
+  //   播新语音前先停掉正在播的戴夫语音, 同一时间仅一条 (旧实现随机叠加 → "又乱又快")
+  let voiceEl = null;
 
   const BGM_MAP = {
     start_menu: 'BGM/start_menu_bgm.mp3',
@@ -107,8 +110,12 @@ const Audio2 = (function () {
     // 疯狂戴夫语音 (SFX/carzy/ 目录)
     dave_short: 'SFX/carzy/crazydaveshort1.ogg', dave_short2: 'SFX/carzy/crazydaveshort2.ogg', dave_short3: 'SFX/carzy/crazydaveshort3.ogg',
     dave_medium: 'SFX/carzy/crazydavelong1.ogg', dave_medium2: 'SFX/carzy/crazydavelong2.ogg', dave_medium3: 'SFX/carzy/crazydavelong3.ogg',
+    // #fix(戴夫语音): 原版 FOLEY_CRAZY_DAVE_EXTRA_LONG (crazydaveextralong1-3.ogg) 与
+    //   FOLEY_CRAZY_DAVE_SCREAM_2 (crazydavescream2.ogg) 此前未注册 → 长台词/尖叫2静默
+    dave_extralong: 'SFX/carzy/crazydaveextralong1.ogg', dave_extralong2: 'SFX/carzy/crazydaveextralong2.ogg', dave_extralong3: 'SFX/carzy/crazydaveextralong3.ogg',
     dave_crazy: 'SFX/carzy/crazydavecrazy.ogg',
     dave_scream: 'SFX/carzy/crazydavescream.ogg',
+    dave_scream2: 'SFX/carzy/crazydavescream2.ogg',
   };
 
   function url(file) {
@@ -171,10 +178,28 @@ const Audio2 = (function () {
 
   function setMusic(on) { musicOn = on; if (!on) stopBGM(); }
   function setSFX(on) { sfxOn = on; }
+  // 原版 LawnApp::CrazyDaveStopSound (LawnApp.cpp 2531): 停掉全部戴夫语音 foley
+  function stopVoice() {
+    if (voiceEl) { try { voiceEl.pause(); } catch (e) { } voiceEl = null; }
+  }
+  // 原版 PlayFoley(CRAZY_DAVE_*): 独占实例 — 播放前先停旧 (LawnApp.cpp 2560 CrazyDaveStopSound)
+  function playVoice(name, opts = {}) {
+    if (!sfxOn) return;
+    const file = SFX_MAP[name];
+    if (!file) return;
+    stopVoice();
+    try {
+      const a = new Audio(url(file));
+      a.volume = (opts.vol !== undefined ? opts.vol : 0.85);
+      voiceEl = a;
+      a.onended = () => { if (voiceEl === a) voiceEl = null; };
+      a.play().catch(() => { });
+    } catch (e) { }
+  }
   let masterVol = 0.8;
   function setMaster(v) { masterVol = Math.max(0, Math.min(1, v)); try { localStorage.setItem('webpvz_vol', String(masterVol)); } catch (e) { } if (bgmEl) bgmEl.volume = 0.5 * masterVol; }
 
-  return { init, play, playBGM, stopBGM, setMusic, setSFX, setMaster, resume, get master() { return masterVol; }, get sfxOn() { return sfxOn; } };
+  return { init, play, playVoice, stopVoice, playBGM, stopBGM, setMusic, setSFX, setMaster, resume, get master() { return masterVol; }, get sfxOn() { return sfxOn; } };
 })();
 
 if (typeof module !== 'undefined') module.exports = Audio2;
