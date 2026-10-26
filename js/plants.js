@@ -273,9 +273,22 @@ class Plant {
           for (const z of board.zombies) {
             const near = Math.abs(z.hitX() - (this.x + 40)) < 55;
             if (!z.dead && !z.underwater && near && (z.type === 'BOSS' || z.row === this.row)) {
-              // 原版: 半径60行内0, TakeDamage(1800, 18U) → 火系致命伤 → 僵尸烧焦化灰烬 (#11)
-              this.explode(board, d.radius, d.dmg, { fire: true });
+              // #fix(土豆雷): 原版 Plant.cpp:4377 KillAllZombiesInRadius(60, 0, theBurn=false)
+              //   → TakeDamage(1800, 18U) — 不烧焦! DOESNT_LEAVE_BODY = 无粒子无尸体瞬间蒸发
+              //   (旧实现误传 fire:true 把僵尸烧成灰, 且防具粒子路径违背原版)
+              board.addEffect('powie', this.x + 40, this.y + 40);
+              for (const z2 of board.zombies) {
+                if (z2.dead || z2.boss) continue;
+                if (z2.row !== this.row) continue;   // 行范围 0: 仅本行
+                if (Math.abs(z2.hitX() - (this.x + 40)) < 60) {
+                  if (z2.type === 'BOSS') { z2.takeDamage(1800, board, { noFlash: true }); continue; }
+                  z2.takeDamage(1800, board, { noFlash: true, noLeaveBody: true, hitsShieldAndBody: true });
+                }
+              }
               board.game.audio.play('spudow');
+              board.shakeBoard(3, -4);
+              this.dead = true;
+              this.die();
               return;
             }
           }
@@ -369,12 +382,14 @@ class Plant {
           if (hitZombie) {
             const zx = this.x + 40, zy = this.y + 40;
             if (this.type === 'EXPLODEONUT') {
-              // 原版: 爆炸坚果 90 半径 3x3 清场 + ShakeBoard (火系 → 灰烬化)
+              // 原版: 爆炸坚果 KillAllZombiesInRadius(90, 1, theBurn=true) → ApplyBurn
+              //   (火系烧杀: 防具随本体蒸发, 不掉粒子)
               board.addEffect('powie', zx, zy);
               for (const z2 of board.zombies) {
                 if (z2.dead || z2.boss) continue;
                 if (Math.abs(z2.hitX() - zx) < 115 && Math.abs(z2.row - this.row) <= 1) {
-                  z2.takeDamage(1800, board, { exploded: true, noFlash: true, fire: true });
+                  try { z2.removeColdEffects && z2.removeColdEffects(); } catch (e) { }
+                  try { z2.applyBurn && z2.applyBurn(); } catch (e) { z2.takeDamage(1800, board, { exploded: true, noFlash: true }); }
                 }
               }
               board.game.audio.play('cherrybomb');
@@ -930,27 +945,25 @@ class Plant {
     const cx = this.x + 40, cy = this.y + 40;
     switch (this.type) {
       case 'CHERRYBOMB':
-        this.explode(board, d.radius, d.dmg);
+        this.explode(board, d.radius, d.dmg, { rowRange: 1 });
         board.game.audio.play('boom');
         break;
       case 'DOOMSHROOM':
-        this.explode(board, d.radius, d.dmg);
+        this.explode(board, d.radius, d.dmg, { rowRange: 3 });
         board.craters.push({ row: this.row, col: this.col, t: 0 });
         board.game.audio.play('doomshroom');
         break;
       case 'JALAPENO':
         // 整行火焰
         board.addEffect('jala_row', this.x, this.row, { row: this.row, hold: 0.8 });
-        // #fix(boss-attackable) 原版 Plant::BurnRow (Plant.cpp 4234): BOSS 无条件命中 (不限行)
-        //   → RemoveColdEffects + ApplyBurn (Zombie.cpp 8666: BOSS 分支 = 1800 伤)
+        // #fix(烧灰防具掉落) 原版 Plant::BurnRow (Plant.cpp:4234): 逐僵尸
+        //   RemoveColdEffects + ApplyBurn — 烧杀不走护盾/头盔扣血, 防具随本体蒸发不掉落
         for (const z of board.zombies) {
           if (z.dead) continue;
-          if (z.type === 'BOSS') {
+          if (z.row === this.row || z.type === 'BOSS') {
             try { z.removeColdEffects && z.removeColdEffects(); } catch (e) { }
             try { z.applyBurn && z.applyBurn(); } catch (e) { z.takeDamage(1800, board, { noFlash: true }); }
-            continue;
           }
-          if (z.row === this.row) z.takeDamage(d.dmg, board, { fire: true });
         }
         // 融化冰道
         board.iceTrails = board.iceTrails.filter(t => t.row !== this.row);
@@ -985,15 +998,18 @@ class Plant {
   explode(board, radius, dmg, opts = {}) {
     const cx = this.x + 40, cy = this.y + 40;
     board.addEffect('powie', cx, cy);
-    // 原版 KillAllZombiesInRadius: 圆-矩形相交 + 行范围 ≤1
+    const rowRange = opts.rowRange !== undefined ? opts.rowRange : 1;
+    // 原版 KillAllZombiesInRadius: 圆-矩形相交 + 行范围 (樱桃1/毁灭菇3/爆炸坚果1/土豆雷0)
     for (const z of board.zombies) {
       if (z.dead || z.boss) continue;
-      if (Math.abs(z.row - this.row) > 1) continue;
+      if (Math.abs(z.row - this.row) > rowRange) continue;
       const zy = board.gridY(z.row) + 42;
       if (Math.hypot(z.hitX() - cx, zy - cy) < radius + 30) {
-        // 樱桃炸弹/末日菇/土豆雷 burn=true → 烧焦僵尸化灰烬 (原版 ApplyBurn)
-        const fire = !!opts.fire || this.type === 'CHERRYBOMB' || this.type === 'DOOMSHROOM' || this.type === 'EXPLODEONUT';
-        z.takeDamage(dmg, board, { exploded: true, noFlash: true, fire });
+        // #fix(烧灰防具掉落) 原版 KillAllZombiesInRadius(theBurn=true) → Zombie::ApplyBurn:
+        //   烧杀不经过护盾/头盔扣血, 防具随本体一起蒸发, 不掉落粒子
+        //   (旧实现 takeDamage({fire}) 先扣头盔触发 dropHelm 粒子后才焦化)
+        try { z.removeColdEffects && z.removeColdEffects(); } catch (e) { }
+        try { z.applyBurn && z.applyBurn(); } catch (e) { z.takeDamage(1800, board, { noFlash: true }); }
       }
     }
     // #fix(boss-attackable) 原版 KillAllZombiesInRadius (Board.cpp 9303): BOSS 行差归零,

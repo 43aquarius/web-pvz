@@ -8,7 +8,7 @@
 // ============================================================
 'use strict';
 
-const { CONST, PLANTS, ZOMBIES, LEVELS, SEED_ORDER, SHOP_ITEMS, availablePlants, awardPlantForLevel } = require('./data');
+const { CONST, PLANTS, ZOMBIES, LEVELS, SEED_ORDER, SHOP_ITEMS, availablePlants, awardPlantForLevel, MUSHROOMS, AQUATIC, UPGRADES } = require('./data');
 const RE = require('./reanim');
 const __getUI = () => { const m = (window.__mods && window.__mods['ui']) || require('./ui'); return m && m.UI; };
 
@@ -1771,10 +1771,16 @@ Screens.shop = {
       game.audio.play('tap');
       return;
     }
-    // 主菜单
+    // 主菜单 (或返回禅境花园 — 原版 OpenStore 后回花园)
     if (this._mainmenu && inRect(p, this._mainmenu.x, this._mainmenu.y, this._mainmenu.w, this._mainmenu.h)) {
       game.audio.play('gravebutton');
-      game.state = 'menu';
+      if (this.returnState === 'zengarden') {
+        this.returnState = null;
+        game.state = 'zengarden';
+        Screens.zengarden.enter();
+      } else {
+        game.state = 'menu';
+      }
       return;
     }
     // 翻页
@@ -1919,550 +1925,1127 @@ Screens.updateHover = function (mouse) {
 };
 
 // ================================================================
-// 禅镜花园 (原版 ZenGarden.cpp: 8x4花盆 + 浇水/施肥/除虫/留声机 + 卖植物)
+// 禅境花园 (原版 ZenGarden.cpp 完整移植 — 用户要求"彻底对照原版修复")
+//   · 三花园: 温室(8x4) / 蘑菇园(8散点) / 水族馆(8散点) + 手推车搬运
+//   · 时钟驱动需求 (原版 GetPlantsNeed: 浇水15s阈值/3s间隔/当日满足/1小时肥料)
+//   · 成长链: 芽 --浇水x3~5+肥料--> 小苗 --> 中苗 --> 成熟 (各阶段掉金币/钻石)
+//   · 工具动画: 浇水壶(金壶区域浇灌)/肥料/杀虫剂/留声机 reanim 播完才生效
+//   · 蜗牛 Stinky: 巡游收币 / 180s 睡眠 / 点击唤醒 (Stinky.reanim)
+//   · 卖植物: 戴夫报价确认 (原版 GetPlantSellPrice 价格表)
+//   · 成熟植物当日满足 → 开心光晕 + 定期产银币/金币 (PlantUpdateProduction)
 // 通关 5-4 (level 44) 解锁; 进度存 localStorage
 // ================================================================
 Screens.zengarden = {
-  CELLS: { cols: 8, rows: 4 },
-  // 原版 gGreenhouseGridPlacement (ZenGarden.cpp:46): 8×4 非均匀透视网格 (#5)
-  //   旧实现自创均匀网格 (172+70c, 150+88r) → 花盆与背景图木架格子错位、点击区不对应
-  GREENHOUSE_GRID: [
-    [73, 73], [155, 71], [239, 68], [321, 73], [406, 71], [484, 67], [566, 70], [648, 72],
-    [67, 168], [150, 165], [232, 170], [314, 175], [416, 173], [497, 170], [578, 164], [660, 168],
-    [41, 268], [130, 266], [219, 260], [310, 266], [416, 267], [504, 261], [594, 265], [684, 269],
-    [37, 371], [124, 369], [211, 368], [302, 369], [425, 375], [512, 368], [602, 365], [691, 368],
-  ],
-  // 花盆位置 (原版格点表; 命中区 80×85 = PixelToGridX/Y)
-  cellPos(col, row) {
-    if (this.data && this.data.garden === 'greenhouse') {
-      const g = this.GREENHOUSE_GRID[row * 8 + col];
-      if (g) return { x: g[0], y: g[1] };
-    }
-    // 蘑菇园/水族馆: 原版为 8 个散点; 此处保留近似均匀网格
-    return { x: 172 + col * 70, y: 150 + row * 88 };
+  // ---- 原版 SpecialGridPlacement 网格表 (ZenGarden.cpp:46-104) ----
+  GRIDS: {
+    greenhouse: [
+      [73, 73], [155, 71], [239, 68], [321, 73], [406, 71], [484, 67], [566, 70], [648, 72],
+      [67, 168], [150, 165], [232, 170], [314, 175], [416, 173], [497, 170], [578, 164], [660, 168],
+      [41, 268], [130, 266], [219, 260], [310, 266], [416, 267], [504, 261], [594, 265], [684, 269],
+      [37, 371], [124, 369], [211, 368], [302, 369], [425, 375], [512, 368], [602, 365], [691, 368],
+    ],
+    mushroomgarden: [
+      [110, 441], [237, 360], [298, 458], [355, 296], [387, 203], [460, 385], [486, 478], [552, 283],
+    ],
+    aquarium: [
+      [113, 185], [306, 120], [356, 270], [622, 120], [669, 270], [122, 355], [365, 458], [504, 417],
+    ],
   },
-  // ---------- 存档 ----------
+  GARDEN_LABEL: { greenhouse: '禅境花园', mushroomgarden: '蘑菇园', aquarium: '水族馆' },
+  BG: { greenhouse: 'background_greenhouse.jpg', mushroomgarden: 'background_mushroomgarden.jpg', aquarium: 'aquarium1.jpg' },
+  COIN_IMG: { silver: 'coin_silver2.png', gold: 'coin_gold2.png', diamond: 'diamond.png' },
+  COIN_VAL: { silver: 10, gold: 25, diamond: 100 },
+
+  // 花盆位置 (原版格点; 命中区 80×85 = PixelToGridX/Y)
+  cellPos(col, row) {
+    const g = this.GRIDS[this.data.garden];
+    const cell = g && g[row * 8 + col];
+    return cell ? { x: cell[0], y: cell[1] } : { x: 172 + col * 70, y: 150 + row * 88 };
+  },
+  gridOf(garden) { return this.GRIDS[garden] || this.GRIDS.greenhouse; },
+  ownedGardens(game) {
+    const g = ['greenhouse'];
+    if (game.purchased.mushroomgarden) g.push('mushroomgarden');
+    if (game.purchased.aquarium) g.push('aquarium');
+    return g;
+  },
+
+  // ---------- 存档 (PottedPlant 列表, 原版 mPlayerInfo->mPottedPlant) ----------
   load() {
-    try {
-      const d = JSON.parse(localStorage.getItem('webpvz_garden') || 'null');
-      // 格式校验: 必须是 4x8 网格 (旧版/异格式存档直接重置, 防崩溃)
-      if (d && d.plants && Array.isArray(d.plants) && d.plants.length === 4 &&
-          d.plants.every(row => Array.isArray(row) && row.length === 8)) {
-        this.data = d;
-        return;
-      }
-    } catch (e) { }
-    // 初始: 3 株新芽 (原版 DEFAULT_CURR_NUM_NEW_GARDEN_PLANT = 3)
-    this.data = { plants: this.emptyCells(), fertilizer: 5, bugspray: 2, garden: 'greenhouse' };
-    let placed = 0;
-    for (let r = 0; r < 4 && placed < 3; r++) {
-      for (let c = 0; c < 8 && placed < 3; c++) {
-        if ((c + r) % 3 === 0 && !this.data.plants[r][c]) {
-          this.data.plants[r][c] = this.newPlant(null);
-          placed++;
-        }
-      }
+    let d = null;
+    try { d = JSON.parse(localStorage.getItem('webpvz_garden') || 'null'); } catch (e) { }
+    if (d && d.v === 2 && Array.isArray(d.plants)) { this.data = d; return; }
+    // 旧版存档迁移: 4x8 网格 {type,stage,fed} → PottedPlant 列表 (时间戳清零 → 需重新浇水)
+    let oldFert = 5, oldSpray = 2;
+    if (d && Array.isArray(d.plants) && d.plants.length === 4 && d.plants.every(r => Array.isArray(r))) {
+      oldFert = d.fertilizer || 0; oldSpray = d.bugspray || 0;
+      const plants = [];
+      d.plants.forEach((row, r) => row.forEach((c, i) => {
+        if (!c) return;
+        plants.push(this.newPlant(c.type || null, {
+          age: Math.min(3, c.stage || 0), timesFed: c.fed || 0,
+          feedingsPerGrow: c.needMax || 3, isMarigold: c.type === 'MARIGOLD',
+        }));
+        plants[plants.length - 1].garden = 'greenhouse';
+        plants[plants.length - 1].x = i; plants[plants.length - 1].y = r;
+      }));
+      this.data = { v: 2, plants, fertilizer: oldFert, bugspray: oldSpray, garden: d.garden === 'mushroomgarden' || d.garden === 'aquarium' ? d.garden : 'greenhouse', stinkyWake: 0 };
+      this.save();
+      return;
     }
+    // 初始: 空花园 (原版首次进入由戴夫 2102 对话赠送 2 株金盏花芽)
+    this.data = { v: 2, plants: [], fertilizer: 0, bugspray: 0, garden: 'greenhouse', stinkyWake: 0 };
     this.save();
   },
-  emptyCells() {
-    return Array.from({ length: 4 }, () => Array(8).fill(null));
-  },
-  newPlant(type) {
-    // 原版 PottedPlant: mFeedingsPerGrow 随机3-5
+  newPlant(seed, opts = {}) {
+    // 原版 PottedPlant::InitializePottedPlant: mFeedingsPerGrow 随机 3-5, facing 随机
     return {
-      type: type || null,          // null = 新芽
-      stage: 0,                    // 0新芽 1小 2中 3成熟
-      fed: 0, needMax: 3 + Math.floor(Math.random() * 3),
-      need: null,                  // null | 'water' | 'bugspray' | 'phonograph' (成熟后需求)
-      happy: 0,                    // 刚被满足的开心计时
+      seed: seed || null,          // null = 未知新芽 (长成 SMALL 时 PickRandomSeedType 定型)
+      isMarigold: !!opts.isMarigold,
+      garden: opts.garden || 'greenhouse',
+      x: opts.x || 0, y: opts.y || 0,
+      facing: Math.random() < 0.5 ? 0 : 1,
+      age: opts.age || 0,          // 0芽 1小 2中 3成熟
+      timesFed: opts.timesFed || 0,
+      feedingsPerGrow: opts.feedingsPerGrow || (3 + Math.floor(Math.random() * 3)),
+      need: 'none',
+      lastWatered: 0, lastNeedFulfilled: 0, lastFertilized: 0,
+      launchCounter: 0,
     };
   },
-  save() {
-    try { localStorage.setItem('webpvz_garden', JSON.stringify(this.data)); } catch (e) { }
+  save() { try { localStorage.setItem('webpvz_garden', JSON.stringify(this.data)); } catch (e) { } },
+
+  // ---------- 时钟 (原版 time(nullptr) 实时秒) ----------
+  now() { return Math.floor(Date.now() / 1000); },
+  sameDay(a, b) {
+    const d1 = new Date(a * 1000), d2 = new Date(b * 1000);
+    return d1.getFullYear() === d2.getFullYear() &&
+      Math.floor((d1 - new Date(d1.getFullYear(), 0, 0)) / 86400000) ===
+      Math.floor((d2 - new Date(d2.getFullYear(), 0, 0)) / 86400000);
   },
+  // 原版 WasPlantNeedFulfilledToday: 1小时内 或 同一自然日
+  fulfilledToday(p) {
+    const n = this.now();
+    return n - p.lastNeedFulfilled < 3600 || this.sameDay(p.lastNeedFulfilled, n);
+  },
+  fertilizedRecently(p) { return this.now() - p.lastFertilized < 3600; },
+  // 原版 PlantShouldRefreshNeed: 距上次浇水≥1小时 且 跨日
+  shouldRefreshNeed(p) {
+    if (this.now() - p.lastWatered < 3600) return false;
+    return !this.sameDay(p.lastWatered, this.now());
+  },
+
+  // ---------- 需求计算 (原版 GetPlantsNeed, ZenGarden.cpp:845-905 逐行移植) ----------
+  getNeed(p) {
+    if (p.age !== 0 && p.seed && MUSHROOMS.has(p.seed) && p.garden === 'greenhouse') return 'none';  // 夜习性植物只在蘑菇园活跃
+    if (p.garden === 'wheelbarrow') return 'none';
+    const n = this.now();
+    const tooLong = n - p.lastWatered > 15;
+    const tooShort = n - p.lastWatered < 3;
+    if (this.fertilizedRecently(p) || this.fulfilledToday(p)) return 'none';
+    if (p.seed && AQUATIC.has(p.seed) && p.age !== 0) {
+      if (p.age === 3) return this.shouldRefreshNeed(p) ? 'none' : p.need;
+      return p.garden === 'aquarium' ? 'fertilizer' : 'none';
+    }
+    if (!tooLong) return 'none';
+    if (p.timesFed < p.feedingsPerGrow) return 'water';
+    if (tooShort) return 'none';
+    if (p.age !== 3) return 'fertilizer';
+    if (this.shouldRefreshNeed(p)) return 'none';
+    if (p.need !== 'none') return p.need;
+    return 'water';
+  },
+  // 原版 UpdatePlantEffectState: 植物状态 (决定花盆加深/气泡/光晕)
+  plantState(p) {
+    const sleeping = p.seed && MUSHROOMS.has(p.seed) && p.garden !== 'mushroomgarden';
+    const need = this.getNeed(p);
+    if (need === 'water') return 'notready';
+    if (need === 'none') {
+      if (this.fulfilledToday(p)) return 'happy';
+      if (sleeping) return 'notready';
+      return 'watered';
+    }
+    return 'needy';
+  },
+
+  // ---------- 生命周期 ----------
   enter() {
     if (!this.data) this.load();
-    this.tool = 'water';           // water|fertilizer|bugspray|phonograph|glove|sell
-    this.heldPlant = null;         // 手套移动中的植物
+    this.tool = 'water';
+    this.heldPlant = null;         // 手套持有中的植物
     this.coins = [];
+    this.tools = [];               // 使用中的工具动画
     this._models = {};
-    // 蜗牛 (原版 Stinky: 已购买才出现)
+    this._pots = {};
+    this._sproutM = {};
+    this.bubble = null; this.sellAsk = null;
+    this.arrowT = 0;
+    this._ready = false;
+    this.daveAnim = null;
     const game = Screens.game;
-    this.stinky = game && game.purchased.stinky ? { x: 400, y: 520, dir: 1, t: 0 } : null;
-    // Dave 教程对话 (原版 2100, 首次)
+    // 按需加载花园素材 (garden/fx/ui + 全部植物包) 后再建模型
+    Promise.resolve(Assets.ensureGarden ? Assets.ensureGarden() : null)
+      .catch(() => { })
+      .then(() => { this._ready = true; });
+    // BGM: 原版 MUSIC_TUNE_ZEN_GARDEN
+    if (game) game.audio.playBGM('garden');
+    // 蜗牛 (原版 AddStinky: 已购买 + 主花园)
+    this.stinky = (game && game.purchased.stinky && this.data.garden === 'greenhouse')
+      ? this.makeStinky() : null;
+    // 戴夫教程 (原版 Crazy DaveTalkIndex(2100), 2102 送 2 株金盏花芽)
     if (game && !game.daveSeen.zengarden) {
       const dialogs = Assets.data('dave_dialogs');
-      const lines = [2100, 2101, 2102].map(id => (dialogs['CRAZY_DAVE_' + id] || '')).filter(t => t);
-      if (!lines.length) lines.push('欢迎来到禅镜花园！', '给植物浇水施肥，它们会报答你的！');
-      this.bubble = { lines, line: 0 };
+      this.bubble = { lines: ['2100', '2101', '2102', '2103', '2104'].map(id => dialogs['CRAZY_DAVE_' + id] || '').filter(t => t), line: 0, tutorial: true };
       game.markDaveSeen('zengarden');
-    } else this.bubble = null;
+    }
   },
-  // 植物模型 (reanim 缓存)
-  model(type, stage) {
-    const key = type + ':' + stage;
-    if (this._models[key]) return this._models[key];
+  leaveToMenu(game) {
+    // 原版 LeaveGarden: 未收金币自动入账 + 工具立即结算
+    this.settleAndLeave(game);
+    game.audio.playBGM('start_menu');
+  },
+  // 结算: 进行中工具立即生效 + 未收金币自动入账 (原版 LeaveGarden 1360-1389)
+  settleAndLeave(game) {
+    for (const t of this.tools) this.applyToolEffect(t);
+    this.tools = [];
+    let got = 0;
+    for (const c of this.coins) if (!c.collected) { got += c.value; c.collected = true; }
+    if (got > 0 && game) { game.coins += got; game.saveShop(); }
+    this.coins = this.coins.filter(c => !c.collected);
+    this.save();
+  },
+
+  // ---------- 模型 ----------
+  model(type) {
+    if (this._models[type]) return this._models[type];
     let r = null;
     try {
-      if (!type) {
-        // 新芽: 静态 anim_sprout 图 (由 draw 处理)
-        r = null;
-      } else {
-        const def = PLANTS[type];
-        if (def && RE.hasDef(def.reanim)) {
-          r = Assets.reanim(def.reanim);
-          const base = def.anim || 'anim_idle';
-          r.play(r.animExists(base) ? base : 'anim_idle', RE.LOOP, 10);
+      const def = PLANTS[type];
+      if (def && RE.hasDef(def.reanim)) {
+        r = Assets.reanim(def.reanim);
+        const base = def.anim || 'anim_idle';
+        r.play(r.animExists(base) ? base : 'anim_idle', RE.LOOP, 10 + Math.random() * 5);
+      }
+    } catch (e) { r = null; }
+    this._models[type] = r;
+    return r;
+  },
+  // 芽 (原版 REANIM_ZENGARDEN_SPROUT: 非金盏花 anim_idle_noflower / 金盏花 anim_idle)
+  sproutModel(marigold) {
+    const key = marigold ? 'mf' : 'm';
+    if (this._sproutM[key]) return this._sproutM[key];
+    let r = null;
+    try {
+      if (RE.hasDef('ZenGarden_sprout')) {
+        r = Assets.reanim('ZenGarden_sprout');
+        const a = (!marigold && r.animExists('anim_idle_noflower')) ? 'anim_idle_noflower' : 'anim_idle';
+        r.play(a, RE.LOOP, 8);
+      }
+    } catch (e) { r = null; }
+    this._sproutM[key] = r;
+    return r;
+  },
+  // 花盆 (原版 REANIM_POT: anim_zengarden 带叶盆 / anim_waterplants 水生盆;
+  //   需求期 Pot_top 换 pot_top_dark 湿土色 — UpdatePlantEffectState)
+  potModel(dark, water) {
+    const key = (dark ? 'd' : 'n') + (water ? 'w' : 'g');
+    if (this._pots[key]) return this._pots[key];
+    let r = null;
+    try {
+      if (RE.hasDef('Pot')) {
+        r = Assets.reanim('Pot');
+        const layer = water && r.animExists('anim_waterplants') ? 'anim_waterplants'
+          : (r.animExists('anim_zengarden') ? 'anim_zengarden' : 'anim_idle');
+        r.play(layer, RE.LOOP, 6);
+        if (dark && r.trackExists('Pot_top')) {
+          try { r.setImageOverride('Pot_top', 'pot_top_dark.png'); } catch (e) { }
         }
       }
     } catch (e) { r = null; }
-    this._models[key] = r;
+    this._pots[key] = r;
     return r;
   },
-  // 花盆模型 (原版 REANIM_POT: Pot.reanim anim_zengarden 区间 = 带叶子完整陶盆;
-  //   旧实现误播 anim_idle (关卡内普通花盆, 无叶) 且位置自创偏移) (#5)
-  potModel() {
-    if (this._potM !== undefined) return this._potM;
-    this._potM = null;
-    try {
-      if (RE.hasDef('Pot')) {
-        const r = Assets.reanim('Pot');
-        // 原版 ZenGarden.cpp:233: SetFramesForLayer("anim_zengarden")
-        const layer = r.animExists('anim_zengarden') ? 'anim_zengarden' : 'anim_idle';
-        r.play(layer, RE.LOOP, 6);
-        this._potM = r;
-      }
-    } catch (e) { this._potM = null; }
-    return this._potM;
+
+  // ---------- 原版动作 ----------
+  // PlantWatered (ZenGarden.cpp:648-674): 计数+1, 时间戳回拨0-8s, 掉银币; 成熟且无需求 → 随机产生除虫/唱片需求
+  plantWatered(p, pos) {
+    p.timesFed++;
+    p.lastWatered = this.now() - Math.floor(Math.random() * 9);
+    this.dropCoin(pos.x + 40, pos.y, 'silver');
+    if (p.age === 3 && p.need === 'none') {
+      p.need = Math.random() < 0.5 ? 'bugspray' : 'phonograph';
+    }
+    this.save();
   },
+  // PlantFertilized (529-579): 升阶+需求清零; 芽→小苗定型; 各阶段掉币
+  plantFertilized(p, pos) {
+    p.lastFertilized = this.now();
+    p.age = Math.min(3, p.age + 1);
+    p.need = 'none';
+    p.timesFed = 0;
+    if (p.age === 1 && !p.seed) {
+      p.seed = p.isMarigold ? 'MARIGOLD' : this.pickRandomSeedType();   // 原版 PickRandomSeedType
+    }
+    const game = Screens.game;
+    game.audio.play('plantgrow');
+    if (p.age === 1) { this.dropCoin(pos.x + 40, pos.y, 'gold'); }
+    else if (p.age === 2) { this.dropCoin(pos.x + 30, pos.y, 'gold'); this.dropCoin(pos.x + 50, pos.y, 'gold'); }
+    else if (p.age === 3) {
+      if (p.seed === 'MARIGOLD') this.dropCoin(pos.x + 40, pos.y, 'diamond');
+      else { this.dropCoin(pos.x + 10, pos.y, 'diamond'); this.dropCoin(pos.x + 70, pos.y, 'diamond'); }
+    }
+    this.save();
+  },
+  // PlantFulfillNeed (580-597): 除虫/唱片需求满足 → 当日开心 + 金币
+  plantFulfillNeed(p, pos) {
+    p.lastNeedFulfilled = this.now();
+    p.need = 'none';
+    p.timesFed = 0;
+    const game = Screens.game;
+    game.audio.play('zen_prize');
+    this.dropCoin(pos.x + 40, pos.y, 'gold');
+    if (p.seed && (MUSHROOMS.has(p.seed) || AQUATIC.has(p.seed))) {
+      this.dropCoin(pos.x + 10, pos.y, 'gold');
+      this.dropCoin(pos.x + 70, pos.y, 'gold');
+    }
+    this.save();
+  },
+  pickRandomSeedType() {
+    // 原版 PickRandomSeedType (2410-2425): 0-39 号种子中排除金盏花/花盆
+    const pool = SEED_ORDER.filter(t => t !== 'MARIGOLD' && t !== 'FLOWERPOT' && t !== 'IMITATER' && !UPGRADES.has(t));
+    return pool.length ? pool[Math.floor(Math.random() * pool.length)] : 'PEASHOOTER';
+  },
+  // GetPlantSellPrice (407-455)
+  sellPrice(p) {
+    if (p.seed === 'MARIGOLD') return [150, 200, 250, 300][p.age] || 300;
+    if (p.age === 3 && p.seed && (MUSHROOMS.has(p.seed) || AQUATIC.has(p.seed))) return 1000;
+    return [150, 300, 500, 800][p.age] || 800;
+  },
+  plantLabel(p) {
+    if (p.age === 0) return p.isMarigold ? '金盏花苗' : '花苗';
+    return (PLANTS[p.seed] && PLANTS[p.seed].cn) || '植物';
+  },
+  dropCoin(x, y, type) {
+    // 原版 COIN_MOTION_COIN: 上抛落到盆边地面, 停留至点击/蜗牛收取
+    this.coins.push({ x: x + (Math.random() * 14 - 7), y: y - 6, vy: -90 - Math.random() * 60, groundY: y + 46, type, value: this.COIN_VAL[type], t: 0, collected: false, fadeT: 0 });
+  },
+
+  // ---------- 工具动画 (原版 GRIDITEM_ZEN_TOOL: 动画播完 DoFeedingTool 才生效) ----------
+  spawnTool(kind, x, y, plant, gold) {
+    const defs = {
+      water: { reanim: 'ZenGarden_wateringcan', anim: gold ? 'anim_water_area' : 'anim_water' },
+      fertilizer: { reanim: 'ZenGarden_fertilizer' },
+      bugspray: { reanim: 'ZenGarden_bugspray' },
+      phonograph: { reanim: 'ZenGarden_phonograph' },
+    };
+    const d = defs[kind];
+    if (!d) return;
+    let r = null;
+    try {
+      if (!RE.hasDef(d.reanim)) return;
+      r = Assets.reanim(d.reanim);
+      if (d.anim && r.animExists(d.anim)) {
+        r.play(d.anim, RE.PLAY_ONCE_HOLD, 0, 0);
+      } else {
+        // 无命名动画 (肥料/杀虫剂/唱片): 整时间轴; 唱片 LOOP 播 2 轮才生效 (原版 animRate=20)
+        r.loopType = kind === 'phonograph' ? RE.LOOP : RE.PLAY_ONCE;
+        r.animRate = kind === 'phonograph' ? 20 : (r.def.fps || 14);
+      }
+    } catch (e) { return; }
+    // 原版位置: 水壶(植物x+32,y) / 肥料(x,y) / 杀虫剂(x+54,y) / 唱片(x+20,y+34, 循环2轮)
+    let px = x, py = y;
+    if (kind === 'water' && !gold) { px = x + 32; py = y; }
+    else if (kind === 'bugspray') { px = x + 54; py = y; }
+    else if (kind === 'phonograph') { px = x + 20; py = y + 34; r.animRate = 20; }
+    r.setPosition(px, py);
+    this.tools.push({ kind, r, x, y, plant, gold: !!gold, loops: kind === 'phonograph' ? 2 : 1, done: false });
+    const game = Screens.game;
+    game.audio.play(kind === 'water' ? 'zen_watering' : kind === 'fertilizer' ? 'zen_fertilizer' : kind === 'bugspray' ? 'zen_bugspray' : 'zen_phonograph');
+  },
+  applyToolEffect(t) {
+    if (t.done) return;
+    t.done = true;
+    // 金水壶区域浇灌 (原版 DoFeedingTool GOLD_WATERING_CAN: 点击点附近所有需水植物)
+    if (t.kind === 'water' && t.goldArea) {
+      for (const p of this.data.plants) {
+        if (p.garden !== this.data.garden) continue;
+        if (this.getNeed(p) !== 'water') continue;
+        const pos = this.cellPos(p.x, p.y);
+        if (Math.abs(pos.x + 40 - t.goldArea.x) <= 85 && Math.abs(pos.y + 42 - t.goldArea.y) <= 95) {
+          this.plantWatered(p, pos);
+        }
+      }
+      return;
+    }
+    if (!t.plant) return;
+    const p = t.plant;
+    const pos = this.cellPos(p.x, p.y);
+    const need = this.getNeed(p);
+    if (t.kind === 'water' && need === 'water') this.plantWatered(p, pos);
+    else if (t.kind === 'fertilizer' && need === 'fertilizer') this.plantFertilized(p, pos);
+    else if ((t.kind === 'bugspray' && need === 'bugspray') || (t.kind === 'phonograph' && need === 'phonograph')) this.plantFulfillNeed(p, pos);
+  },
+
+  // ---------- 蜗牛 Stinky (原版 GridItem GRIDITEM_STINKY) ----------
+  makeStinky() {
+    let r = null;
+    try {
+      if (RE.hasDef('Stinky')) {
+        r = Assets.reanim('Stinky');
+        r.overrideScale(0.8, 0.8);
+        r.play('anim_crawl', RE.LOOP, 6);
+      }
+    } catch (e) { r = null; }
+    const s = { x: 400, y: 470, goalX: 400, goalY: 470, dir: -1, state: 'walk', r, counter: 0 };
+    this.stinkyPickGoal(s);
+    return s;
+  },
+  stinkyAwake() { return this.now() - (this.data.stinkyWake || 0) < 180; },
+  stinkyPickGoal(s) {
+    // 原版 StinkyPickGoal: 最近掉落金币优先 (金-40/钻-80 权重), 否则带权重随机植物格
+    let best = null, bw = 1e9;
+    for (const c of this.coins) {
+      if (c.collected) continue;
+      const w = Math.hypot(c.x - s.x, (c.y + 30) - s.y) - (c.type === 'gold' ? 40 : c.type === 'diamond' ? 80 : 0);
+      if (w < bw) { bw = w; best = c; }
+    }
+    if (best) { s.goalX = best.x; s.goalY = best.y + 30; }
+    else {
+      const cells = this.gridOf('greenhouse');
+      const occupied = this.data.plants.filter(p => p.garden === 'greenhouse');
+      const pick = occupied.length && Math.random() < 0.75
+        ? occupied[Math.floor(Math.random() * occupied.length)]
+        : { x: Math.floor(Math.random() * 8), y: Math.floor(Math.random() * 4) };
+      const cell = cells[pick.y * 8 + pick.x] || cells[0];
+      s.goalX = cell[0] + 15; s.goalY = cell[1] + 80;
+    }
+    s.counter = 6 + Math.random() * 8;
+    if (s.goalX < s.x - 4 && s.dir > 0) { this.stinkyTurn(s, -1); }
+    else if (s.goalX > s.x + 4 && s.dir < 0) { this.stinkyTurn(s, 1); }
+  },
+  stinkyTurn(s, dir) {
+    s.dir = dir; s.state = 'turn'; s.turnT = 0;
+    if (s.r) { try { s.r.play('anim_turn', RE.PLAY_ONCE_HOLD, 10, 6); } catch (e) { } }
+  },
+  wakeStinky(silent) {
+    const s = this.stinky;
+    if (!s) return;
+    this.data.stinkyWake = this.now();
+    this.save();
+    if (s.state === 'sleep' || s.state === 'falling') {
+      s.state = 'waking'; s.wakeT = 0;
+      if (s.r) { try { s.r.play('anim_out', RE.PLAY_ONCE_HOLD, 20, 6); } catch (e) { } }
+    }
+    if (!silent) {
+      const game = Screens.game;
+      game.audio.play('wakeup');
+      game.audio.play('tap');
+    }
+  },
+  stinkyUpdate(dt) {
+    const s = this.stinky;
+    if (!s) return;
+    if (s.r && s.r.update) s.r.update(dt);
+    const awake = this.stinkyAwake();
+    if (s.state === 'walk' && !awake) {
+      s.state = 'falling'; s.fallT = 0;
+      if (s.r) { try { s.r.play('anim_in', RE.PLAY_ONCE_HOLD, 20, 6); } catch (e) { } }
+    }
+    if (s.state === 'falling') {
+      s.fallT += dt;
+      if (s.r && s.r.loopCount > 0) {
+        s.state = 'sleep';
+        if (s.r) { try { s.r.play('anim_out', RE.PLAY_ONCE_HOLD, 0, 0); } catch (e) { } }   // 原版: 冻结帧睡姿
+      }
+      return;
+    }
+    if (s.state === 'sleep') {
+      if (awake) this.wakeStinky(true);
+      return;
+    }
+    if (s.state === 'waking') {
+      if (s.r && s.r.loopCount > 0) {
+        s.state = 'walk';
+        if (s.r) { try { s.r.play('anim_crawl', RE.LOOP, 10, 6); } catch (e) { } }
+        this.stinkyPickGoal(s);
+      }
+      return;
+    }
+    if (s.state === 'turn') {
+      s.turnT += dt;
+      if (s.r && s.r.loopCount > 0) {
+        s.state = 'walk';
+        if (s.r) { try { s.r.play('anim_crawl', RE.LOOP, 10, 6); } catch (e) { } }
+      }
+      return;
+    }
+    // walk: 朝目标爬行 (原版 aSpeedX = 轨道速度x15, 纵向 0.5px/tick)
+    const sp = 22;
+    if (s.counter > 0) s.counter -= dt;
+    if (s.goalX < s.x - 2) s.x = Math.max(s.goalX, s.x - sp * dt);
+    else if (s.goalX > s.x + 2) s.x = Math.min(s.goalX, s.x + sp * dt);
+    if (Math.abs(s.goalY - s.y) < 30 * dt) s.y = s.goalY;
+    else s.y += Math.sign(s.goalY - s.y) * 30 * dt;
+    if ((Math.abs(s.goalX - s.x) < 6 && Math.abs(s.goalY - s.y) < 6) || s.counter <= 0) this.stinkyPickGoal(s);
+    // 收币 (原版: 距离 (币x, 币y+30) < 20)
+    for (const c of this.coins) {
+      if (!c.collected && Math.hypot(c.x - s.x, (c.y + 30) - s.y) < 24) this.collectCoin(c, true);
+    }
+  },
+
   // ---------- 更新 ----------
   update(dt) {
     if (!this.data) return;
-    // 掉落金币动画
+    // 掉落金币物理
     for (const c of this.coins) {
+      if (c.collected) continue;
       c.t += dt;
-      c.y += 60 * dt;
-      if (c.y > c.ground) c.y = c.ground;
-      if (c.t > 0.8 && !c.collected) {
-        c.collected = true;
-        const game = Screens.game;
-        if (game) { game.coins += c.value; game.saveShop(); game.audio.play('points'); }
+      if (c.vy !== 0 || c.y < c.groundY) {
+        c.vy += 420 * dt;
+        c.y = Math.min(c.groundY, c.y + c.vy * dt);
+        if (c.y >= c.groundY) c.vy = 0;
       }
     }
-    this.coins = this.coins.filter(c => c.t < 1.3);
-    // 蜗牛巡游
-    if (this.stinky) {
-      const s = this.stinky;
-      s.t += dt;
-      s.x += s.dir * 24 * dt;
-      if (s.x > 740) s.dir = -1;
-      if (s.x < 60) s.dir = 1;
+    this.coins = this.coins.filter(c => !c.collected || c.t < c.fadeT);
+    // 模型动画推进 (共享实例, 每帧一次)
+    for (const k of Object.keys(this._models)) { const m = this._models[k]; if (m && m.update) m.update(dt); }
+    for (const k of Object.keys(this._sproutM || {})) { const m = this._sproutM[k]; if (m && m.update) m.update(dt); }
+    for (const k of Object.keys(this._pots || {})) { const m = this._pots[k]; if (m && m.update) m.update(dt); }
+    // 工具动画 → 播完生效 (原版 ZenToolUpdate)
+    for (const t of this.tools) {
+      if (t.r && t.r.update) t.r.update(dt);
+      if (t.r && t.r.loopCount >= t.loops) this.applyToolEffect(t);
     }
-    // 模型动画推进
-    for (const k of Object.keys(this._models)) {
-      const m = this._models[k];
-      if (m && m.update) m.update(dt);
+    this.tools = this.tools.filter(t => !t.done);
+    // 蜗牛
+    this.stinkyUpdate(dt);
+    // 成熟植物当日满足 → 定期产币 (原版 PlantUpdateProduction: 18~150s 一枚, 10%+ 金币)
+    for (const p of this.data.plants) {
+      if (p.garden !== this.data.garden) continue;
+      if (p.age === 3 && this.fulfilledToday(p) && !(p.seed && MUSHROOMS.has(p.seed) && p.garden === 'greenhouse')) {
+        if (!p.launchCounter || p.launchCounter <= 0) {
+          const mins = Math.floor((this.now() - p.lastNeedFulfilled) / 60);
+          const maxSec = 30 + (150 - 30) * Math.max(0, Math.min(1, (mins - 5) / 25));
+          p.launchCounter = 18 + Math.random() * Math.max(18, maxSec - 18);
+        }
+        p.launchCounter -= dt;
+        if (p.launchCounter <= 0) {
+          const pos = this.cellPos(p.x, p.y);
+          const goldChance = 0.1 + 0.08 * Math.max(0, Math.min(1, (Math.floor((this.now() - p.lastNeedFulfilled) / 60) - 5) / 25));
+          this.dropCoin(pos.x + 40, pos.y, Math.random() < goldChance ? 'gold' : 'silver');
+        }
+      }
     }
-    if (this._potM && this._potM.update) this._potM.update(dt);   // 花盆动画 (#9)
-    // 植物开心计时
-    for (let r = 0; r < 4; r++) for (let c = 0; c < 8; c++) {
-      const p = this.data.plants[r][c];
-      if (p && p.happy > 0) p.happy -= dt;
-    }
+    if (this.bubble) this.arrowT += dt;
   },
+
+  collectCoin(c, byStinky) {
+    c.collected = true;
+    c.fadeT = c.t + 0.25;
+    const game = Screens.game;
+    if (game) { game.coins += c.value; game.saveShop(); game.audio.play('points'); }
+  },
+
   // ---------- 绘制 ----------
   draw(ctx) {
     if (!this.data) this.load();
     const game = Screens.game;
     const t = Screens.t;
-    // 背景 (温室 / 蘑菇园 / 水族馆)
-    const bgName = {
-      greenhouse: 'background_greenhouse.jpg',
-      mushroomgarden: 'background_mushroomgarden.jpg',
-      aquarium: 'aquarium1.jpg',
-    }[this.data.garden] || 'background_greenhouse.jpg';
-    const bg = img(bgName);
+    const mouse = Screens.mouse || { x: -1, y: -1 };
+    const garden = this.data.garden;
+    // 背景
+    const bg = img(this.BG[garden]);
     if (bg) ctx.drawImage(bg, 0, 0, 800, 600);
     else { ctx.fillStyle = '#2a3a1a'; ctx.fillRect(0, 0, 800, 600); }
-    // 标题
-    pvzText(ctx, '禅 镜 花 园', 400, 40, 30, '#ffe9a8');
-    // 花盆 + 植物
-    const potImg = img('pot_bottom.png');
-    const potM = this.potModel();   // 原版 REANIM_POT 完整花盆 (#9)
-    const sproutImg = img('anim_sprout.png');
-    const mouse = Screens.mouse || { x: -1, y: -1 };
-    for (let r = 0; r < 4; r++) {
-      for (let c = 0; c < 8; c++) {
-        const p = this.data.plants[r][c];
-        const pos = this.cellPos(c, r);
-        // 命中区 = 原版 PixelToGridX/Y: 格点 (80×85) — 与背景图木架格子一致 (#5)
-        const hov = mouse.x >= pos.x && mouse.x <= pos.x + 80 && mouse.y >= pos.y && mouse.y <= pos.y + 85;
-        // 花盆 (原版: Pot.reanim 原点 = 格点, 轨道内部偏移定位盆身; #5)
-        if (potM) {
+    // 顶栏: 花园名 + 菜单
+    pvzText(ctx, this.GARDEN_LABEL[garden] || '禅境花园', 130, 34, 24, '#ffe9a8');
+    const gardens = this.ownedGardens(game);
+    if (gardens.length > 1) {
+      const ng = img('zen_nextgarden.png');
+      this._nextGarden = { x: 700, y: 62, w: 66, h: 66 };
+      if (ng) ctx.drawImage(ng, 700, 62, 66, 66);
+      const gi = gardens.indexOf(garden);
+      pvzText(ctx, '→ ' + (this.GARDEN_LABEL[gardens[(gi + 1) % gardens.length]] || ''), 733, 148, 13, '#e8d9b5');
+    } else this._nextGarden = null;
+    this.drawMenuButton(ctx);
+    // ---- 花盆 + 植物 (按 y 排序保证遮挡) ----
+    const entries = [];
+    for (const p of this.data.plants) {
+      if (p.garden !== garden) continue;
+      if (this.heldPlant === p) continue;   // 手套持有中: 不在原地绘制
+      entries.push(p);
+    }
+    entries.sort((a, b) => (this.cellPos(a.x, a.y).y - this.cellPos(b.x, b.y).y) || a.x - b.x);
+    for (const p of entries) {
+      const pos = this.cellPos(p.x, p.y);
+      const aquatic = p.seed && AQUATIC.has(p.seed);
+      // 花盆 (蘑菇园非水生/水族馆 不带盆 — 原版 PlacePottedPlant needPot)
+      const needPot = !(garden === 'mushroomgarden' && !aquatic) && garden !== 'aquarium';
+      const st = this.plantState(p);
+      if (needPot) {
+        const pm = this.potModel(st !== 'notready', !!aquatic);
+        if (pm) {
           ctx.save();
-          potM.setPosition(pos.x, pos.y);
-          potM.draw(ctx);
+          pm.setPosition(pos.x, pos.y);
+          pm.draw(ctx);
           ctx.restore();
-        } else if (potImg) {
-          // 回退: pot_top(83x64 盆身) + pot_bottom(67x21 盆底) — 画在格内下部
+        } else {
           const potTop = img('pot_top.png');
-          if (potTop) {
-            ctx.save();
-            ctx.drawImage(potTop, pos.x, pos.y + 20);
-            ctx.restore();
-          } else {
-            ctx.save();
-            ctx.globalAlpha = 0.95;
-            ctx.drawImage(potImg, pos.x + 8, pos.y + 26, 54, 40);
-            ctx.restore();
-          }
-        } else {
-          ctx.fillStyle = '#a05a28';
-          ctx.beginPath(); ctx.roundRect(pos.x + 10, pos.y + 34, 50, 30, 6); ctx.fill();
+          if (potTop) ctx.drawImage(potTop, pos.x, pos.y + 20);
+          else { ctx.fillStyle = '#a05a28'; ctx.beginPath(); ctx.roundRect(pos.x + 10, pos.y + 34, 50, 30, 6); ctx.fill(); }
         }
-        if (!p) continue;
-        // 植物本体 (原点 = 格点, 与场上植物一致; stage 缩小)
-        if (!p.type) {
-          // 新芽
-          if (sproutImg) {
-            ctx.save();
-            const s = 2 + Math.sin(t * 3 + c) * 0.1;
-            ctx.translate(pos.x + 40, pos.y + 18);
-            ctx.scale(s, s);
-            ctx.drawImage(sproutImg, -9, -7);
-            ctx.restore();
-          }
-        } else {
-          const m = this.model(p.type, p.stage);
-          if (m) {
-            ctx.save();
-            const scale = [0, 0.45, 0.65, 0.85][p.stage] || 0.85;
-            m.setPosition(pos.x, pos.y - 6);
-            m.overrideScale(scale, scale);
-            m.draw(ctx);
-            ctx.restore();
-          }
-        }
-        // 需求图标 (原版 zen_need_icons: 浇水/肥料/除虫)
-        if (p.need && !p.happy) {
-          const ni = img('zen_need_icons.png');
-          const bob = Math.sin(t * 4 + r + c) * 3;
-          if (ni) {
-            const idx = p.need === 'water' ? 0 : p.need === 'fertilizer' ? 1 : 2;
-            ctx.drawImage(ni, idx * 30, 0, 30, 30, pos.x + 25, pos.y - 12 + bob, 30, 30);
-          } else {
-            ctx.fillStyle = p.need === 'water' ? '#4a90d8' : '#8a6a2a';
-            ctx.beginPath(); ctx.arc(pos.x + 40, pos.y - 8 + bob, 7, 0, Math.PI * 2); ctx.fill();
-          }
-        } else if (p.stage < 3 && p.fed >= p.needMax) {
-          // 等待施肥: 金色肥料图标
-          const fImg = img('fertilizer.png');
-          const bob = Math.sin(t * 4 + r) * 3;
-          if (fImg) ctx.drawImage(fImg, pos.x + 27, pos.y - 14 + bob, 26, 26);
-        }
-        // 开心发光 (原版 ZEN_GLOW)
-        if (p.happy > 0) {
+      }
+      // 植物本体 (原版 DrawPottedPlant: 小苗 0.5 缩放 +20/+40, 中苗 0.75 +10/+20, 成熟 1.0; 镜像随机)
+      const flip = p.facing === 1;
+      if (p.age === 0) {
+        const m = this.sproutModel(p.isMarigold);
+        if (m) {
           ctx.save();
-          ctx.globalAlpha = Math.min(0.5, p.happy);
-          ctx.globalCompositeOperation = 'lighter';
-          ctx.fillStyle = 'rgba(180,255,120,0.5)';
-          ctx.beginPath(); ctx.ellipse(pos.x + 40, pos.y + 30, 40, 44, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.translate(pos.x + 40, 0);
+          if (flip) ctx.scale(-1, 1);
+          ctx.translate(-(pos.x + 40), 0);
+          m.setPosition(pos.x, pos.y - 6);
+          m.draw(ctx);
           ctx.restore();
+        } else {
+          const sp = img('anim_sprout.png');
+          if (sp) { ctx.save(); const s2 = 1.6 + Math.sin(t * 3 + p.x) * 0.08; ctx.translate(pos.x + 40, pos.y + 22); ctx.scale(s2, s2); ctx.drawImage(sp, -9, -7); ctx.restore(); }
         }
-        // 悬停框 (原版命中区 80×85)
-        if (hov) {
-          ctx.strokeStyle = 'rgba(255,233,168,0.9)'; ctx.lineWidth = 2.5;
-          ctx.strokeRect(pos.x + 2, pos.y + 2, 76, 81);
+      } else {
+        const m = this.model(p.seed);
+        if (m) {
+          const sc = [0, 0.5, 0.75, 1][p.age] || 1;
+          ctx.save();
+          ctx.translate(pos.x + 40, 0);
+          if (flip) ctx.scale(-1, 1);
+          ctx.translate(-(pos.x + 40), 0);
+          const sleeping = st === 'notready' && p.seed && MUSHROOMS.has(p.seed) && garden !== 'mushroomgarden';
+          if (sleeping) ctx.globalAlpha = 0.8;
+          m.setPosition(pos.x, pos.y - 6);
+          m.overrideScale(sc, sc);
+          m.draw(ctx);
+          ctx.restore();
+          // 睡觉的夜习性植物 (原版 SetSleeping + 睡眠粒子): Zzz
+          if (sleeping) {
+            ctx.save();
+            const bob = Math.sin(t * 2.2 + p.x) * 4;
+            ctx.font = 'bold 17px "Noto Sans SC", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = 'rgba(255,255,255,0.85)';
+            ctx.fillText('Z', pos.x + 58, pos.y - 2 + bob);
+            ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
+            ctx.fillText('z', pos.x + 70, pos.y - 14 + bob * 1.3);
+            ctx.restore();
+          }
+        }
+      }
+      // 开心光晕 (原版 PARTICLE_POTTED_PLANT_GLOW)
+      if (st === 'happy') {
+        ctx.save();
+        const a = 0.28 + 0.1 * Math.sin(t * 3 + p.x + p.y);
+        const g = ctx.createRadialGradient(pos.x + 40, pos.y + 34, 6, pos.x + 40, pos.y + 34, 46);
+        g.addColorStop(0, `rgba(255,244,150,${a + 0.25})`);
+        g.addColorStop(1, 'rgba(255,244,150,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.ellipse(pos.x + 40, pos.y + 34, 46, 50, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+      // 需求气泡 (原版 DrawPlantOverlay: PLANTSPEECHBUBBLE + ZEN_NEED_ICONS / WATERDROP)
+      const need = this.getNeed(p);
+      if (need !== 'none') {
+        const bub = img('plantspeechbubble.png');
+        const bx = pos.x + 34, by = pos.y - 44;
+        if (bub) ctx.drawImage(bub, bx, by);
+        if (need === 'water') {
+          const wd = img('waterdrop.png');
+          if (wd) ctx.drawImage(wd, bx + 13, by + 7);
+        } else {
+          const ni = img('zen_need_icons.png');
+          if (ni) {
+            const idx = need === 'fertilizer' ? 0 : need === 'bugspray' ? 1 : 2;
+            const cw = ni.width / 3;
+            ctx.drawImage(ni, idx * cw, 0, cw, ni.height, bx + 11, by + 7, cw, ni.height);
+          }
         }
       }
     }
+    // 悬停格高亮
+    {
+      const cell = this.cellAt(mouse.x, mouse.y);
+      if (cell) {
+        const pos = this.cellPos(cell[0], cell[1]);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,233,168,0.8)'; ctx.lineWidth = 2.5;
+        ctx.strokeRect(pos.x + 2, pos.y + 2, 76, 81);
+        ctx.restore();
+      }
+    }
+    // 工具动画层
+    for (const tl of this.tools) {
+      if (tl.r) { ctx.save(); tl.r.draw(ctx); ctx.restore(); }
+    }
     // 掉落金币
     for (const c of this.coins) {
-      const coinImg = img('coin.png');
+      const im = img(this.COIN_IMG[c.type]);
       ctx.save();
-      ctx.globalAlpha = c.t > 0.9 ? Math.max(0, 1 - (c.t - 0.9) / 0.4) : 1;
-      if (coinImg) {
-        ctx.translate(c.x, c.y - (1 - Math.min(1, c.t * 2)) * 60);
-        ctx.rotate(c.t * 4);
-        ctx.drawImage(coinImg, -14, -14, 28, 28);
+      ctx.globalAlpha = c.collected ? Math.max(0, 1 - (c.t - c.fadeT) / 0.25) : 1;
+      const sq = Math.abs(Math.cos(c.t * 3.2));
+      if (c.type === 'diamond') {
+        ctx.translate(c.x, c.y);
+        ctx.rotate(Math.sin(c.t * 2) * 0.15);
+        if (im) ctx.drawImage(im, -12, -14, 24, 28);
+        else {
+          ctx.fillStyle = '#7ae8e0';
+          ctx.beginPath();
+          ctx.moveTo(0, -14); ctx.lineTo(10, -4); ctx.lineTo(0, 14); ctx.lineTo(-10, -4);
+          ctx.closePath(); ctx.fill();
+          ctx.fillStyle = 'rgba(255,255,255,0.7)';
+          ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(10, -4); ctx.lineTo(0, -2); ctx.closePath(); ctx.fill();
+        }
       } else {
-        ctx.fillStyle = '#ffd34d';
-        ctx.beginPath(); ctx.arc(c.x, c.y, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.translate(c.x, c.y);
+        ctx.scale(Math.max(0.18, sq), 1);
+        if (im) ctx.drawImage(im, -14, -16, 28, 32);
+        else {
+          ctx.fillStyle = c.type === 'gold' ? '#ffd34d' : '#cfd6dd';
+          ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.fill();
+        }
       }
       ctx.restore();
     }
     // 蜗牛
-    if (this.stinky) {
+    if (this.stinky && this.stinky.r) {
       const s = this.stinky;
-      const shell = img('stinky_shell.png');
       ctx.save();
-      ctx.translate(s.x, s.y);
-      ctx.scale(s.dir, 1);
-      const bob = Math.sin(s.t * 6) * 2;
-      if (shell) ctx.drawImage(shell, -20, -16 + bob, 40, 38);
-      else {
-        ctx.fillStyle = '#a8885a';
-        ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.fill();
+      s.r.setPosition(s.x, s.y);
+      s.r.overrideScale(0.8 * s.dir, 0.8);
+      s.r.draw(ctx);
+      if (s.state === 'sleep') {
+        ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        const bob = Math.sin(t * 2) * 3;
+        ctx.fillText('Z', s.x + 26, s.y - 12 + bob);
+        ctx.font = 'bold 11px "Noto Sans SC", sans-serif';
+        ctx.fillText('z', s.x + 36, s.y - 24 + bob * 1.3);
       }
       ctx.restore();
     }
-    // ---------- 工具栏 (原版 GetZenButtonRect: 从 x=30 起每格一工具) ----------
-    this._tools = [];
-    const TOOLS = [
-      { k: 'water', label: '水壶', img: game && game.purchased.goldwatering ? 'wateringcangold.png' : 'wateringcan.png' },
+    // 工具栏 + 顶栏按钮
+    this.drawToolBar(ctx, game, t, mouse);
+    // 手套持有植物预览
+    if (this.heldPlant) {
+      const UI = __getUI();
+      const thumb = UI && this.heldPlant.seed ? UI.getThumb(this.heldPlant.seed) : null;
+      if (thumb) ctx.drawImage(thumb, mouse.x - 30, mouse.y - 45, 60, 80);
+      else pvzText(ctx, this.plantLabel(this.heldPlant), mouse.x, mouse.y - 20, 14, '#fff');
+    }
+    // 金水壶目标框 (原版 zen_goldtoolreticle)
+    if (this.tool === 'water' && game.purchased.goldwatering) {
+      const ret = img('zen_goldtoolreticle.png');
+      ctx.save();
+      ctx.globalAlpha = 0.8;
+      if (ret) ctx.drawImage(ret, mouse.x - 60, mouse.y - 55);
+      else { ctx.strokeStyle = '#ffe08a'; ctx.lineWidth = 3; ctx.strokeRect(mouse.x - 55, mouse.y - 50, 110, 100); }
+      ctx.restore();
+    }
+    // 对话气泡 (教程 / 卖花)
+    if (this.bubble) this.drawBubble(ctx, game, t);
+  },
+
+  drawMenuButton(ctx) {
+    // 菜单 (原版: 游戏内右上 Continue 按钮)
+    ctx.save();
+    const x = 686, y = 8, w = 104, h = 40;
+    const grad = ctx.createLinearGradient(0, y, 0, y + h);
+    grad.addColorStop(0, '#d9c088'); grad.addColorStop(1, '#a8834a');
+    ctx.fillStyle = grad;
+    ctx.strokeStyle = '#5c4020'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 8); ctx.fill(); ctx.stroke();
+    ctx.font = 'bold 17px "Noto Sans SC", sans-serif';
+    ctx.fillStyle = '#40280c'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('菜 单', x + w / 2, y + h / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+    ctx.restore();
+    this._menu = { x: 686, y: 8, w: 104, h: 40 };
+  },
+
+  drawToolBar(ctx, game, t, mouse) {
+    // ---- 原版 GetZenButtonRect: 底部工具栏 (浇水壶/肥料/杀虫剂/唱片/手套/$/推车) ----
+    const tools = [
+      { k: 'water', label: '水壶', img: game.purchased.goldwatering ? 'wateringcangold.png' : 'wateringcan.png' },
       { k: 'fertilizer', label: '肥料', img: 'fertilizer.png', count: this.data.fertilizer },
       { k: 'bugspray', label: '除虫', img: 'zengarden_bugspray_bottle.png', count: this.data.bugspray },
       { k: 'phonograph', label: '唱片', img: 'phonograph.png', needBuy: !game.purchased.phonograph },
       { k: 'glove', label: '手套', img: 'zen_gardenglove.png', needBuy: !game.purchased.glove },
       { k: 'sell', label: '出售', img: 'zen_moneysign.png' },
     ];
-    TOOLS.forEach((tl, i) => {
-      const x = 30 + i * 66, y = 522;
-      this._tools.push({ ...tl, x, y, w: 60, h: 60 });
+    if (game.purchased.wheelbarrow) tools.push({ k: 'wheelbarrow', label: '推车', img: 'zen_wheelbarrow.png' });
+    this._tools = [];
+    const y = 522, hgt = 62;
+    tools.forEach((tl, i) => {
+      const x = 22 + i * 68;
+      this._tools.push({ ...tl, x, y, w: 62, h: hgt });
       ctx.save();
       const sel = this.tool === tl.k;
-      // 槽底
-      ctx.fillStyle = sel ? 'rgba(200,160,60,0.85)' : 'rgba(60,44,20,0.75)';
-      ctx.strokeStyle = sel ? '#ffe9a8' : 'rgba(90,70,40,0.9)';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.roundRect(x, y, 60, 60, 8); ctx.fill(); ctx.stroke();
+      // 槽底 (木质)
+      const grad = ctx.createLinearGradient(0, y, 0, y + hgt);
+      if (sel) { grad.addColorStop(0, '#e8c878'); grad.addColorStop(1, '#b89240'); }
+      else { grad.addColorStop(0, '#9c7a48'); grad.addColorStop(1, '#6e5228'); }
+      ctx.fillStyle = grad;
+      ctx.strokeStyle = sel ? '#ffe9a8' : '#4a3418';
+      ctx.lineWidth = sel ? 3 : 2;
+      ctx.beginPath(); ctx.roundRect(x, y, 62, hgt, 8); ctx.fill(); ctx.stroke();
       const tim = img(tl.img);
-      if (tim) ctx.drawImage(tim, x + 8, y + 6, 44, 44);
+      if (tim) {
+        const s = Math.min(48 / tim.width, 48 / tim.height);
+        const dw = tim.width * s, dh = tim.height * s;
+        ctx.globalAlpha = tl.needBuy ? 0.35 : 1;
+        ctx.drawImage(tim, x + (62 - dw) / 2, y + (hgt - dh) / 2 - 4, dw, dh);
+        ctx.globalAlpha = 1;
+      }
       // 数量角标
       if (tl.count !== undefined) {
         ctx.font = 'bold 13px "Noto Sans SC", sans-serif';
         ctx.textAlign = 'right'; ctx.fillStyle = '#fff';
         ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
-        ctx.strokeText(String(tl.count), x + 54, y + 16);
-        ctx.fillText(String(tl.count), x + 54, y + 16);
+        ctx.strokeText(String(tl.count), x + 56, y + 16);
+        ctx.fillText(String(tl.count), x + 56, y + 16);
       }
+      // 未购买遮罩
       if (tl.needBuy) {
-        ctx.globalAlpha = 0.45;
-        ctx.fillStyle = '#333';
-        ctx.fillRect(x, y, 60, 60);
-        ctx.globalAlpha = 1;
+        ctx.fillStyle = 'rgba(20,16,10,0.5)';
+        ctx.fillRect(x, y, 62, hgt);
         ctx.font = 'bold 11px "Noto Sans SC", sans-serif';
         ctx.textAlign = 'center'; ctx.fillStyle = '#ffd34d';
-        ctx.fillText('需购买', x + 30, y + 54);
+        ctx.fillText('需购买', x + 31, y + hgt - 8);
+      }
+      // 推车占用标记
+      if (tl.k === 'wheelbarrow' && this.barrowPlant()) {
+        ctx.font = 'bold 11px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center'; ctx.fillStyle = '#9dff8a';
+        ctx.fillText('有植物', x + 31, y + hgt - 8);
       }
       ctx.restore();
     });
-    // 返回主菜单 + 切换花园
-    ctx.save();
-    ctx.fillStyle = '#a03a3a';
-    ctx.beginPath(); ctx.roundRect(700, 552, 90, 38, 6); ctx.fill();
-    ctx.font = 'bold 15px "Noto Sans SC", sans-serif';
-    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
-    ctx.fillText('主菜单', 745, 576);
-    ctx.restore();
-    this._back = { x: 700, y: 552, w: 90, h: 38 };
-    // 下一花园 (原版 NEXT_GARDEN 固定 x=564)
-    const gardens = ['greenhouse'];
-    if (game.purchased.mushroomgarden) gardens.push('mushroomgarden');
-    if (game.purchased.aquarium) gardens.push('aquarium');
-    if (gardens.length > 1) {
-      const ng = img('zen_nextgarden.png');
-      this._nextGarden = { x: 560, y: 20, w: 60, h: 60 };
-      if (ng) ctx.drawImage(ng, 560, 20, 60, 60);
-      const gi = gardens.indexOf(this.data.garden);
-      pvzText(ctx, gardens[(gi + 1) % gardens.length] === 'greenhouse' ? '温室' : gardens[(gi + 1) % gardens.length] === 'mushroomgarden' ? '蘑菇园' : '水族馆', 590, 100, 13, '#e8d9b5');
-    } else this._nextGarden = null;
-    // 手套持有植物预览
-    if (this.heldPlant) {
-      const thumb = __getUI() && __getUI().getThumb(this.heldPlant.type);
-      if (thumb) ctx.drawImage(thumb, mouse.x - 25, mouse.y - 35, 50, 70);
-    }
-    // 选中工具光标
-    if (this.tool === 'water') {
-      const wimg = img(game && game.purchased.goldwatering ? 'wateringcangold.png' : 'wateringcan.png');
-      if (wimg) ctx.drawImage(wimg, mouse.x - 16, mouse.y - 30, 36, 36);
-    }
-    // 戴夫气泡
-    if (this.bubble) {
-      ctx.save();
-      const bx = 420, by = 430, bw = 320, bh = 96;
-      ctx.fillStyle = 'rgba(248,244,224,0.96)';
-      ctx.strokeStyle = '#8a8a7a'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#3a3222';
-      ctx.font = '15px "Noto Sans SC", sans-serif';
-      ctx.textAlign = 'left';
-      const txt = this.bubble.lines[this.bubble.line] || '';
-      // 简单换行
-      let line = '', yy = by + 30;
-      for (const ch of txt) {
-        if (ctx.measureText(line + ch).width > bw - 40) { ctx.fillText(line, bx + 20, yy); line = ch; yy += 20; }
-        else line += ch;
+    // 教程箭头 (原版 ShowTutorialArrowOnWateringCan)
+    if (this.bubble && this.bubble.tutorial && this.bubble.line >= this.bubble.lines.length - 1) {
+      const wt = this._tools[0];
+      if (wt) {
+        ctx.save();
+        const bob = Math.sin(this.arrowT * 5) * 6;
+        ctx.fillStyle = '#ffe14d'; ctx.strokeStyle = '#7a5a00'; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(wt.x + 31, wt.y - 26 + bob);
+        ctx.lineTo(wt.x + 17, wt.y - 46 + bob);
+        ctx.lineTo(wt.x + 45, wt.y - 46 + bob);
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.restore();
       }
-      if (line) ctx.fillText(line, bx + 20, yy);
-      const a = 0.5 + 0.5 * Math.sin(Screens.t * 4);
+    }
+    // 商店按钮 (原版 OpenStore → STORE_PAGE_ZEN1)
+    ctx.save();
+    const sx = 700, sy = 530, sw = 84, sh = 46;
+    const grad2 = ctx.createLinearGradient(0, sy, 0, sy + sh);
+    grad2.addColorStop(0, '#d9c088'); grad2.addColorStop(1, '#a8834a');
+    ctx.fillStyle = grad2;
+    ctx.strokeStyle = '#5c4020'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.roundRect(sx, sy, sw, sh, 8); ctx.fill(); ctx.stroke();
+    ctx.font = 'bold 16px "Noto Sans SC", sans-serif';
+    ctx.fillStyle = '#40280c'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('商 店', sx + sw / 2, sy + sh / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+    ctx.restore();
+    this._store = { x: 700, y: 530, w: 84, h: 46 };
+    // 金币数
+    ctx.save();
+    const coinI = img('coin_gold2.png');
+    if (coinI) ctx.drawImage(coinI, 586, 540, 26, 30);
+    pvzText(ctx, String(game.coins || 0), 640, 560, 16, '#ffe9a8');
+    ctx.restore();
+    // 选中工具跟随光标 (原版 CursorObject 工具绘制)
+    const selTool = tools.find(tt => tt.k === this.tool);
+    if (selTool) {
+      const tim = img(selTool.img);
+      if (tim) {
+        ctx.save();
+        ctx.globalAlpha = 0.9;
+        ctx.drawImage(tim, mouse.x - 22, mouse.y - 40, 44, 44);
+        ctx.restore();
+      }
+    }
+  },
+
+  drawBubble(ctx, game, t) {
+    const b = this.bubble;
+    // 原版 CrazyDaveEnter: 戴夫本人入场站在花园左侧 (教程 2100-2104 / 卖花 1700 期间)
+    if (!this.daveAnim) {
+      try {
+        if (RE.hasDef('CrazyDave')) {
+          const d = Assets.reanim('CrazyDave');
+          d.play('anim_idle', RE.LOOP, 18);
+          this.daveAnim = d;
+        }
+      } catch (e) { this.daveAnim = null; }
+    }
+    if (this.daveAnim) {
+      ctx.save();
+      ctx.translate(88, 150);
+      ctx.scale(0.72, 0.72);
+      this.daveAnim.setPosition(0, 0);
+      this.daveAnim.draw(ctx);
+      ctx.restore();
+      if (this.daveAnim.update) this.daveAnim.update(1 / 60);
+    }
+    ctx.save();
+    const bx = 220, by = 120, bw = 370, bh = 100;
+    ctx.fillStyle = 'rgba(248,244,224,0.96)';
+    ctx.strokeStyle = '#8a8a7a'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#3a3222';
+    ctx.font = '15px "Noto Sans SC", sans-serif';
+    ctx.textAlign = 'left';
+    const txt = b.lines[b.line] || '';
+    let line = '', yy = by + 30;
+    for (const ch of txt) {
+      if (ctx.measureText(line + ch).width > bw - 40) { ctx.fillText(line, bx + 20, yy); line = ch; yy += 20; }
+      else line += ch;
+    }
+    if (line) ctx.fillText(line, bx + 20, yy);
+    if (b.sell) {
+      // 卖花确认按钮
+      const yes = { x: bx + 60, y: by + bh - 34, w: 90, h: 26 };
+      const no = { x: bx + 210, y: by + bh - 34, w: 90, h: 26 };
+      this._sellBtns = { yes, no };
+      for (const [r2, label] of [[yes, '卖！'], [no, '先不卖']]) {
+        ctx.fillStyle = label === '卖！' ? '#c8e8a0' : '#e8d8b0';
+        ctx.strokeStyle = '#6a5a3a'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.roundRect(r2.x, r2.y, r2.w, r2.h, 6); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#3a2a10'; ctx.font = 'bold 14px "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(label, r2.x + r2.w / 2, r2.y + 18);
+      }
+    } else {
+      const a = 0.5 + 0.5 * Math.sin(t * 4);
       ctx.globalAlpha = a;
       ctx.font = 'bold 12px "Noto Sans SC", sans-serif';
       ctx.fillStyle = '#8a7a3a';
-      ctx.fillText('点击继续', bx + bw - 70, by + bh - 10);
-      ctx.restore();
+      ctx.fillText('点击继续', bx + bw - 80, by + bh - 12);
+      ctx.globalAlpha = 1;
     }
+    ctx.restore();
   },
+
   // ---------- 交互 ----------
+  cellAt(x, y) {
+    const cells = this.gridOf(this.data.garden);
+    for (let i = 0; i < cells.length; i++) {
+      if (x >= cells[i][0] && x <= cells[i][0] + 80 && y >= cells[i][1] && y <= cells[i][1] + 85) {
+        return [i % 8, Math.floor(i / 8)];
+      }
+    }
+    return null;
+  },
+  plantAt(col, row) {
+    return this.data.plants.find(p => p.garden === this.data.garden && p.x === col && p.y === row) || null;
+  },
+  barrowPlant() {
+    return this.data.plants.find(p => p.garden === 'wheelbarrow') || null;
+  },
+
   click(p, game) {
-    // 气泡优先
+    // 对话气泡优先
     if (this.bubble) {
+      if (this.bubble.sell && this._sellBtns) {
+        const { yes, no } = this._sellBtns;
+        if (inRect(p, yes.x, yes.y, yes.w, yes.h)) { this.doSell(this.bubble.sell.plant, game); this.bubble = null; return; }
+        if (inRect(p, no.x, no.y, no.w, no.h)) { this.bubble = null; game.audio.play('tap'); return; }
+        return;
+      }
       this.bubble.line++;
+      // 原版 AdvanceCrazyDaveDialog 2102: 无植物时赠送 2 株金盏花芽
+      if (this.bubble.tutorial && this.bubble.line === 3 && this.data.plants.filter(pp => pp.garden !== 'wheelbarrow').length === 0) {
+        for (let i = 0; i < 2; i++) this.addPottedPlant(this.newPlant('MARIGOLD', { isMarigold: true, feedingsPerGrow: 3 }));
+        this.save();
+      }
       if (this.bubble.line >= this.bubble.lines.length) this.bubble = null;
       game.audio.play('tap');
       return;
     }
-    // 返回
-    if (this._back && inRect(p, this._back.x, this._back.y, this._back.w, this._back.h)) {
+    // 菜单/返回
+    if (this._menu && inRect(p, this._menu.x, this._menu.y, this._menu.w, this._menu.h)) {
       game.audio.play('gravebutton');
+      this.leaveToMenu(game);
       game.state = 'menu';
       return;
     }
-    // 切换花园
+    // 切换花园 (原版 GotoNextGarden 先 LeaveGarden: 结算进行中工具 + 收币)
     if (this._nextGarden && inRect(p, this._nextGarden.x, this._nextGarden.y, this._nextGarden.w, this._nextGarden.h)) {
-      const gardens = ['greenhouse'];
-      if (game.purchased.mushroomgarden) gardens.push('mushroomgarden');
-      if (game.purchased.aquarium) gardens.push('aquarium');
+      this.settleAndLeave(game);
+      const gardens = this.ownedGardens(game);
       const gi = gardens.indexOf(this.data.garden);
       this.data.garden = gardens[(gi + 1) % gardens.length];
       this.save();
+      this.enter();
       game.audio.play('gravebutton');
+      return;
+    }
+    // 商店 (原版 OpenStore 先 LeaveGarden + STORE_PAGE_ZEN1 + 教程期送 5 袋肥料)
+    if (this._store && inRect(p, this._store.x, this._store.y, this._store.w, this._store.h)) {
+      this.settleAndLeave(game);
+      game.audio.play('buttonclick');
+      if (!game.daveSeen.zenstore) {
+        this.data.fertilizer = (this.data.fertilizer || 0) + 5;
+        this.save();
+        game.markDaveSeen('zenstore');
+      }
+      const shop = Screens.shop;
+      shop.returnState = 'zengarden';
+      game.state = 'shop';
+      shop.enter();
+      shop.page = 2;   // 原版 STORE_PAGE_ZEN1 (园艺工具页)
       return;
     }
     // 工具选择
     for (const t of (this._tools || [])) {
       if (inRect(p, t.x, t.y, t.w, t.h)) {
         if (t.needBuy) { game.audio.play('buzzer'); return; }
+        // 推车: 存/取植物 (原版 MouseDownWithEmptyWheelBarrow / PLANT_FROM_WHEEL_BARROW)
+        if (t.k === 'wheelbarrow') {
+          if (this.heldPlant) {
+            this.heldPlant.garden = 'wheelbarrow';
+            this.heldPlant = null;
+            this.save();
+            game.audio.play('plant');
+          } else {
+            const bp = this.barrowPlant();
+            if (bp) { this.heldPlant = bp; this.tool = 'glove'; game.audio.play('seedlift'); }
+            else game.audio.play('tap');
+          }
+          return;
+        }
         this.tool = t.k;
         game.audio.play('seedlift');
         return;
       }
     }
-    // 植物点击 (原版命中区 80×85, 与渲染格点一致 #5)
-    for (let r = 0; r < 4; r++) {
-      for (let c = 0; c < 8; c++) {
-        const pos = this.cellPos(c, r);
-        if (!(p.x >= pos.x && p.x <= pos.x + 80 && p.y >= pos.y && p.y <= pos.y + 85)) continue;
-        this.useTool(r, c, game);
+    // 蜗牛点击唤醒 (原版 MouseDownZenGarden: STINKY 命中 + NORMAL 光标)
+    if (this.stinky && Math.hypot(p.x - this.stinky.x, p.y - this.stinky.y) < 45) {
+      this.wakeStinky(false);
+      return;
+    }
+    // 金币收集
+    for (const c of this.coins) {
+      if (!c.collected && Math.abs(p.x - c.x) < 26 && Math.abs(p.y - c.y) < 26) {
+        this.collectCoin(c, false);
         return;
       }
     }
+    // 格子 → 使用工具
+    const cell = this.cellAt(p.x, p.y);
+    if (cell) this.useTool(cell[0], cell[1], p, game);
   },
-  useTool(r, c, game) {
-    const plant = this.data.plants[r][c];
+
+  useTool(col, row, p, game) {
+    const plant = this.plantAt(col, row);
+    const pos = this.cellPos(col, row);
     const tool = this.tool;
-    // 手套: 移动植物 (拿起/放下)
+    // 手套: 移动植物 (原版 CURSOR_TYPE_GLOVE + MovePlant)
     if (tool === 'glove') {
       if (this.heldPlant) {
         if (!plant) {
-          this.data.plants[r][c] = this.heldPlant;
+          // 原版 MouseDownWithFullWheelBarrow: 水族馆只收水生植物
+          if (this.data.garden === 'aquarium' && !(this.heldPlant.seed && AQUATIC.has(this.heldPlant.seed))) {
+            game.audio.play('buzzer');
+            return;
+          }
+          const hp = this.heldPlant;
+          hp.garden = this.data.garden; hp.x = col; hp.y = row;
           this.heldPlant = null;
           this.save();
           game.audio.play('plant');
         } else game.audio.play('buzzer');
       } else if (plant) {
         this.heldPlant = plant;
-        this.data.plants[r][c] = null;
         this.save();
         game.audio.play('shovel');
       }
       return;
     }
     if (!plant) { game.audio.play('buzzer'); return; }
-    // 出售 (原版 GetPlantSellPrice: 芽1500 小3000 中5000 成8000)
+    // 出售 (原版 MouseDownWithMoneySign: 戴夫报价 + 确认)
     if (tool === 'sell') {
-      if (!plant.type) { game.audio.play('buzzer'); return; }
-      const price = [0, 3000, 5000, 8000][plant.stage] || 8000;
-      game.coins += price;
-      game.saveShop();
-      this.data.plants[r][c] = null;
-      this.save();
-      game.audio.play('points');
-      this.coins.push({ x: this.cellPos(c, r).x + 40, y: this.cellPos(c, r).y, ground: this.cellPos(c, r).y + 40, value: Math.round(price / 100), t: 0, collected: false });
+      const price = this.sellPrice(plant);
+      this.bubble = {
+        lines: [`我给你 ${price} 来换 ${this.plantLabel(plant)}！`, '要卖掉它吗？'],
+        line: 0, sell: { plant, price },
+      };
+      this._sellBtns = null;
+      game.audio.play('gravebutton');
       return;
     }
-    // 浇水 (原版 PlantWatered: 掉1银币; 满足需求开心)
+    // 浇水 (原版 MouseDownWithFeedingTool: 金壶区域浇灌 / 普通壶单株; 播动画, 完成后生效)
     if (tool === 'water') {
-      if (plant.need === 'water') {
-        plant.need = null;
-        plant.happy = 3;
-        this.dropCoin(r, c, 25);
-      } else if (plant.stage < 3 && plant.fed < plant.needMax) {
-        plant.fed++;
-        this.dropCoin(r, c, 10);
+      if (game.purchased.goldwatering) {
+        this.spawnTool('water', p.x, p.y, null, true);
+        // 原版 DoFeedingTool GOLD_WATERING_CAN: 点击点附近的需水植物全部浇灌
+        const tl = this.tools[this.tools.length - 1];
+        if (tl) tl.goldArea = { x: p.x, y: p.y };
       } else {
-        game.audio.play('tap');
-        return;
+        this.spawnTool('water', pos.x, pos.y, plant, false);
       }
-      game.audio.play('plant_water');
-      this.save();
       return;
     }
-    // 肥料 (原版 PlantFertilized: 升阶, 各阶段掉金币/钻石)
+    // 肥料 (消耗品 — 原版点击即扣库存, 播动画, 播完时若需要才生效)
     if (tool === 'fertilizer') {
-      if (this.data.fertilizer <= 0) { game.audio.play('buzzer'); return; }
-      if (plant.need === 'fertilizer') {
-        plant.need = null;
-        plant.happy = 3;
-        this.dropCoin(r, c, 25);
-      } else if (plant.stage < 3 && plant.fed >= plant.needMax) {
-        this.data.fertilizer--;
-        plant.stage++;
-        plant.fed = 0;
-        plant.needMax = 3 + Math.floor(Math.random() * 3);
-        // 新芽 → 小苗: 随机变成真植物 (原版 PickRandomSeedType)
-        if (plant.stage === 1 && !plant.type) {
-          const pool = require('./data').SEED_ORDER;
-          plant.type = pool[Math.floor(Math.random() * pool.length)];
-        }
-        // 升到成熟: 掉钻石 (原版 FULL → 2 钻石)
-        if (plant.stage === 3) this.dropCoin(r, c, 100);
-        else this.dropCoin(r, c, 25);
-      } else { game.audio.play('tap'); return; }
-      game.audio.play('plantgrow');
+      if ((this.data.fertilizer || 0) <= 0) { game.audio.play('buzzer'); return; }
+      this.data.fertilizer--;
       this.save();
+      this.spawnTool('fertilizer', pos.x, pos.y, plant);
       return;
     }
-    // 除虫 (原版 PlantFulfillNeed)
+    // 杀虫剂 (消耗品)
     if (tool === 'bugspray') {
-      if (this.data.bugspray <= 0) { game.audio.play('buzzer'); return; }
-      if (plant.need === 'bugspray') {
-        this.data.bugspray--;
-        plant.need = null;
-        plant.happy = 3;
-        this.dropCoin(r, c, 25);
-        game.audio.play('plant2');
-        this.save();
-      } else game.audio.play('tap');
+      if ((this.data.bugspray || 0) <= 0) { game.audio.play('buzzer'); return; }
+      this.data.bugspray--;
+      this.save();
+      this.spawnTool('bugspray', pos.x, pos.y, plant);
       return;
     }
-    // 留声机 (原版 PlantFulfillNeed)
+    // 留声机 (原版 animRate 20, 播 2 轮生效)
     if (tool === 'phonograph') {
-      if (plant.need === 'phonograph') {
-        plant.need = null;
-        plant.happy = 3;
-        this.dropCoin(r, c, 25);
-        game.audio.play('phonograph');
-        this.save();
-      } else game.audio.play('tap');
+      this.spawnTool('phonograph', pos.x, pos.y, plant);
       return;
     }
   },
-  dropCoin(r, c, value) {
-    const pos = this.cellPos(c, r);
-    this.coins.push({ x: pos.x + 40, y: pos.y, ground: pos.y + 44, value, t: 0, collected: false });
-  },
-  // 需求刷新 (进入花园时: 成熟植物随机产生需求)
-  refreshNeeds() {
-    for (let r = 0; r < 4; r++) for (let c = 0; c < 8; c++) {
-      const p = this.data.plants[r][c];
-      if (p && p.stage === 3 && !p.need && Math.random() < 0.3) {
-        p.need = ['water', 'bugspray', 'phonograph'][Math.floor(Math.random() * 3)];
-      }
-    }
+
+  doSell(plant, game) {
+    const price = this.sellPrice(plant);
+    game.coins += price;
+    game.saveShop();
+    const idx = this.data.plants.indexOf(plant);
+    if (idx >= 0) this.data.plants.splice(idx, 1);
     this.save();
+    game.audio.play('shovel');
+    game.audio.play('points');
   },
+
+  // 新植物入花园 (原版 AddPottedPlant: FindOpenZenGardenSpot 随机空位)
+  addPottedPlant(p) {
+    const cells = this.gridOf('greenhouse');
+    const open = [];
+    for (let i = 0; i < cells.length; i++) {
+      const x = i % 8, y = Math.floor(i / 8);
+      if (!this.data.plants.some(q => q.garden === 'greenhouse' && q.x === x && q.y === y)) open.push([x, y]);
+    }
+    if (!open.length) return;
+    const [x, y] = open[Math.floor(Math.random() * open.length)];
+    p.garden = 'greenhouse'; p.x = x; p.y = y;
+    this.data.plants.push(p);
+  },
+
+  // 兼容旧调用 (main.js 进花园时调用) — 需求已由实时时钟计算
+  refreshNeeds() { },
 };
 
 if (typeof module !== 'undefined') module.exports = { Screens, pvzText, inRect };

@@ -37,6 +37,7 @@ const Game = {
   purchased: {},            // 商店已购物 { key: true }
   shopTab: 'items',         // 商店页签
   playerName: null,         // #2 玩家姓名 (原版 mPlayerInfo->mName; NewUserDialog 创建)
+  heldBelt: null,           // 传送带持卡 (原版 CURSOR_TYPE_PLANT_FROM_BANK + mSeedBankIndex): {type, index}
 
   async boot() {
     if (this._booted) return; this._booted = true;
@@ -186,6 +187,9 @@ const Game = {
     window.addEventListener('keydown', e => {
       if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
         if (this.state === 'playing' && this.board) {
+          // 传送带持卡: 原版 ESC → RefreshSeedPacketFromCursor 回带 (Board.cpp:7654-7659),
+          //   优先于暂停菜单
+          if (this.board.mode === 'conveyor' && this.heldBelt) { this.returnBeltCard(); return; }
           if (this.menuDialog) this.closeMenuDialog();
           else this.openMenuDialog();
         }
@@ -306,35 +310,44 @@ const Game = {
     if (p.x > 681 && p.x < 798 && p.y > 0 && p.y < 36) { this.openMenuDialog(); return; }
     // ---- 特殊模式点击路由 (打僵尸/罐子/我不是僵尸/雨天种子) ----
     if (board.modeClick && board.modeClick(this, p)) return;
-    // 传送带: 点击左侧槽位卡 → 拿起/放下 (原版 RefreshSeedPacketFromCursor ↔ Activate) (#15)
-    if (board.mode === 'conveyor' && board.belt && board.seedCards[0]) {
-      const bankY = Cutscene.active ? Cutscene.seedBankY : 0;
-      if (p.x > 14 && p.x < 74 && p.y > bankY + 2 && p.y < bankY + 80) {
-        this.selectedCard = this.selectedCard >= 0 ? -1 : 0;
-        this.audio.play('seedlift');
-        return;
+    // ---- 传送带持卡: 原版 Board::MouseDown 优先级 — IsPlantInCursor 时一切点击走
+    //      MouseDownWithPlant (SeedPacket.cpp:4449), 点另一张卡/铲子/顶栏 = 放回旧卡,
+    //      点草坪 = 种植。旧卡永不丢失、不会飞到最左侧 (用户报告的两项问题) ----
+    if (board.mode === 'conveyor' && this.heldBelt) {
+      // 原版 PixelToGridX/Y 越界 clamp 到边缘格 (Board.cpp:8797/8828) —
+      //   草坪下方/右侧点击会落到底行/右列; 仅顶栏(y<80)/左缘(x<40)无效 → 放回
+      let cell = null;
+      if (p.y >= 80 && p.x >= 40) {
+        const rowH = (board.scene === 'pool' || board.scene === 'fog') ? 85 : 100;
+        const cx2 = Math.max(CONST.LAWN_XMIN, Math.min(p.x, CONST.LAWN_XMIN + 9 * 80 - 1));
+        const cy2 = Math.min(p.y, board.cellY(board.rows - 1, 8) + rowH - 1);
+        cell = this.pixelToCell(cx2, cy2);
       }
+      if (cell) {
+        const [col, row] = cell;   // pixelToCell 返回 [col, row]
+        this.tryPlant(this.heldBelt.type, row, col, board);
+      } else {
+        this.returnBeltCard();   // 原版 RefreshSeedPacketFromCursor: 卡回带上原位 + FOLEY_DROP
+      }
+      return;
     }
-    // 传送带: 点击带上卡片 → 取卡 (原版 MouseHitTest: x = 91+i*50+offset; 带区裁剪 90..591 —
-    // 被裁剪的右侧入场区卡片不可点, 避免与传送带右侧铲子槽 (609) 的点击区重叠 #2)
+    // ---- 传送带取卡 (原版 SeedPacket::MouseDown 829-868): 卡牌不离带、不移动位置,
+    //      仅 Deactivate 变暗 + 光标变植物; 点已持暗卡 → buzzer ----
     if (board.mode === 'conveyor' && board.belt) {
       // #fix(conveyor): 点击区 y 需随种子银行 bankY 校正 — 与绘制位置 (8+bankY) 一致;
-      //   旧实现固定 7..77, 过场期银行滑入阶段 (bankY<0) 视觉卡与命中区错位
+      //   过场期银行滑入阶段 (bankY<0) 视觉卡与命中区错位
       const beltBankY = Cutscene.active ? Cutscene.seedBankY : 0;
       for (let i = 0; i < board.belt.items.length; i++) {
         const it = board.belt.items[i];
         const x = 91 + i * 50 + it.offset;
         if (x >= 591) continue;   // 带面裁剪区外的卡不可见不可点
         if (p.x > x && p.x < x + 50 && p.y > beltBankY + 7 && p.y < beltBankY + 77) {
-          board.belt.items.splice(i, 1);
-          // 原版 RemoveSeed: 后续卡 offsetX += 51 (视觉不动, 再滑入新槽位)
-          for (let j = i; j < board.belt.items.length; j++) board.belt.items[j].offset += 51;
-          board.seedCards = [{ type: it.type, cd: 0 }];
-          this.selectedCard = 0;
+          if (it.active === false) { this.audio.play('buzzer'); return; }   // 原版: 点暗卡 buzzer
+          // 原版: 光标记录 mSeedBankIndex, 卡牌 Deactivate 原地变暗继续随带滚动
+          it.active = false;
+          this.heldBelt = { type: it.type, index: i };
+          this.selectedCard = -1;
           this.shovelMode = false;
-          // #fix(conveyor): 取卡后卡牌从带位滑向最左槽位 (用户报告: 卡牌不会"跑"到最左边,
-          //   旧实现瞬移无过渡) — 记录起点/时刻供 ui.js 绘制 0.25s ease-out 飞行动画
-          this.beltFly = { x0: x + 25, t0: performance.now(), dur: 250 };
           this.audio.play('seedlift');
           return;
         }
@@ -482,6 +495,32 @@ const Game = {
     }, 0.35);
   },
 
+  // ---- 传送带持卡辅助 (原版 RefreshSeedPacketFromCursor / WasPlanted→RemoveSeed) ----
+  // 放回持卡: 原版 Activate() 仅置 mActive=true — 卡在带上的当前位置原地亮回,
+  //   不飞到最左、不重新排序 (Board.cpp:1995-2007)
+  returnBeltCard() {
+    if (!this.heldBelt) return;
+    const belt = this.board && this.board.belt;
+    if (belt && belt.items[this.heldBelt.index]) belt.items[this.heldBelt.index].active = true;
+    this.heldBelt = null;
+    this.audio.play('shovel');   // FOLEY_DROP 近似
+  },
+  // 种植成功后移除带上卡 (原版 SeedBank::RemoveSeed, SeedPacket.cpp:1050-1080):
+  //   后续卡 offsetX += 51 — 接替卡瞬间出现在右邻卡旧位置右侧 1px,
+  //   靠带子匀速左移净滑 50px 平滑补位
+  consumeBeltCard(board) {
+    if (!this.heldBelt) return;
+    const belt = board.belt;
+    if (belt) {
+      const i = Math.min(this.heldBelt.index, belt.items.length);
+      if (i < belt.items.length) {
+        belt.items.splice(i, 1);
+        for (let j = i; j < belt.items.length; j++) belt.items[j].offset += 51;
+      }
+    }
+    this.heldBelt = null;
+  },
+
   removePlant(p, board) {
     p.dead = true;
     this.ungridPlant(p, board);
@@ -524,7 +563,7 @@ const Game = {
       this.audio.play('coffee');
       if (!conveyor) board.sun -= def.cost;
       if (card) card.cd = def.cd / 1000;
-      if (conveyor) board.seedCards = [];
+      if (conveyor) this.consumeBeltCard(board);
       this.selectedCard = -1;
       return true;
     }
@@ -569,7 +608,9 @@ const Game = {
     // 音效 + 消耗
     if (!conveyor && !free) board.sun -= def.cost;
     if (!conveyor && !free && card) card.cd = def.cd / 1000;
-    if (conveyor) board.seedCards = [];   // 传送带卡一次性
+    // #fix(传送带): 原版 SeedPacket::WasPlanted → RemoveSeed — 仅种植成功时移除带上卡,
+    //   后续卡 offset+51 靠带子左移补位; 旧实现 seedCards=[] 会把未种植的持卡一并丢掉
+    if (conveyor) this.consumeBeltCard(board);
     if (free) this.freePlant = null;      // 免费植物用后清空
     // 打僵尸: 首次种植完成教程 (原版 SeedPacket.cpp:863 → TUTORIAL_WHACK_A_ZOMBIE_COMPLETED)
     if (board.mode === 'whack' && board.whackFlashT > 0) board.whackFlashT = 0;
@@ -655,6 +696,8 @@ const Game = {
   async _startCommon(level) {
     if (this.levelLoading) return;   // 防双击
     await this._preloadLevel(level);
+    // 传送带持卡复位 (原版关卡切换 ClearCursor)
+    this.heldBelt = null;
     const lv = this.levelId;
     // 原版 HasFinishedAdventure: 通关一次后 (unlocked>50); 雪人仅二周目出现 (CanSpawnYetis)
     this.finishedAdventure = this.progress.unlocked > 50;
@@ -1009,38 +1052,32 @@ const Game = {
     const board = this.board;
     const m = this.mouse;
     if (!m) return;
-    // 传送带: 持卡跟随鼠标 (原版行为), 落点显示植物预览
-    if (board.mode === 'conveyor' && this.selectedCard >= 0 && board.seedCards[0]) {
+    // 传送带: 原版 CursorObject::Draw CURSOR_TYPE_PLANT_FROM_BANK (CursorObject.cpp:186-205)
+    //   — 整株植物图跟随鼠标 (不是卡牌!), 悬停可种格另有半透明预览 (CursorPreview)
+    if (board.mode === 'conveyor' && this.heldBelt) {
       const UIm = (window.__mods && window.__mods['ui']) || require('./ui');
-      const type = board.seedCards[0].type;
-      if (m.y < 100 || (m.x < 84 && m.y < 84)) {
-        // 在带区: 卡挂在鼠标上
-        if (UIm && UIm.UI) {
-          ctx.save();
-          ctx.globalAlpha = 0.95;
-          UIm.UI.drawSeedCard(ctx, type, m.x - 25, m.y - 35, { selected: true });
-          ctx.restore();
-        }
-        return;
+      const type = this.heldBelt.type;
+      const thumb = UIm && UIm.UI ? UIm.UI.getThumb(type) : null;
+      if (thumb) {
+        ctx.save();
+        ctx.globalAlpha = 0.95;
+        ctx.drawImage(thumb, m.x - 40, m.y - 48, 80, 90);
+        ctx.restore();
       }
       const cell = this.pixelToCell(m.x, m.y);
       if (cell) {
         const [col, row] = cell;
         const ok = this.canPlacePreview(type, row, col, board);
+        if (ok) {
+          ctx.save();
+          ctx.globalAlpha = 0.4;
+          if (thumb) ctx.drawImage(thumb, board.gridX(col) - 5, board.cellY(row, col) - 30, 90, 100);
+          ctx.restore();
+        }
         ctx.save();
-        ctx.globalAlpha = 0.55;
-        const thumb = UIm && UIm.UI ? UIm.UI.getThumb(type) : null;
-        if (thumb) ctx.drawImage(thumb, board.gridX(col) - 5, board.cellY(row, col) - 30, 90, 100);
-        ctx.globalAlpha = 0.35;
+        ctx.globalAlpha = 0.28;
         ctx.fillStyle = ok ? '#7cff5a' : '#ff5a5a';
         ctx.fillRect(board.gridX(col), board.cellY(row, col), 80, board.scene === 'pool' ? 85 : 100);
-        ctx.restore();
-      }
-      // 卡同时挂在鼠标上 (半透明)
-      if (UIm && UIm.UI) {
-        ctx.save();
-        ctx.globalAlpha = 0.85;
-        UIm.UI.drawSeedCard(ctx, type, m.x - 25, m.y - 60, { selected: true });
         ctx.restore();
       }
       return;

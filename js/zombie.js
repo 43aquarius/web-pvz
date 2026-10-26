@@ -2827,8 +2827,22 @@ class Zombie {
       if (opts && opts.bypassesShield) flags |= DMG.BYPASSES_SHIELD;
       if (opts && opts.hitsShieldAndBody) flags |= DMG.HITS_SHIELD_AND_BODY;
       if (opts && opts.fire) fire = true;
+      // 土豆雷 (原版 theBurn=false → TakeDamage(1800, 18U)): 无粒子无尸体瞬间蒸发
+      if (opts && opts.noLeaveBody) flags |= DMG.DOESNT_LEAVE_BODY;
     }
     if (this.phase === PH.JACK_POPPING || this.isDeadOrDying) return;
+    // #fix(烧灰防具掉落): 原版爆炸系走 Zombie::ApplyBurn — 直接焦化, 完全不经过护盾/头盔扣血,
+    //   防具(路障/铁桶/头盔/铁门)随本体一起蒸发, 绝不掉落粒子。
+    //   旧实现先 takeHelmDamage → dropHelm 弹出防具粒子后才焦化, 违背原版。
+    //   (血量≥1800 的坦克单位/僵王除外 — 原版只受 1800 伤不焦化)
+    {
+      const noChar = this.bodyHealth >= 1800 || this.type === 'BOSS' || this.type === 'GARGANTUAR' || this.type === 'REDEYE';
+      if (fire && this.bodyHealth > 0 && this.bodyHealth - dmg <= 0 && !noChar) {
+        this.bodyHealth = 0;
+        this.becomeCharred();
+        return;
+      }
+    }
     let remaining = dmg;
     if (this.isFlying) remaining = this.takeFlyingDamage(remaining, flags);
     if (remaining > 0 && this.shieldType && !(flags & DMG.BYPASSES_SHIELD)) {
@@ -3129,6 +3143,11 @@ class Zombie {
       this.reanimShowPrefix('anim_head2', RG.HIDDEN);
       this.reanimShowPrefix('Zombie_tie', RG.HIDDEN);
     }
+    // #fix(掉头残留头发): 原版 SetupReanimForLostHead (Zombie.cpp:3504-3506) 隐藏
+    //   anim_head / anim_hair / anim_tongue 三组 — 旧实现漏了 anim_hair,
+    //   无头僵尸头上悬浮一撮头发 (用户报告"掉头和原版不一样")
+    this.reanimShowPrefix('anim_hair', RG.HIDDEN);
+    this.reanimShowPrefix('Zombie_hair', RG.HIDDEN);
     if (!(flags & DMG.DOESNT_LEAVE_BODY)) {
       // 原版 Zombie::DropHead (Zombie.cpp:3537): GetTrackPosition("anim_head1") 头部轨道实际位置
       // #7 掉落点居中: 轨道变换点 = 图像左上角 (实测验证 trackPos==bbox左上) →
@@ -3467,6 +3486,12 @@ class Zombie {
       this.takeDamage(1800, DMG_SYS | DMG.DOESNT_CAUSE_FLASH);
       return;
     }
+    // 原版阶段性豁免 (Zombie.cpp:8687-8704): 正在死亡/潜水/泳池中 → 直接 DieWithLoot
+    //   (泳池里被炸 = 直接消失, 不出焦尸不出粒子)
+    if (this.inPool || this.underwater || this.zombieHeight === H.FALLING) {
+      this.dieWithLoot();
+      return;
+    }
     this.becomeCharred();
   }
 
@@ -3699,6 +3724,13 @@ class Zombie {
   }
 
   updateMowered() {
+    // #fix(割草机断肢): 原版 UpdateMowered (Zombie.cpp:9286-9295) — 压扁动画播完后
+    //   补掉头 + 掉臂 (此刻才生成头颅/手臂粒子), 再淡出移除; 旧实现头臂凭空消失
+    if (this.bodyReanim.loopCount > 0 && !this._mowedLimbDropped) {
+      this._mowedLimbDropped = true;
+      this.dropHead(0);
+      this.dropArm(0);
+    }
     if (this.bodyReanim.loopCount > 0) {
       this.zombieFade = Math.min(this.zombieFade, 10);
     }

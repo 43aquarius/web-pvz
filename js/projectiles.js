@@ -198,10 +198,13 @@ class Projectile {
       if (p >= 1) {
         // 大爆炸
         board.addEffect('powie', this.tx, board.gridY(this.row) + 40);
+        // #fix(烧灰防具掉落) 原版玉米炮 Projectile.cpp:626 KillAllZombiesInRadius(115, 1, theBurn=true)
+        //   → ApplyBurn — 烧杀不走护盾/头盔扣血, 防具随本体蒸发不掉粒子
         for (const z of board.zombies) {
           if (z.dead || z.boss) continue;
           if (Math.abs(z.hitX() - this.tx) < 160 && Math.abs(z.row - this.row) <= 1) {
-            z.takeDamage(this.def.dmg, board, { exploded: true });
+            try { z.removeColdEffects && z.removeColdEffects(); } catch (e) { }
+            try { z.applyBurn && z.applyBurn(); } catch (e) { z.takeDamage(this.def.dmg, board, { exploded: true }); }
           }
         }
         // #fix(boss-attackable) 原版 KillAllZombiesInRadius: BOSS 行差归零 +
@@ -212,7 +215,8 @@ class Projectile {
           const nx = Math.max(700, Math.min(cx, 790));
           const ny = Math.max(80, Math.min(cy, 510));
           if (Math.hypot(nx - cx, ny - cy) < 160) {
-            boss.takeDamage(this.def.dmg, board, { exploded: true, noFlash: true });
+            try { boss.removeColdEffects && boss.removeColdEffects(); } catch (e) { }
+            try { boss.applyBurn && boss.applyBurn(); } catch (e) { boss.takeDamage(this.def.dmg, board, { exploded: true, noFlash: true }); }
           }
         }
         board.game.audio.play('coblauncher');

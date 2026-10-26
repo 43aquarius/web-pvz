@@ -105,6 +105,13 @@ const Audio2 = (function () {
     // #7 断肢音效 (原版 FOLEY_LIMBS_POP = sounds/limbs_pop.ogg, pitch±10):
     //   旧实现 play('limbspop') 键未注册 → 静默失败, 掉头/断臂全程无声
     limbspop: 'sounds/limbs_pop.ogg',
+    // 禅境花园工具音效 (assets/audio/SFX/garden/ — 原版 FOLEY_WATERING/FERTILIZER/BUGSPRAY/PHONOGRAPH/PRIZE/WAKEUP)
+    zen_watering: 'SFX/garden/watering.ogg',
+    zen_fertilizer: 'SFX/garden/fertilizer.ogg',
+    zen_bugspray: 'SFX/garden/bugspray.ogg',
+    zen_phonograph: 'SFX/garden/phonograph.ogg',
+    zen_prize: 'SFX/garden/prize.ogg',
+    wakeup: 'SFX/garden/wakeup.ogg',
     groan_spawn: 'SFX/zombie/groan/groan3.ogg',
     vase_breaking: 'sounds/vase_breaking.ogg',
     // 疯狂戴夫语音 (SFX/carzy/ 目录)

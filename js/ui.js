@@ -224,6 +224,9 @@ const UI = {
           for (let x = 90; x < 591; x += 24) ctx.fillRect(x + sc, bankY + 63, 12, 16);
         }
         // 带上卡片 (原版: x = 91 + i*50 + offsetX, 裁剪到带区)
+        // #fix(传送带持卡): 原版 SeedPacket::Draw (609-619) — 被拿起的卡 Deactivate 后
+        //   aPercentDark=1 在带上原位渲染全暗卡 (灰度128+64覆盖), 且继续随带子左移;
+        //   卡牌绝不飞到最左侧, 也没有"持有槽位" (植物图挂在光标上, 见 main.js drawPreview)
         ctx.save();
         ctx.beginPath();
         ctx.rect(90, bankY, 501, 87);
@@ -232,28 +235,19 @@ const UI = {
           const it = board.belt.items[i];
           const x = 91 + i * 50 + it.offset;
           ctx.save();
+          if (it.active === false) {
+            // 原版暗卡: 灰度化 + 深色覆盖 (DrawSeedPacket thePercentDark=1)
+            try { ctx.filter = 'grayscale(1) brightness(0.55)'; } catch (e) { }
+          }
           this.drawSeedCard(ctx, it.type, x, 8 + bankY, { noCost: true });   // 原版传送带不画价格 (#4b)
+          if (it.active === false) {
+            try { ctx.filter = 'none'; } catch (e) { }
+            ctx.fillStyle = 'rgba(40,40,40,0.5)';
+            ctx.fillRect(x, 8 + bankY, 50, 70);
+          }
           ctx.restore();
         }
         ctx.restore();
-        // 最左槽位: 当前持有的传送带卡 (放下时也常显, 点击可重新拿起) (#15)
-        if (board.seedCards && board.seedCards[0]) {
-          // #fix(conveyor): 取卡 0.25s ease-out 飞行动画 — 卡牌从带位水平滑向最左槽位
-          //   (用户报告: 卡牌不会"跑"到最左边, 而是在当前位置被选中); 槽位与带位同高, 纯水平过渡
-          let sx = 20;
-          const fly = game.beltFly;
-          if (fly) {
-            const p = Math.min(1, (performance.now() - fly.t0) / (fly.dur || 250));
-            if (p >= 1) { game.beltFly = null; }
-            else {
-              const e = 1 - (1 - p) * (1 - p);   // ease-out
-              sx = fly.x0 + (20 - fly.x0) * e;
-            }
-          }
-          ctx.save();
-          this.drawSeedCard(ctx, board.seedCards[0].type, sx, 8 + bankY, { selected: game.selectedCard >= 0, noCost: true });
-          ctx.restore();
-        }
         // ---- 铲子槽 (#2 原版: 传送带种子银行容量恒为 10 → GetSeedBankExtraWidth(10)=153 →
         //      GetShovelButtonRect x = 153+456 = 609, 即传送带背景板 83..599 右侧) ----
         if (game.shovelUnlocked) {

@@ -234,7 +234,9 @@ class Board {
     for (const z of this.zombies) {
       if (z.dead || z.isDeadOrDying) continue;
       if (Math.hypot(z.x + 40 - x, z.y + 50 - y) <= radius) {
-        z.takeDamage(1800, 1);
+        // #fix(烧灰防具掉落) 原版杰克盒爆炸 KillAllZombiesInRadius(theBurn=true) → ApplyBurn:
+        //   烧杀不走护盾/头盔扣血, 防具随本体蒸发不掉粒子 (旧实现 takeDamage(1800,1) 防具先掉)
+        try { z.applyBurn && z.applyBurn(); } catch (e) { z.takeDamage(1800, 1); }
       }
     }
   }
@@ -1059,12 +1061,12 @@ class Board {
       this.belt = { items: [], counter: 0, spawnT: 0.1, isBoss: f === 'boss' };
       // 原版 Challenge::StartLevel: 保龄球开局立即发一张 WALLNUT + counter=400 (4s 后下一张)
       if (f === 'bowling' || f === 'bowling2') {
-        this.belt.items.push({ type: 'WALLNUT', offset: 515 });
+        this.belt.items.push({ type: 'WALLNUT', offset: 515, active: true });
         this.belt.spawnT = 4;
       }
       // 原版 Challenge::StartLevel (Boss): 开局发 4 张固定卡 + counter=1000
       if (f === 'boss') {
-        for (const t of ['CABBAGEPULT', 'JALAPENO', 'CABBAGEPULT', 'ICESHROOM']) this.belt.items.push({ type: t, offset: 515 });
+        for (const t of ['CABBAGEPULT', 'JALAPENO', 'CABBAGEPULT', 'ICESHROOM']) this.belt.items.push({ type: t, offset: 515, active: true });
         this.belt.spawnT = 10;
       }
       this.sun = 0;
@@ -1371,7 +1373,7 @@ class Board {
             let roll = Math.random() * total;
             let pick = 0;
             for (let i = 0; i < entries.length; i++) { roll -= weights[i]; if (roll <= 0) { pick = i; break; } }
-            b.items.push({ type: entries[pick][0], offset });
+            b.items.push({ type: entries[pick][0], offset, active: true });
           }
           const mult = b.isBoss ? 0.875 : 1;
           const interval = (n > 8 ? 10 : n > 6 ? 5 : n > 4 ? 4.25 : 4) * mult;

@@ -539,10 +539,13 @@ const Renderer = {
     ctx.rotate(e.rot);
     if (!e.imgName && e.kind === 'head') {
       // 头组合 (godot zombie_001_norm.tscn Node2D_Head_Drop 坐标, 以组合中心为原点, scale 0.8)
+      // #fix(掉头缺头发): godot Head_Drop 含 4 层 — Anim_head1 + Anim_head2(jaw) + Anim_tongue
+      //   + Anim_hair; 旧实现只有 3 层, 掉落的头颅没有头发 (hair 相对 head1 偏移 (-5.22,-0.78))
       const P = [
         ['zombie_head', -21.2, -25.9, 0.089],
-        ['zombie_tongue', 2.7, 14.5, 0.0915],
         ['zombie_jaw', -11.3, 12.3, 0.121],
+        ['zombie_tongue', 2.7, 14.5, 0.0915],
+        ['zombie_hair', -26.4, -26.7, 0.089],
       ];
       for (const [name, dx, dy, rot] of P) {
         const img = Assets.image(name);
