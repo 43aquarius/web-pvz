@@ -371,7 +371,7 @@ class Plant {
               body.animTime = 0;
             }
           }
-          const rollSpeed = this.type === 'GIANTWALLNUT' ? 300 : 170;   // 原版巨型 ×2
+          const rollSpeed = this.type === 'GIANTWALLNUT' ? 340 : 170;   // 原版巨型 ×2 (_ground 速度×2)
           this.x += rollSpeed * dt;
           // 撞僵尸判定 (原版 FindTargetZombie 同行)
           let hitZombie = null;
@@ -398,12 +398,18 @@ class Plant {
               this.dead = true;
               break;
             }
-            // 原版伤害: 门盾直伤 1800; 其他盾 400 盾伤; 头盔 900 盔伤; 无防具 1800
-            if (hitZombie.shield) {
+            // 原版伤害分配 (Plant.cpp UpdateBowling 2426-2446):
+            //   巨型坚果 → TakeDamage(1800) 直接 (穿透盾/盔: 门盾吸收后余伤进本体);
+            //   铁门盾(滚动中) → TakeDamage(1800) 穿透; 其他盾 → TakeShieldDamage(400) 仅盾;
+            //   头盔 → 900 (路由至盔); 无防具 → 1800 (路由至本体)
+            if (this.type === 'GIANTWALLNUT') {
+              hitZombie.takeDamage(1800, board, { bowling: true });
+            } else if (hitZombie.shieldType === 'door') {
+              hitZombie.takeDamage(1800, board, { bowling: true });
+            } else if (hitZombie.shieldType) {
               hitZombie.takeShieldDamage && hitZombie.takeShieldDamage(400, board);
-              hitZombie.takeDamage(400, board, { bowling: true });
-            } else if (hitZombie.helm > 0) {
-              hitZombie.takeDamage(this.type === 'GIANTWALLNUT' ? 1800 : 900, board, { bowling: true });
+            } else if (hitZombie.helmType) {
+              hitZombie.takeDamage(900, board, { bowling: true });
             } else {
               hitZombie.takeDamage(1800, board, { bowling: true });
             }

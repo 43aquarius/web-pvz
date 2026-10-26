@@ -3703,6 +3703,8 @@ class Zombie {
   dropLoot() {
     if (this.droppedLoot) return;
     this.droppedLoot = true;
+    // 原版 Zombie::DropLoot 7294: 小僵尸关 (Little Trouble) 仅 1/4 概率掉落战利品
+    if (this.board && this.board.game && this.board.game.littleTrouble && Math.floor(Math.random() * 4) !== 0) return;
     // 原版 Zombie::DieWithLoot → DropLoot → Board::DropLootPiece (Board.cpp:9036-9152)
     if (this.fromWave !== -2 && this.board) {
       // f = 僵尸价值 (普僵1 / 路障2 / 铁桶4); aDropHit = Rand(30000)

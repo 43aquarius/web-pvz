@@ -689,6 +689,14 @@ const Game = {
     if (type === 'GRAVEBUSTER') {
       if (!board.graves.some(g => g.row === row && g.col === col)) { this.audio.play('buzzer'); return; }
     }
+    // 看星星阵点限制 (原版 Challenge::CanPlantAt 2225-2235 IsArtChallenge):
+    //   阵点格只能种杨桃 (睡莲/南瓜例外); PLANTING_NOT_ON_ART
+    if (board.level.starPattern && type !== 'LILYPAD' && type !== 'PUMPKIN') {
+      const onStar = board.starPatternCells().some(([c, r]) => c === col && r === row);
+      if (onStar && type !== 'STARFRUIT') { this.audio.play('buzzer'); return; }
+    }
+    // 保龄球列线 (原版 CanPlantAt 2198-2201: theGridX > 2 → NOT_PASSED_LINE — 只能种前 3 列)
+    if (bowling && col > 2) { this.audio.play('buzzer'); return; }
     // #fix(plant-residue): 占位检查前兜底清理 — 该格所有网格数组中残留的已死植物引用
     //   一律视为空地 (防御未知死亡路径漏清格; 已知路径均已改走 die()/_clearGrid, 见 plants.js)
     //   涵盖: 被蹦极偷走/被砸死/被吃死/被压扁 — 用户报告: 植物已消失但仍无法复种

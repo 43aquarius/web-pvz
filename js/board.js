@@ -468,7 +468,10 @@ class Board {
         this.spawnZombiesFromGraves();
       }
     }
-    if (this.level.skySun && !this.mode) {
+    // 原版 UpdateSunSpawning 排除表 (Board.cpp:5177-5195): 夜/浓雾/雨天/传送带/最后防线/罐子等无天降阳光;
+    // 老虎机为白天场景 — 教学期 (TUTORIAL_SLOT_MACHINE_PULL, 首拉前) 不掉, 首拉后正常掉
+    const slotSkySun = this.mode === 'slotmachine' && this.slotRolls > 0;
+    if (this.level.skySun && (!this.mode || slotSkySun)) {
       this.skySunTimer -= tickDt;
       if (this.skySunTimer <= 0) {
         this.skySunTimer = CONST.SKY_SUN_INTERVAL[0] + Math.random() * (CONST.SKY_SUN_INTERVAL[1] - CONST.SKY_SUN_INTERVAL[0]);
@@ -1131,17 +1134,36 @@ class Board {
         this.beltPool = (this.level.id <= 50 ? availablePlants(this.level.id, game && game.purchasedSet) : availablePlants(50, game && game.purchasedSet));
       }
       // 原版 SeedBank::AddSeed/UpdateConveyorBelt: 卡片 offsetX 从右侧 515-(51)*n 起, 每4tick左移1px(25px/s)
-      // 槽位 x = 91 + i*50; Boss关 ×0.875 发卡间隔
-      this.belt = { items: [], counter: 0, spawnT: 0.1, isBoss: f === 'boss' };
-      // 原版 Challenge::StartLevel: 保龄球开局立即发一张 WALLNUT + counter=400 (4s 后下一张)
+      // 槽位 x = 91 + i*50
+      // 原版 Challenge::UpdateConveyorBelt 1390-1406 发卡间隔倍率:
+      //   Boss ×0.875 / 铲子关·传送门 ×1.5 / 隐形僵尸 ×2.0 / 列队僵尸 ×3.0 (其余 ×1)
+      const ck = this.level.conveyorPool;
+      const beltMult = f === 'boss' ? 0.875 : (ck === 'portal_combat' ? 1.5 : (ck === 'invisighoul' ? 2.0 : (ck === 'column' ? 3.0 : 1)));
+      this.belt = { items: [], counter: 0, spawnT: 0.1, isBoss: f === 'boss', mult: beltMult };
+      // 原版 Challenge::StartLevel/InitLevel 开局预发卡 + 首卡延迟:
+      //   保龄球: 1 张坚果 + 400tick; Boss: 4 张固定卡 + 1000tick;
+      //   列队僵尸: 6 张 (土豆雷/高坚果/西瓜/磁力菇/咖啡豆/西瓜) + 1000tick (InitLevel);
+      //   隐形僵尸: 2 张 (豌豆/寒冰菇) + 200tick; 小僵尸/暴风雨/蹦极: 空带 + 200tick;
+      //   传送门: 空带 + 立即 (counter=0)
       if (f === 'bowling' || f === 'bowling2') {
         this.belt.items.push({ type: 'WALLNUT', offset: 515, active: true });
         this.belt.spawnT = 4;
       }
-      // 原版 Challenge::StartLevel (Boss): 开局发 4 张固定卡 + counter=1000
       if (f === 'boss') {
         for (const t of ['CABBAGEPULT', 'JALAPENO', 'CABBAGEPULT', 'ICESHROOM']) this.belt.items.push({ type: t, offset: 515, active: true });
         this.belt.spawnT = 10;
+      }
+      if (ck === 'column') {
+        for (const t of ['POTATOMINE', 'TALLNUT', 'MELONPULT', 'MAGNETSHROOM', 'COFFEEBEAN', 'MELONPULT']) this.belt.items.push({ type: t, offset: 515, active: true });
+        this.belt.spawnT = 10;   // 原版 InitLevel counter=1000
+      }
+      if (ck === 'invisighoul') {
+        this.belt.items.push({ type: 'PEASHOOTER', offset: 515, active: true });
+        this.belt.items.push({ type: 'ICESHROOM', offset: 515, active: true });
+        this.belt.spawnT = 2;    // 原版 StartLevel counter=200
+      }
+      if (ck === 'little_trouble' || ck === 'stormy_night' || ck === 'bungee_blitz') {
+        this.belt.spawnT = 2;    // 原版 StartLevel conveyorCounter=200
       }
       this.sun = 0;
       this.seedCards = [];
@@ -1211,11 +1233,11 @@ class Board {
       // 老虎机 (原版 Slot Machine): 3 转轮即种子银行; 拉杆 25 阳光; 2000 分胜利
       this.mode = 'slotmachine';
       this.sun = this.level.startSun || 50;
-      // 原版符号池 (PickNextSlotMachineSeed): 向日葵/豌豆/雪花豌豆/坚果/阳光/钻石
+      // 原版 Board::InitLevel 1386-1392: 三转轮初始面 = 向日葵/豌豆/雪花豌豆
       this.slotReels = [
-        { type: 'PEASHOOTER', next: null, pos: 0, cd: 0 },
         { type: 'SUNFLOWER', next: null, pos: 0, cd: 0 },
-        { type: 'WALLNUT', next: null, pos: 0, cd: 0 },
+        { type: 'PEASHOOTER', next: null, pos: 0, cd: 0 },
+        { type: 'SNOWPEA', next: null, pos: 0, cd: 0 },
       ];
       this.slotRolls = 0;        // 原版 mSlotMachineRollCount (<3 时拉杆闪烁提示)
       this.slotPayouts = [];     // 赔付掉落物: {kind, plant?, x, y, vy, vx, ground, life, taken}
@@ -1251,9 +1273,10 @@ class Board {
       this.aqSpawnSnorkle();         // 原版 StartLevel: 开局 2 只
     } else if (this.level.rainingSeeds) {
       // 雨天种子: 种子包从天而降 (原版 It's Raining Seeds)
+      // 原版 InitLevel: mChallengeStateCounter=100 → 首包 1s 后落地
       this.mode = 'raining';
       this.rainCards = [];
-      this.rainT = 2;
+      this.rainT = 1;
       this.heldCards = [];
     }
     if (this.level.endless) this.mode = this.mode || 'endless';
@@ -2392,23 +2415,27 @@ class Board {
             if (n > 0 && offset < b.items[n - 1].offset) offset = b.items[n - 1].offset + 51;
             // 权重池: [type, weight] 对或纯 type (默认权重 10)
             const entries = pool.map(e => Array.isArray(e) ? e : [e, 10]);
-            // 原版动态权重: 同类型≥4张权重→1, ≥3张→5, 与上一张同类减半
+            // 原版动态权重 (Challenge.cpp 1659-1675, 仅当池中种类 >2 时):
+            //   同类型≥4张权重→1, ≥3张→5, 与上一张同类减半; 保龄球(2种)不限流
+            const capWeights = entries.length > 2;
             const weights = entries.map(([t, base]) => {
               let w = base;
               const cnt = b.items.filter(o => o.type === t).length;
-              if (cnt >= 4) w = Math.min(w, 1); else if (cnt >= 3) w = Math.min(w, 5);
-              if (n > 0 && t === b.items[n - 1].type) w = Math.max(1, w >> 1);
+              if (capWeights) {
+                if (cnt >= 4) w = Math.min(w, 1); else if (cnt >= 3) w = Math.min(w, 5);
+                if (n > 0 && t === b.items[n - 1].type) w = Math.max(1, w >> 1);
+              }
               // 原版 Challenge.cpp 特殊权重调整:
               //   GRAVEBUSTER: 墓碑数 ≤ 场上+带上的总数 → 权重归 0
               //   LILYPAD: 总数 0→18 线性衰减到 1
-              //   FLOWERPOT: 总数 0→35 线性衰减到 1
+              //   FLOWERPOT: 总数 0→35 (列队僵尸 45) 线性衰减到 1
               const totalCount = cnt + this.plants.filter(p => p.type === t).length;
               if (t === 'GRAVEBUSTER') {
                 if (this.graves.length <= totalCount) w = 0;
               } else if (t === 'LILYPAD') {
                 w = totalCount >= 18 ? 1 : Math.max(1, Math.round(base - (base - 1) * totalCount / 18));
               } else if (t === 'FLOWERPOT') {
-                const cap = 35;
+                const cap = this.level.conveyorPool === 'column' ? 45 : 35;
                 w = totalCount >= cap ? 1 : Math.max(1, Math.round(base - (base - 1) * totalCount / cap));
                 // #1 原版 Challenge.cpp 1653: 僵王丢RV期间 FLOWERPOT 权重 = 500 (补盆窗口)
                 if (b.isBoss) {
@@ -2424,7 +2451,8 @@ class Board {
             for (let i = 0; i < entries.length; i++) { roll -= weights[i]; if (roll <= 0) { pick = i; break; } }
             b.items.push({ type: entries[pick][0], offset, active: true });
           }
-          const mult = b.isBoss ? 0.875 : 1;
+          // 原版: interval = 倍率 × (>8:1000 / >6:500 / >4:425 / 否则400) tick
+          const mult = b.isBoss ? 0.875 : (b.mult || 1);
           const interval = (n > 8 ? 10 : n > 6 ? 5 : n > 4 ? 4.25 : 4) * mult;
           b.spawnT = interval;
         }

@@ -129,6 +129,11 @@ const Cutscene = {
       }
     }
     if (board.waterRows.length && !types.includes('DUCKY')) types.unshift('DUCKY');
+    // 原版 PlaceAZombie 133-137: 豌豆大战2 预览的鸭子圈僵尸 → PEA_HEAD 坐泳圈
+    if (board.level.id === 106) {
+      const di = types.indexOf('DUCKY');
+      if (di >= 0) types[di] = 'PEA_HEAD';
+    }
     if (!types.length) return;
     // 5x5 网格摆放 (大僵尸优先)
     const grid = Array.from({ length: 5 }, () => new Array(5).fill(false));
@@ -139,9 +144,16 @@ const Cutscene = {
       for (let gy = 0; gy < 5; gy++) {
         for (let gx = 0; gx < 5; gx++) {
           if (grid[gy][gx]) continue;
-          grid[gy][gx] = true;
+          // 原版 FindAndPlaceZombie 310-313: 蹦极不标记网格占用
+          if (ty !== 'BUNGEE') grid[gy][gx] = true;
           if (big.includes(ty) && gx > 0 && gy > 0) { grid[gy][gx - 1] = true; grid[gy - 1][gx] = true; grid[gy - 1][gx - 1] = true; }
           placed.push({ ty, gx, gy });
+          // 原版 FindAndPlaceZombie 323-328: 蹦极闪电战 — 每只蹦极额外在同 row 补 2 只 (col 1/2)
+          //   (蹦极不占网格位, 三只并排悬挂展示)
+          if (ty === 'BUNGEE' && (board.level.conveyorPool === 'bungee_blitz' || (!board.level.mode && board.level.id === 45))) {
+            placed.push({ ty: 'BUNGEE', gx: 1, gy });
+            placed.push({ ty: 'BUNGEE', gx: 2, gy });
+          }
           return;
         }
       }
