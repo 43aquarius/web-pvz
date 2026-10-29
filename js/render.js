@@ -175,6 +175,12 @@ const Renderer = {
         list.push({ o: p.row * 10000 + RENDER_LAYER.GRAVE + 8, d: () => p.draw(ctx, board) });
         continue;
       }
+      // #fix(保龄球滚动层级) 原版 Plant::CalcRenderOrder 512-514: 保龄球关坚果 → RENDER_LAYER_PROJECTILE
+      //   (305000, 僵尸 303000 之上) — 坚果 visibly 滚过僵尸身体; 旧实现植物层(302000)被僵尸盖住
+      if (p.rolling) {
+        list.push({ o: p.row * 10000 + RENDER_LAYER.PROJECTILE, d: () => p.draw(ctx, board) });
+        continue;
+      }
       list.push({ o: plantOrder(p), d: () => p.draw(ctx, board) });
     }
     // 罐子解谜: 罐子进渲染列表 (原版 Challenge.cpp:3494 ScaryPotterPlacePot

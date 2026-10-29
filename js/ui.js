@@ -24,6 +24,7 @@ const SEED_DRAW_TABLE = {
   MELONPULT: [0.35, 18, 19], WINTERMELON: [0.35, 18, 19],
   GRAVEBUSTER: [0.4, 10, 15], SPLITPEA: [0.45, 12, 12], BLOVER: [0.4, 8, 17],
   STARFRUIT: [0.5, 6, 8], THREEPEATER: [0.5, 5, 10], GATLINGPEA: [0.5, 2, 8],
+  GIANTWALLNUT: [0.375, 0, 0],   // 原版 SeedPacket.cpp 537: GIANT aScale*=0.75 (坚果基准0.5 → 0.375)
 };
 
 // 原版 SeedPacketDrawSeed 每植物缩放 (aScale)

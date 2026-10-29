@@ -469,11 +469,18 @@ class Projectile {
       this.x -= this.def.speed * dt;
       const col = Math.floor((this.x - CONST.LAWN_XMIN) / 80);
       if (col >= 0 && col < 9 && board.grid[this.row]) {
+        // #fix(zombotany) 原版 Projectile.cpp 168-173 FindCollisionTargetPlant:
+        //   僵尸豌豆不可命中低矮植物 (小喷菇/阳光菇/土豆雷/地刺/地刺王/睡莲) — 豌豆从头顶飞过
+        const LOW = { PUFFSHROOM: 1, SUNSHROOM: 1, POTATOMINE: 1, SPIKEWEED: 1, SPIKEROCK: 1, LILYPAD: 1 };
         const plant = board.grid[this.row][col];
         const pot = !plant && board.gridPot[this.row] && board.gridPot[this.row][col];
-        const lily = !plant && !pot && board.gridLily[this.row] && board.gridLily[this.row][col];
-        const hit = plant || pot || lily;
-        if (hit && !hit.dead) {
+        // 原版 GetTopPlantAt(TOPPLANT_EATING_ORDER): 南瓜壳最外层优先承伤
+        const pumpkin = board.gridPumpkin[this.row] && board.gridPumpkin[this.row][col];
+        let hit = null;
+        if (pumpkin && !pumpkin.dead) hit = pumpkin;
+        else if (plant && !plant.dead && !LOW[plant.type]) hit = plant;
+        else if (pot && !pot.dead) hit = pot;
+        if (hit) {
           hit.takeDamage(this.def.dmg, board);
           board.addEffect('splat', this.x - 6, this.y);
           board.game.audio.play('plastichit');

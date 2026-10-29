@@ -32,7 +32,7 @@ const PLANTS = {
   CHERRYBOMB:      { cn: '樱桃炸弹',   cost: 150, cd: 50000, hp: 300,  reanim: 'CherryBomb', anim: 'anim_idle', cls: 'instant', fuse: 1.0, dmg: 1800, radius: 115, desc: '炸毁3x3范围僵尸' },
   WALLNUT:         { cn: '坚果墙',     cost: 50,  cd: 30000, hp: 4000, reanim: 'Wallnut', anim: 'anim_idle', cls: 'defense', desc: '抵挡僵尸的高血量壁垒' },
   EXPLODEONUT:     { cn: '爆炸坚果',   cost: 0,   cd: 30000, hp: 4000, reanim: 'Wallnut', anim: 'anim_idle', cls: 'defense', bowling: 'explode', desc: '保龄球中会爆炸' },
-  GIANTWALLNUT:    { cn: '巨型坚果',   cost: 0,   cd: 30000, hp: 8000, reanim: 'Wallnut', anim: 'anim_idle', cls: 'defense', bowling: 'giant', scale: 1.6, desc: '巨无霸保龄球' },
+  GIANTWALLNUT:    { cn: '巨型坚果',   cost: 0,   cd: 30000, hp: 4000, reanim: 'Wallnut', anim: 'anim_idle', cls: 'defense', bowling: 'giant', scale: 2.0, scaleOff: [-76, -64], desc: '巨无霸保龄球' },  // 原版 Plant.cpp 297 hp=4000 / 2758: scale 2.0 off(-76,-64) 阴影1.7
   POTATOMINE:      { cn: '土豆雷',     cost: 25,  cd: 30000, hp: 300,  reanim: 'PotatoMine', anim: 'anim_armed', cls: 'instant', arm: 15, dmg: 1800, radius: 55, desc: '需要时间破土, 触发即爆' },
   SNOWPEA:         { cn: '寒冰射手',   cost: 175, cd: 7500,  hp: 300,  reanim: 'SnowPea', anim: 'anim_idle', layers: [['anim_idle'],['anim_head_idle']], shootRate: 1.5, dmg: 20, range: 9, cls: 'shooter', proj: 'snowpea', desc: '冰豌豆减速僵尸' },
   CHOMPER:         { cn: '大嘴花',     cost: 150, cd: 7500,  hp: 300,  reanim: 'Chomper', anim: 'anim_idle', cls: 'shooter', chew: 42, biteDmg: 1800, desc: '吞噬僵尸后需42秒咀嚼' },

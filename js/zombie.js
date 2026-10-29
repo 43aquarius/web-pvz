@@ -1769,9 +1769,11 @@ class Zombie {
       b.game.audio.play('jalapeno');
       b.addEffect('jala_row', b.gridX(0), this.row, { row: this.row, hold: 0.8 });
       b.shakeBoard(3, -4);
+      // #fix(zombotany) 原版 Zombie.cpp 2408: mRow 同行 && !NotOnGround() 全烧 —
+      //   NotOnGround 仅豁免空中态 (倭瓜跳跃/压扁/蹦极吊起), 花盆/睡莲/南瓜壳一律烧毁 (旧实现错误豁免)
       for (const p of b.plants) {
-        if (p.dead || p.row !== this.row) continue;
-        if (p.type === 'LILYPAD' || p.type === 'FLOWERPOT' || p.type === 'PUMPKIN') continue;   // 原版 NotOnGround 载体豁免近似
+        if (p.dead || p.row !== this.row || p.notOnGround) continue;
+        b.plantsEaten = (b.plantsEaten || 0) + 1;   // 原版 mPlantsEaten++ (吃花统计)
         try { p.die(); } catch (e) { p.dead = true; }
       }
       this.dieNoLoot();
@@ -2311,10 +2313,11 @@ class Zombie {
           if (stage === 1) { this.bossBungeeAttack(); return; }   // 原版: 入段1立即放飞贼
           if (stage === 2) { this.bossRVAttack(); return; }       // 原版: 入段2立即丢RV
         }
-        // 攻击优先级 (原版 10295-10321, 计数器 == 0 精确判定): 踩踏 > 飞贼(1/4改RV) > 探头 > 召唤
+        // 攻击优先级 (原版 10295-10321, 计数器 == 0 精确判定): 踩踏 > 飞贼(1/2改RV, 冒险1/4) > 探头 > 召唤
         if (this.bossStompCounter === 0) { this.bossStompAttack(); return; }
         if (this.bossBungeeCounter === 0) {
-          if (Math.random() < 0.25) {
+          // #fix(boss-rv) 原版 10305: Rand(IsAdventureMode()?4:2)==0 — 小游戏关 1/2 概率丢RV (旧 0.25 为冒险值)
+          if (Math.random() < 0.5) {
             this.bossBungeeCounter = 4000 + Math.floor(Math.random() * 1000);
             this.bossRVAttack();
           } else {
@@ -2431,11 +2434,14 @@ class Zombie {
     this.phase = PH.BOSS_STOMPING;
     const b = this.board;
     // #修复(踩踏行): 原版仅 0-3 行参与 (anim_stomp_1..4); 第4行无对应动画
+    // #fix(boss-踩踏判定层) 原版 BossCanStompRow 遍历 mPlants 全部 — 屋顶花盆/南瓜/睡莲层也算
     const rows = [];
     for (let rr = 0; rr < 4 && rr < b.rows; rr++) {
       for (let c = 5; c < 9; c++) {
         const p = b.grid[rr] && b.grid[rr][c];
-        if (p && !p.dead) { rows.push(rr); break; }
+        const pot = b.gridPot[rr] && b.gridPot[rr][c];
+        const pk = b.gridPumpkin[rr] && b.gridPumpkin[rr][c];
+        if ((p && !p.dead) || (pot && !pot.dead) || (pk && !pk.dead)) { rows.push(rr); break; }
       }
     }
     this.bossTargetRow = rows.length ? rows[Math.floor(Math.random() * rows.length)]
@@ -2449,10 +2455,12 @@ class Zombie {
   bossStompContact() {
     const b = this.board;
     const row = this.bossTargetRow;
+    // #fix(boss-压扁层) 原版遍历 mPlants (含花盆/睡莲/南瓜壳) — 屋顶关植物全在盆里, 旧实现漏压花盆
     for (let rr = row; rr <= row + 1 && rr < b.rows; rr++) {
       for (let c = 5; c < 9; c++) {
-        const p = b.grid[rr] && b.grid[rr][c];
-        if (p && !p.dead) { try { p.squish(); } catch (e) { p.dead = true; } }
+        for (const p of [b.grid[rr] && b.grid[rr][c], b.gridPot[rr] && b.gridPot[rr][c], b.gridPumpkin[rr] && b.gridPumpkin[rr][c], b.gridLily[rr] && b.gridLily[rr][c]]) {
+          if (p && !p.dead) { try { p.squish(); } catch (e) { p.dead = true; } }
+        }
       }
     }
     b.shakeBoard(0, 4);
@@ -2525,10 +2533,12 @@ class Zombie {
   bossRVLanding() {
     const b = this.board;
     const row = this.bossTargetRow, col = this.bossTargetCol;
+    // #fix(boss-RV压扁层) 原版 BossRVLanding 遍历 mPlants — 花盆/南瓜/睡莲层一并压毁
     for (let rr = row; rr <= row + 1 && rr < b.rows; rr++) {
       for (let cc = col; cc <= col + 2 && cc < 9; cc++) {
-        const p = b.grid[rr] && b.grid[rr][cc];
-        if (p && !p.dead) { try { p.squish(); } catch (e) { p.dead = true; } }
+        for (const p of [b.grid[rr] && b.grid[rr][cc], b.gridPot[rr] && b.gridPot[rr][cc], b.gridPumpkin[rr] && b.gridPumpkin[rr][cc], b.gridLily[rr] && b.gridLily[rr][cc]]) {
+          if (p && !p.dead) { try { p.squish(); } catch (e) { p.dead = true; } }
+        }
       }
     }
     b.shakeBoard(0, 2);

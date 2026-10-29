@@ -367,11 +367,16 @@ class Plant {
             const body = this.anims[0] && this.anims[0].r;
             if (body && body.def && body.def.n >= 56) {
               body.frameStart = 43; body.frameCount = 13; body.loopType = RE.LOOP;
-              body.animRate = this.type === 'GIANTWALLNUT' ? 6 + Math.random() * 4 : 12 + Math.random() * 6;
+              // 原版随机 animRate: 普通 12-18 / 巨型 6-10 (Plant.cpp 176-179)
+              this._rollRate = this.type === 'GIANTWALLNUT' ? 6 + Math.random() * 4 : 12 + Math.random() * 6;
+              body.animRate = this._rollRate;
               body.animTime = 0;
             }
           }
-          const rollSpeed = this.type === 'GIANTWALLNUT' ? 340 : 170;   // 原版巨型 ×2 (_ground 速度×2)
+          // #fix(滚动速度) 原版 GetTrackVelocity: _ground 帧43→55 位移 -224.6px/12帧 = -18.7px/帧
+          //   → 每 tick 18.7×0.01×animRate px, 100Hz → 18.7×animRate px/s;
+          //   普通(12-18): 227-340 px/s; 巨型(6-10)×2: 227-378 px/s (Plant.cpp 2367)
+          const rollSpeed = 18.7 * (this._rollRate || 12) * (this.type === 'GIANTWALLNUT' ? 2 : 1);
           this.x += rollSpeed * dt;
           // 撞僵尸判定 (原版 FindTargetZombie 同行)
           let hitZombie = null;
@@ -447,7 +452,7 @@ class Plant {
           } else {
             this.y = board.cellY(this.row, this.col);
           }
-          if (this.x > 810) this.dead = true;   // 原版: mX > 800 消失
+          if (this.x > 800) this.dead = true;   // 原版 UpdateBowling 2374: mX > 800 消失
         }
         break;
       }
@@ -1196,7 +1201,13 @@ class Plant {
     // 阴影
     if (this.type !== 'LILYPAD' && !GROUNDCOVER.has(this.type)) {
       const sh = Assets.image('plantshadow');
-      if (sh) { ctx.globalAlpha = 0.35; ctx.drawImage(sh, this.x + 40 - sh.width / 2, dy + 72 - sh.height / 2); ctx.globalAlpha = 1; }
+      if (sh) {
+        // #fix(巨型坚果阴影) 原版 Plant.cpp 3913: shadowOff(-33,56) scale 1.7 — 阴影随体型放大
+        const ss = this.type === 'GIANTWALLNUT' ? 1.7 : 1;
+        ctx.globalAlpha = 0.35;
+        ctx.drawImage(sh, this.x + 40 - sh.width * ss / 2, dy + 72 - sh.height * ss / 2 + (ss > 1 ? 6 : 0), sh.width * ss, sh.height * ss);
+        ctx.globalAlpha = 1;
+      }
     }
     // #修复(压扁画面) 原版 Plant::Draw (Plant.cpp 3949-3964): mSquished →
     //   SetScale(1, 0.25) 纵向压扁绘制于格底 (60+offsetY), 停留 500 tick 后消失
@@ -1222,7 +1233,9 @@ class Plant {
     }
     for (const L of this.anims) {
       if (L.attached) continue;   // 已由身体轨道挂载绘制 (完整矩阵跟随: 旋转/缩放/位移)
-      L.r.setPosition(this.x + (this.shakeX || 0), dy + (this.shakeY || 0));   // 樱桃/辣椒待爆抖动 (#17)
+      // #fix(巨型坚果偏移) 原版 Plant::Draw 2758: GIANT scale 2.0 时 aOffsetX-=76/aOffsetY-=64 居中放大
+      const so = this.def.scaleOff || [0, 0];
+      L.r.setPosition(this.x + (this.shakeX || 0) + so[0], dy + (this.shakeY || 0) + so[1]);   // 樱桃/辣椒待爆抖动 (#17)
       // 向左射手镜像 (原版 Plant.cpp:2792: aScaleX *= -1, 附件头随之镜像)
       if (this.def.mirror) L.r.overrideScale(-sc, sc);
       else L.r.overrideScale(sc, sc);
