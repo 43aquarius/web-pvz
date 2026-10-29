@@ -1639,7 +1639,11 @@ class Board {
     }
     // 同步种子银行视图 (停轮后转轮可用)
     for (let i = 0; i < 3; i++) this.seedCards[i].type = this.slotReels[i].type;
+    // #fix(老虎机) 原版 UpdateSlotMachine 1765-1771: 1900+ 提示"就差一点点"; 2000 → 奖杯胜利
     if (this.sun >= this.level.slotWinScore) { this.triggerWin(); return; }
+    if (this.sun >= this.level.slotWinScore - 100) {
+      this.addEffect('text', 400, 200, { hold: 1.5, txt: '就差一点点!', c: '#ffe86a', size: 15 });
+    }
   }
 
   // ============================================================
