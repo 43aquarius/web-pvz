@@ -1069,16 +1069,22 @@ const UI = {
         ctx.strokeRect(board.gridX(c) + 2, board.cellY(r, c) + 2, 156, 186);
         ctx.restore();
       }
-      // 提示闪烁 (原版 mBeghouledFlashCountdown=300, 白色叠加 bounce 曲线 alpha 1..128)
+      // 提示闪烁 (原版 mBeghouledFlashCountdown=300, extraAdditiveColor+extraOverlayColor 双白叠加
+      //   bounce 曲线 alpha 1..128 — 植物轮廓形闪烁, 非矩形)
       for (const p of board.plants) {
         if (p.dead || !p.begFlash) continue;
         const ph = (p.begFlash % 50) / 50;
         const alpha = (1 + 127 * (1 - Math.abs(2 * ph - 1))) / 255;
         ctx.save();
-        ctx.globalAlpha = alpha;
         ctx.globalCompositeOperation = 'lighter';
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(p.x + 2, p.y + 2, 76, 86);
+        // 两遍叠加 = extraAdditive + extraOverlay
+        for (let pass = 0; pass < 2; pass++) {
+          ctx.globalAlpha = alpha;
+          for (const L of p.anims) {
+            if (L.attached) continue;
+            L.r.draw(ctx);
+          }
+        }
         ctx.restore();
       }
     }
